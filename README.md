@@ -1,4 +1,4 @@
-# LLM Gateway
+# Sakura LLM Gateway
 
 A high-performance local LLM API gateway written in **Rust** (axum + tokio). It exposes an
 OpenAI-compatible endpoint on `127.0.0.1:8000/v1`, load-balances across a pool of API keys
