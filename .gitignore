@@ -1,0 +1,16 @@
+# Rust build artifacts
+llm-gateway/target/
+target/
+
+# Local config with API keys — never commit
+llm-gateway/gateway.json
+*.local.json
+
+# Test artifacts
+llm-gateway/*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

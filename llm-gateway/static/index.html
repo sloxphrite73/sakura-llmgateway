@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Gateway</title>
+<style>
+  :root { --bg:#0f1117; --panel:#181b23; --border:#2a2f3a; --text:#e6e9ef; --muted:#8b93a5; --accent:#4f8cff; --danger:#ff5f5f; --green:#3ecf8e; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; font-size:14px; padding:24px; }
+  h1 { font-size:20px; margin-bottom:4px; }
+  .sub { color:var(--muted); margin-bottom:20px; font-size:13px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  input, button, select { background:#10131a; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:7px 10px; font-size:13px; outline:none; }
+  input:focus { border-color:var(--accent); }
+  button { cursor:pointer; background:var(--accent); border:none; color:#fff; }
+  button.ghost { background:transparent; border:1px solid var(--border); color:var(--muted); }
+  button.danger { background:var(--danger); }
+  button.small { padding:4px 8px; font-size:12px; }
+  .muted { color:var(--muted); }
+  .keytag { font-family:monospace; background:#10131a; border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:12px; }
+  .cooling { color:#ffb35f; }
+  .ok { color:var(--green); }
+  .err { color:var(--danger); font-size:12px; max-width:420px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  table { width:100%; border-collapse:collapse; margin-top:8px; }
+  td, th { padding:6px 8px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; }
+  th { color:var(--muted); font-weight:500; font-size:12px; }
+  .provider-head { display:flex; justify-content:space-between; align-items:center; }
+  .settings-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px; }
+  label.f { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+  .msg { position:fixed; bottom:20px; right:20px; background:var(--accent); color:#fff; padding:10px 16px; border-radius:8px; display:none; }
+  code { background:#10131a; padding:2px 6px; border-radius:4px; font-size:12px; }
+</style>
+</head>
+<body>
+<h1>LLM Gateway 控制台</h1>
+<div class="sub">OpenAI-compatible API: <code id="api-url"></code> · 模型格式 <code>provider/model</code> 或别名</div>
+
+<div class="card">
+  <div class="provider-head"><h3 style="font-size:15px">全局设置</h3></div>
+  <div class="settings-grid" style="margin-top:10px">
+    <label class="f">默认冷却时间（秒）<input id="s-cooldown" type="number" min="1"></label>
+    <label class="f">每请求最大尝试次数<input id="s-attempts" type="number" min="1" max="10"></label>
+    <label class="f">API 端口（重启生效）<input id="s-apiport" type="number"></label>
+    <label class="f">UI 端口（重启生效）<input id="s-uiport" type="number"></label>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <label class="row" style="gap:6px"><input type="checkbox" id="s-auth" style="width:auto"> 启用本地 API 鉴权</label>
+    <input id="s-authkeys" placeholder="鉴权 Key，逗号分隔" style="flex:1;min-width:260px">
+    <button onclick="saveSettings()">保存设置</button>
+  </div>
+</div>
+
+<div id="providers"></div>
+
+<div class="card">
+  <h3 style="font-size:15px">添加提供商</h3>
+  <div class="row" style="margin-top:10px">
+    <input id="np-name" placeholder="名称，如 openai">
+    <input id="np-url" placeholder="Base URL，如 https://api.openai.com/v1" style="flex:1;min-width:300px">
+    <button onclick="addProvider()">添加</button>
+  </div>
+</div>
+
+<div class="msg" id="msg"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let STATUS = null;
+
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined });
+  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || r.status); }
+  return r.json();
+}
+function toast(t) { const m = $('msg'); m.textContent = t; m.style.display='block'; setTimeout(()=>m.style.display='none', 2500); }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function refresh() {
+  STATUS = await api('GET', '/api/status');
+  $('api-url').textContent = `http://127.0.0.1:${STATUS.api_port}/v1`;
+  $('s-cooldown').value = STATUS.default_cooldown_secs;
+  $('s-attempts').value = STATUS.max_attempts;
+  $('s-apiport').value = STATUS.api_port;
+  $('s-uiport').value = STATUS.ui_port;
+  $('s-auth').checked = STATUS.auth.enabled;
+  $('s-authkeys').value = (STATUS.auth.keys || []).join(',');
+  render();
+}
+
+async function saveSettings() {
+  try {
+    await api('PUT', '/api/settings', {
+      default_cooldown_secs: +$('s-cooldown').value || 60,
+      max_attempts: +$('s-attempts').value || 3,
+      api_port: +$('s-apiport').value || 8000,
+      ui_port: +$('s-uiport').value || 8001,
+      auth: { enabled: $('s-auth').checked, keys: $('s-authkeys').value.split(',').map(s=>s.trim()).filter(Boolean) }
+    });
+    toast('已保存'); refresh();
+  } catch (e) { toast('失败: ' + e.message); }
+}
+
+function render() {
+  $('providers').innerHTML = STATUS.providers.map(p => `
+  <div class="card" data-pid="${p.id}">
+    <div class="provider-head">
+      <div><h3 style="font-size:15px">${esc(p.name)}</h3><div class="muted" style="font-size:12px">${esc(p.base_url)}</div></div>
+      <div class="row">
+        <button class="ghost small" onclick="renameProvider('${p.id}')">编辑</button>
+        <button class="danger small" onclick="delProvider('${p.id}')">删除</button>
+      </div>
+    </div>
+    <table>
+      <tr><th>API Key</th><th>状态</th><th>冷却配置</th><th>请求数</th><th>最近错误</th><th></th></tr>
+      ${p.keys.length ? p.keys.map(k => {
+        const c = k.cooling;
+        const st = c ? `<span class="cooling">冷却中 · 剩余 ${c.remaining_secs}s</span>` : `<span class="ok">可用</span>`;
+        return `<tr>
+          <td><span class="keytag">${esc(k.label || k.key)}</span></td>
+          <td>${st}</td>
+          <td>${k.cooldown_secs ?? '默认'}</td>
+          <td>${k.requests}</td>
+          <td class="err" title="${esc(k.last_error||'')}">${esc(k.last_error||'—')}</td>
+          <td class="row">
+            ${c ? `<button class="ghost small" onclick="clearCooldown('${k.id}')">解除冷却</button>` : ''}
+            <button class="danger small" onclick="delKey('${p.id}','${k.id}')">删除</button>
+          </td></tr>`;
+      }).join('') : `<tr><td colspan="6" class="muted">暂无 Key</td></tr>`}
+    </table>
+    <div class="row" style="margin-top:10px">
+      <input placeholder="API Key" id="nk-${p.id}" style="flex:1;min-width:220px">
+      <input placeholder="备注（可选）" id="nl-${p.id}" style="width:140px">
+      <input placeholder="冷却秒（可选）" id="nc-${p.id}" type="number" style="width:130px">
+      <button onclick="addKey('${p.id}')">添加 Key</button>
+    </div>
+    <div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border)">
+      <div class="row" style="justify-content:space-between">
+        <div class="row">
+          <span style="font-size:13px;font-weight:600">模型列表</span>
+          <span class="muted" style="font-size:12px">${p.models.length ? p.models.length + ' 个' : '未托管（放行所有模型）'}</span>
+        </div>
+        <div class="row">
+          <label class="row" style="gap:5px;font-size:12px;color:var(--muted)" title="开启后仅允许请求列表内的模型">
+            <input type="checkbox" ${p.model_allowlist_only ? 'checked' : ''} onchange="setAllowlist('${p.id}', this.checked)" style="width:auto"> 仅允许列表内模型
+          </label>
+          <button class="ghost small" onclick="fetchUpstreamModels('${p.id}')">从上游拉取</button>
+        </div>
+      </div>
+      ${p.models.length ? `<table>
+        <tr><th>模型 ID</th><th>状态</th><th></th></tr>
+        ${p.models.map(m => `<tr>
+          <td><span class="keytag">${esc(m.id)}</span></td>
+          <td>${m.enabled ? '<span class="ok">启用</span>' : '<span class="cooling">已禁用</span>'}</td>
+          <td class="row">
+            <button class="ghost small" onclick="toggleModel('${p.id}','${esc(m.id)}')">${m.enabled ? '禁用' : '启用'}</button>
+            <button class="danger small" onclick="delModel('${p.id}','${esc(m.id)}')">删除</button>
+          </td></tr>`).join('')}
+      </table>` : ''}
+      <div class="row" style="margin-top:8px">
+        <input placeholder="模型 ID，如 gpt-4o" id="nm-${p.id}" style="flex:1;min-width:220px">
+        <button onclick="addModel('${p.id}')">添加模型</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+      <span class="muted" style="font-size:12px">别名:</span>
+      ${Object.entries(p.aliases).map(([a,m]) => `<span class="keytag">${esc(a)} → ${esc(m)} <a href="#" style="color:var(--danger);text-decoration:none" onclick="delAlias('${p.id}','${esc(a)}');return false"> ✕</a></span>`).join('') || '<span class="muted" style="font-size:12px">无</span>'}
+      <input placeholder="别名" id="al-${p.id}" style="width:120px">
+      <input placeholder="上游模型名" id="am-${p.id}" style="width:160px">
+      <button class="ghost small" onclick="addAlias('${p.id}')">添加别名</button>
+    </div>
+  </div>`).join('');
+}
+
+async function addProvider() {
+  try { await api('POST', '/api/providers', { name: $('np-name').value, base_url: $('np-url').value }); $('np-name').value=''; $('np-url').value=''; refresh(); }
+  catch(e){ toast(e.message); }
+}
+async function renameProvider(id) {
+  const p = STATUS.providers.find(x=>x.id===id);
+  const name = prompt('新名称', p.name); if (name===null) return;
+  const url = prompt('新 Base URL', p.base_url); if (url===null) return;
+  try { await api('PUT', '/api/providers/'+id, { name, base_url: url }); refresh(); } catch(e){ toast(e.message); }
+}
+async function delProvider(id) {
+  if (!confirm('删除该提供商及其所有 Key？')) return;
+  try { await api('DELETE', '/api/providers/'+id); refresh(); } catch(e){ toast(e.message); }
+}
+async function addKey(id) {
+  const cd = $('nc-'+id).value;
+  try { await api('POST', `/api/providers/${id}/keys`, { key: $('nk-'+id).value, label: $('nl-'+id).value, cooldown_secs: cd ? +cd : null }); refresh(); }
+  catch(e){ toast(e.message); }
+}
+async function delKey(pid, kid) {
+  if (!confirm('删除该 Key？')) return;
+  try { await api('DELETE', `/api/providers/${pid}/keys/${kid}`); refresh(); } catch(e){ toast(e.message); }
+}
+async function clearCooldown(kid) {
+  try { await api('DELETE', `/api/keys/${kid}/cooldown`); refresh(); } catch(e){ toast(e.message); }
+}
+async function addAlias(id) {
+  try { await api('POST', `/api/providers/${id}/aliases`, { alias: $('al-'+id).value, model: $('am-'+id).value }); refresh(); }
+  catch(e){ toast(e.message); }
+}
+async function delAlias(id, alias) {
+  try { await api('DELETE', `/api/providers/${id}/aliases/${encodeURIComponent(alias)}`); refresh(); } catch(e){ toast(e.message); }
+}
+
+async function addModel(id) {
+  try { await api('POST', `/api/providers/${id}/models`, { id: $('nm-'+id).value }); $('nm-'+id).value=''; refresh(); }
+  catch(e){ toast(e.message); }
+}
+async function delModel(id, mid) {
+  if (!confirm(`删除模型 ${mid}？指向它的别名将无法使用。`)) return;
+  try { await api('DELETE', `/api/providers/${id}/models/${encodeURIComponent(mid)}`); refresh(); } catch(e){ toast(e.message); }
+}
+async function toggleModel(id, mid) {
+  try { await api('PUT', `/api/providers/${id}/models/${encodeURIComponent(mid)}`); refresh(); } catch(e){ toast(e.message); }
+}
+async function setAllowlist(id, on) {
+  const p = STATUS.providers.find(x=>x.id===id);
+  try { await api('PUT', '/api/providers/'+id, { name: p.name, base_url: p.base_url, model_allowlist_only: on }); toast(on ? '白名单模式已开启' : '白名单模式已关闭'); }
+  catch(e){ toast(e.message); refresh(); }
+}
+
+async function fetchUpstreamModels(id) {
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = '拉取中…';
+  let models;
+  try {
+    const r = await api('GET', `/api/providers/${id}/upstream-models`);
+    models = r.models || [];
+  } catch(e) { toast('拉取失败: ' + e.message); btn.disabled=false; btn.textContent='从上游拉取'; return; }
+  btn.disabled = false; btn.textContent = '从上游拉取';
+  if (!models.length) { toast('上游未返回任何模型'); return; }
+
+  const existing = new Set((STATUS.providers.find(x=>x.id===id).models||[]).map(m=>m.id));
+  openModal(id, models, existing);
+}
+
+function openModal(pid, models, existing) {
+  let overlay = document.getElementById('modal-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'modal-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:10';
+    overlay.innerHTML = `<div class="card" style="width:420px;max-height:70vh;overflow:auto">
+      <h3 style="font-size:15px">导入模型</h3>
+      <div class="row" style="margin:8px 0">
+        <button class="ghost small" onclick="modalToggleAll()">全选 / 全不选</button>
+        <span class="muted" style="font-size:12px" id="modal-count"></span>
+      </div>
+      <div id="modal-list"></div>
+      <div class="row" style="margin-top:12px;justify-content:flex-end">
+        <button class="ghost" onclick="document.getElementById('modal-overlay').remove()">取消</button>
+        <button onclick="modalImport()">导入所选</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  }
+  overlay.dataset.pid = pid;
+  $('modal-list').innerHTML = models.map(m => `
+    <label class="row" style="gap:8px;padding:4px 0;font-size:13px">
+      <input type="checkbox" class="modal-cb" value="${esc(m)}" ${existing.has(m) ? '' : 'checked'} style="width:auto">
+      <span class="keytag">${esc(m)}</span>
+      ${existing.has(m) ? '<span class="muted" style="font-size:11px">已存在</span>' : ''}
+    </label>`).join('');
+  updateModalCount();
+}
+function updateModalCount() {
+  const cbs = [...document.querySelectorAll('.modal-cb:checked')];
+  $('modal-count').textContent = `已选 ${cbs.length} 个`;
+}
+function modalToggleAll() {
+  const cbs = [...document.querySelectorAll('.modal-cb')];
+  const allOn = cbs.every(c => c.checked);
+  cbs.forEach(c => c.checked = !allOn);
+  updateModalCount();
+}
+async function modalImport() {
+  const overlay = document.getElementById('modal-overlay');
+  const pid = overlay.dataset.pid;
+  const models = [...document.querySelectorAll('.modal-cb:checked')].map(c => c.value);
+  if (!models.length) { toast('未选择任何模型'); return; }
+  try {
+    const r = await api('POST', `/api/providers/${pid}/models/import`, { models });
+    toast(`已导入 ${r.imported} 个模型`);
+    overlay.remove();
+    refresh();
+  } catch(e){ toast(e.message); }
+}
+
+refresh();
+setInterval(refresh, 5000); // live cooldown countdown
+</script>
+</body>
+</html>
