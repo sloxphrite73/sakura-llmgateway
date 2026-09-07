@@ -9,7 +9,7 @@ per provider, and offers a built-in web console for managing providers, keys and
 - **OpenAI-compatible API** — point any agent/tool at `http://127.0.0.1:8000/v1`
   - `POST /v1/chat/completions` (streaming SSE and non-streaming)
   - `GET  /v1/models` (aggregated from all providers + aliases)
-- **API-Key 池** — round-robin across keys; a key that receives `429` is put into cooldown
+- **API-Key Pool** — round-robin across keys; a key that receives `429` is put into cooldown
   and traffic rotates to the next key immediately
   - cooldown duration: upstream `Retry-After` header wins, else per-key override, else
     global default (60s)
