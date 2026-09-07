@@ -1,5 +1,7 @@
 # Sakura LLM Gateway
 
+English | [简体中文](README.zh-CN.md)
+
 A high-performance local LLM API gateway written in **Rust** (axum + tokio). It exposes an
 OpenAI-compatible endpoint on `127.0.0.1:8000/v1`, load-balances across a pool of API keys
 per provider, and offers a built-in web console for managing providers, keys and aliases.
@@ -17,6 +19,9 @@ per provider, and offers a built-in web console for managing providers, keys and
 - **Retry before first byte** — 429/5xx/timeouts rotate to the next key (up to
   `max_attempts`, default 3). Once the first response byte has been sent, the upstream
   stream is passed through untouched.
+- **Managed models** — per-provider model catalog (`{ id, enabled }`), one-click import
+  from the provider's `/v1/models` (with checkboxes), and an optional allowlist mode that
+  rejects models not in the list
 - **Model routing** — request model as `provider/model` (e.g. `openai/gpt-4o`), or set up
   short **aliases** in the UI (e.g. `fast` → `gpt-4o-mini`)
 - **Web console** — `http://127.0.0.1:8001/` to manage providers (baseURL), the key pool
