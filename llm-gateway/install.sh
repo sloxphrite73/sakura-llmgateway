@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Sakura LLM Gateway — 一键部署脚本 (Linux / macOS / Git Bash)
-# 用法: ./install.sh
+# Sakura LLM Gateway - one-click installer (Linux / macOS / Git Bash)
 set -e
 cd "$(dirname "$0")"
 
 BIN="target/release/llm-gateway"
-if [ "$(uname -s)" = "MINGW"* ] || [ "$(uname -s)" = "MSYS"* ] || [ "$(uname -s)" = "CYGWIN"* ]; then
-  BIN="target/release/llm-gateway.exe"
-fi
+IS_WIN=0
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) BIN="target/release/llm-gateway.exe"; IS_WIN=1 ;;
+esac
 
-echo "==> [1/3] 检查 Rust 工具链"
+echo "[1/3] Checking Rust toolchain"
 if ! command -v cargo >/dev/null 2>&1; then
-  echo "    未找到 cargo，正在安装 rustup（用户级，无需管理员）..."
-  if [ "$(uname -s)" = "MINGW"* ] || [ "$(uname -s)" = "MSYS"* ] || [ "$(uname -s)" = "CYGWIN"* ]; then
+  echo "      cargo not found. Installing rustup at user level, no admin needed..."
+  if [ "$IS_WIN" = "1" ]; then
     curl -Lo "$TEMP/rustup-init.exe" https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe
     "$TEMP/rustup-init.exe" -y --default-toolchain stable-x86_64-pc-windows-gnu
     export PATH="$USERPROFILE/.cargo/bin:$PATH"
@@ -21,12 +21,23 @@ if ! command -v cargo >/dev/null 2>&1; then
     export PATH="$HOME/.cargo/bin:$PATH"
   fi
 fi
-echo "    Rust: $(cargo --version)"
+echo "      Rust: $(cargo --version)"
 
-echo "==> [2/3] 编译 release 版本（首次构建需要几分钟）"
+# Under Git Bash on Windows the rust GNU toolchain needs MinGW's dlltool.
+if [ "$IS_WIN" = "1" ] && ! command -v dlltool >/dev/null 2>&1; then
+  if [ -x "$USERPROFILE/.mingw64/bin/dlltool.exe" ]; then
+    export PATH="$USERPROFILE/.mingw64/bin:$PATH"
+  else
+    echo "      GNU toolchain needs MinGW-w64. Please install it and add its bin to PATH."
+    echo "      Download page: https://winlibs.com/"
+    exit 1
+  fi
+fi
+
+echo "[2/3] Building release binary; first build takes a few minutes..."
 cargo build --release
 
-echo "==> [3/3] 准备配置文件"
+echo "[3/3] Preparing config file"
 if [ ! -f gateway.json ]; then
   cat > gateway.json <<'EOF'
 {
@@ -38,13 +49,13 @@ if [ ! -f gateway.json ]; then
   "providers": []
 }
 EOF
-  echo "    已生成默认配置 gateway.json（用编辑器添加你的提供商和 Key）"
+  echo "      Created default gateway.json. Open it to add your providers and keys."
 else
-  echo "    已存在 gateway.json，跳过"
+  echo "      gateway.json already exists, skipping."
 fi
 
 echo ""
-echo "部署完成 ✔"
-echo "  启动:   ./start.sh   (或直接运行 $BIN)"
-echo "  API:    http://127.0.0.1:8000/v1"
-echo "  控制台: http://127.0.0.1:8001/"
+echo "Install complete."
+echo "  Run:     ./start.sh   or $BIN"
+echo "  API:     http://127.0.0.1:8000/v1"
+echo "  Console: http://127.0.0.1:8001/"
