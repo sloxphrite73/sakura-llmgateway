@@ -46,7 +46,19 @@ OpenAI 兼容的接口（`127.0.0.1:8000/v1`），对每个提供商维护一个
 - **单二进制**：Web 控制台为单文件原生 HTML/JS，通过 `rust-embed` 内嵌进二进制，
   `cargo build` 一步出产物，无 Node 构建链
 
-## 构建
+## 快速开始（一键脚本）
+
+**Windows：** 双击 `install.bat`，完成后双击 `start.bat`。
+**Linux / macOS / Git Bash：**
+
+```bash
+./install.sh   # 检查/安装 Rust、编译 release 版本、生成默认 gateway.json
+./start.sh     # 如未构建则自动构建，然后启动网关
+```
+
+安装脚本在缺少 cargo 时会以用户级权限安装 rustup（无需管理员）。
+
+## 手动构建
 
 需要 Rust（Windows 上 GNU 工具链即可）：
 

@@ -25,7 +25,19 @@ per provider, and offers a built-in web console for managing providers, keys and
 - **Optional auth** — off by default; enable in the UI to require a gateway-issued
   Bearer key on the local API
 
-## Build
+## Quick start (one-click)
+
+**Windows:** double-click `install.bat`, then `start.bat`.
+**Linux / macOS / Git Bash:**
+
+```bash
+./install.sh   # checks/installs Rust, builds release, creates default gateway.json
+./start.sh     # builds if needed, then starts the gateway
+```
+
+The install script installs rustup at user level (no admin needed) if cargo is missing.
+
+## Manual build
 
 Requires Rust (GNU toolchain on Windows works):
 
