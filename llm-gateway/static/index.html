@@ -3,67 +3,265 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LLM Gateway</title>
+<title>Sakura Gateway · 控制台</title>
 <style>
-  :root { --bg:#0f1117; --panel:#181b23; --border:#2a2f3a; --text:#e6e9ef; --muted:#8b93a5; --accent:#4f8cff; --danger:#ff5f5f; --green:#3ecf8e; }
-  * { box-sizing:border-box; margin:0; padding:0; }
-  body { background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; font-size:14px; padding:24px; }
-  h1 { font-size:20px; margin-bottom:4px; }
-  .sub { color:var(--muted); margin-bottom:20px; font-size:13px; }
-  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:16px; }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  input, button, select { background:#10131a; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:7px 10px; font-size:13px; outline:none; }
-  input:focus { border-color:var(--accent); }
-  button { cursor:pointer; background:var(--accent); border:none; color:#fff; }
-  button.ghost { background:transparent; border:1px solid var(--border); color:var(--muted); }
-  button.danger { background:var(--danger); }
-  button.small { padding:4px 8px; font-size:12px; }
-  .muted { color:var(--muted); }
-  .keytag { font-family:monospace; background:#10131a; border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:12px; }
-  .cooling { color:#ffb35f; }
-  .ok { color:var(--green); }
-  .err { color:var(--danger); font-size:12px; max-width:420px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  table { width:100%; border-collapse:collapse; margin-top:8px; }
-  td, th { padding:6px 8px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; }
-  th { color:var(--muted); font-weight:500; font-size:12px; }
-  .provider-head { display:flex; justify-content:space-between; align-items:center; }
-  .settings-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px; }
-  label.f { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
-  .msg { position:fixed; bottom:20px; right:20px; background:var(--accent); color:#fff; padding:10px 16px; border-radius:8px; display:none; }
-  code { background:#10131a; padding:2px 6px; border-radius:4px; font-size:12px; }
+  :root {
+    --bg: #0d0e13;
+    --panel: #15161d;
+    --panel-2: #1a1c25;
+    --border: #262936;
+    --border-strong: #343848;
+    --text: #e9e7e4;
+    --muted: #9298a8;
+    --faint: #5d6373;
+    --sakura: #f2a6b8;
+    --sakura-dim: #b9768c;
+    --ok: #7fc9a2;
+    --warn: #e0b072;
+    --err: #e08a8a;
+    --radius: 4px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+    padding: 0 0 64px;
+    min-height: 100vh;
+  }
+  a { color: var(--sakura); }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    padding: 20px 28px 18px;
+    display: flex;
+    align-items: baseline;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .masthead h1 {
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .masthead h1 .petal {
+    display: inline-block;
+    width: 9px; height: 9px;
+    background: var(--sakura);
+    border-radius: 50% 0 50% 50%;
+    margin-right: 10px;
+    transform: rotate(-45deg);
+  }
+  .masthead .api-line {
+    color: var(--muted);
+    font-size: 13px;
+    margin-left: auto;
+  }
+  .masthead .api-line code { color: var(--sakura); }
+
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 28px; }
+
+  /* ---------- sections ---------- */
+  .section { margin-top: 28px; }
+  .section > .section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+  }
+  .section-title .note { font-weight: 400; color: var(--faint); font-size: 12px; }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-top: 12px;
+  }
+  .card-pad { padding: 16px 18px; }
+
+  /* ---------- forms ---------- */
+  input, button, select {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 7px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+  }
+  input::placeholder { color: var(--faint); }
+  input:focus { border-color: var(--sakura-dim); }
+  input[type="checkbox"] { accent-color: var(--sakura); width: auto; }
+  button {
+    cursor: pointer;
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    transition: border-color .15s, color .15s, background .15s;
+  }
+  button:hover { border-color: var(--sakura-dim); color: var(--sakura); }
+  button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--sakura); outline-offset: 2px; }
+  button.primary { background: var(--sakura); border-color: var(--sakura); color: #1a0d12; font-weight: 600; }
+  button.primary:hover { background: #f6bcc9; color: #1a0d12; }
+  button.danger:hover { border-color: var(--err); color: var(--err); }
+  button.small { padding: 3px 9px; font-size: 12px; }
+  button:disabled { opacity: .45; cursor: default; }
+
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .muted { color: var(--muted); }
+  .faint { color: var(--faint); }
+
+  /* ---------- tables ---------- */
+  table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  td, th { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  th {
+    color: var(--faint);
+    font-weight: 500;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border-strong);
+  }
+  td.num { font-variant-numeric: tabular-nums; }
+
+  .keytag {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 7px;
+  }
+  .st { font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+  .st::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+  .st.ok { color: var(--ok); } .st.ok::before { background: var(--ok); }
+  .st.cool { color: var(--warn); } .st.cool::before { background: var(--warn); }
+  .st.off { color: var(--err); } .st.off::before { background: var(--err); }
+  .err-cell { color: var(--err); font-size: 12px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .provider-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 14px 18px 12px; }
+  .provider-head h3 { font-size: 15px; font-weight: 600; }
+  .provider-head .base-url { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--faint); margin-top: 2px; }
+  .divider { border-top: 1px solid var(--border); }
+  .pad { padding: 12px 18px; }
+
+  .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  label.f { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+
+  .pill {
+    font-size: 11px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    padding: 1px 9px;
+    color: var(--muted);
+  }
+
+  /* ---------- modal ---------- */
+  .overlay {
+    position: fixed; inset: 0;
+    background: rgba(6, 7, 10, .72);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10; padding: 20px;
+  }
+  .overlay .box {
+    background: var(--panel);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    width: 440px; max-width: 100%;
+    max-height: 72vh; overflow: auto;
+    padding: 18px;
+  }
+  .overlay h3 { font-size: 15px; margin-bottom: 10px; }
+
+  /* ---------- toast ---------- */
+  .msg {
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--panel-2);
+    border: 1px solid var(--sakura-dim);
+    color: var(--text);
+    padding: 10px 16px;
+    border-radius: var(--radius);
+    display: none;
+    max-width: 420px;
+    box-shadow: 0 4px 24px rgba(0,0,0,.4);
+  }
+  code {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px;
+    background: var(--panel-2);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  @media (max-width: 640px) {
+    .masthead { padding: 16px 18px; }
+    .wrap { padding: 0 18px; }
+    .masthead .api-line { margin-left: 0; width: 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
 </style>
 </head>
 <body>
-<h1>LLM Gateway 控制台</h1>
-<div class="sub">OpenAI-compatible API: <code id="api-url"></code> · 模型格式 <code>provider/model</code> 或别名</div>
 
-<div class="card">
-  <div class="provider-head"><h3 style="font-size:15px">全局设置</h3></div>
-  <div class="settings-grid" style="margin-top:10px">
-    <label class="f">默认冷却时间（秒）<input id="s-cooldown" type="number" min="1"></label>
-    <label class="f">每请求最大尝试次数<input id="s-attempts" type="number" min="1" max="10"></label>
-    <label class="f">API 端口（重启生效）<input id="s-apiport" type="number"></label>
-    <label class="f">UI 端口（重启生效）<input id="s-uiport" type="number"></label>
-  </div>
-  <div class="row" style="margin-top:10px">
-    <label class="row" style="gap:6px"><input type="checkbox" id="s-auth" style="width:auto"> 启用本地 API 鉴权</label>
-    <input id="s-authkeys" placeholder="鉴权 Key，逗号分隔" style="flex:1;min-width:260px">
-    <button onclick="saveSettings()">保存设置</button>
-  </div>
-</div>
+<header class="masthead">
+  <h1><span class="petal" aria-hidden="true"></span>Sakura Gateway</h1>
+  <div class="api-line">OpenAI 兼容接口 <code id="api-url">…</code> · 模型用 <code>provider/model</code> 或别名</div>
+</header>
 
-<div id="providers"></div>
+<main class="wrap">
 
-<div class="card">
-  <h3 style="font-size:15px">添加提供商</h3>
-  <div class="row" style="margin-top:10px">
-    <input id="np-name" placeholder="名称，如 openai">
-    <input id="np-url" placeholder="Base URL，如 https://api.openai.com/v1" style="flex:1;min-width:300px">
-    <button onclick="addProvider()">添加</button>
-  </div>
-</div>
+  <section class="section">
+    <h2 class="section-title">全局设置 <span class="note">端口修改后重启生效</span></h2>
+    <div class="card">
+      <div class="card-pad">
+        <div class="settings-grid">
+          <label class="f">默认冷却时间（秒）<input id="s-cooldown" type="number" min="1"></label>
+          <label class="f">每请求最大尝试次数<input id="s-attempts" type="number" min="1" max="10"></label>
+          <label class="f">API 端口<input id="s-apiport" type="number"></label>
+          <label class="f">UI 端口<input id="s-uiport" type="number"></label>
+        </div>
+        <div class="row" style="margin-top:14px">
+          <label class="row" style="gap:6px"><input type="checkbox" id="s-auth"> 启用本地 API 鉴权</label>
+          <input id="s-authkeys" placeholder="鉴权 Key，逗号分隔" style="flex:1;min-width:240px">
+          <button class="primary" onclick="saveSettings()">保存设置</button>
+        </div>
+      </div>
+    </div>
+  </section>
 
-<div class="msg" id="msg"></div>
+  <section class="section">
+    <h2 class="section-title">提供商</h2>
+    <div id="providers"></div>
+
+    <div class="card">
+      <div class="provider-head">
+        <div><h3>添加提供商</h3></div>
+      </div>
+      <div class="pad divider row">
+        <input id="np-name" placeholder="名称，如 openai">
+        <input id="np-url" placeholder="Base URL，如 https://api.openai.com/v1" style="flex:1;min-width:280px">
+        <button class="primary" onclick="addProvider()">添加</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<div class="msg" id="msg" role="status"></div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -75,7 +273,7 @@ async function api(method, url, body) {
   return r.json();
 }
 function toast(t) { const m = $('msg'); m.textContent = t; m.style.display='block'; setTimeout(()=>m.style.display='none', 2500); }
-function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function esc(s) { return String(s).replace(/[&<>\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c])); }
 
 async function refresh() {
   STATUS = await api('GET', '/api/status');
@@ -106,69 +304,76 @@ function render() {
   $('providers').innerHTML = STATUS.providers.map(p => `
   <div class="card" data-pid="${p.id}">
     <div class="provider-head">
-      <div><h3 style="font-size:15px">${esc(p.name)}</h3><div class="muted" style="font-size:12px">${esc(p.base_url)}</div></div>
+      <div>
+        <h3>${esc(p.name)}</h3>
+        <div class="base-url">${esc(p.base_url)}</div>
+      </div>
       <div class="row">
-        <button class="ghost small" onclick="renameProvider('${p.id}')">编辑</button>
-        <button class="danger small" onclick="delProvider('${p.id}')">删除</button>
+        ${p.model_allowlist_only ? '<span class="pill">白名单</span>' : ''}
+        <button class="small" onclick="renameProvider('${p.id}')">编辑</button>
+        <button class="small danger" onclick="delProvider('${p.id}')">删除</button>
       </div>
     </div>
-    <table>
+
+    <table class="divider">
       <tr><th>API Key</th><th>状态</th><th>冷却配置</th><th>请求数</th><th>最近错误</th><th></th></tr>
       ${p.keys.length ? p.keys.map(k => {
         const c = k.cooling;
-        const st = c ? `<span class="cooling">冷却中 · 剩余 ${c.remaining_secs}s</span>` : `<span class="ok">可用</span>`;
+        const st = c ? `<span class="st cool">冷却 · 剩余 ${c.remaining_secs}s</span>` : `<span class="st ok">可用</span>`;
         return `<tr>
           <td><span class="keytag">${esc(k.label || k.key)}</span></td>
           <td>${st}</td>
-          <td>${k.cooldown_secs ?? '默认'}</td>
-          <td>${k.requests}</td>
-          <td class="err" title="${esc(k.last_error||'')}">${esc(k.last_error||'—')}</td>
+          <td class="num">${k.cooldown_secs ?? '默认'}</td>
+          <td class="num">${k.requests}</td>
+          <td class="err-cell" title="${esc(k.last_error||'')}">${esc(k.last_error||'—')}</td>
           <td class="row">
-            ${c ? `<button class="ghost small" onclick="clearCooldown('${k.id}')">解除冷却</button>` : ''}
-            <button class="danger small" onclick="delKey('${p.id}','${k.id}')">删除</button>
+            ${c ? `<button class="small" onclick="clearCooldown('${k.id}')">解除冷却</button>` : ''}
+            <button class="small danger" onclick="delKey('${p.id}','${k.id}')">删除</button>
           </td></tr>`;
-      }).join('') : `<tr><td colspan="6" class="muted">暂无 Key</td></tr>`}
+      }).join('') : `<tr><td colspan="6" class="faint">还没有 Key，添加第一把后这个提供商才能服务请求</td></tr>`}
     </table>
-    <div class="row" style="margin-top:10px">
-      <input placeholder="API Key" id="nk-${p.id}" style="flex:1;min-width:220px">
-      <input placeholder="备注（可选）" id="nl-${p.id}" style="width:140px">
-      <input placeholder="冷却秒（可选）" id="nc-${p.id}" type="number" style="width:130px">
+    <div class="pad divider row">
+      <input placeholder="API Key" id="nk-${p.id}" style="flex:1;min-width:200px">
+      <input placeholder="备注（可选）" id="nl-${p.id}" style="width:130px">
+      <input placeholder="冷却秒（可选）" id="nc-${p.id}" type="number" style="width:120px">
       <button onclick="addKey('${p.id}')">添加 Key</button>
     </div>
-    <div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border)">
+
+    <div class="pad divider">
       <div class="row" style="justify-content:space-between">
         <div class="row">
-          <span style="font-size:13px;font-weight:600">模型列表</span>
-          <span class="muted" style="font-size:12px">${p.models.length ? p.models.length + ' 个' : '未托管（放行所有模型）'}</span>
+          <span style="font-weight:600">模型</span>
+          <span class="faint" style="font-size:12px">${p.models.length ? p.models.length + ' 个' : '未托管 · 放行所有模型'}</span>
         </div>
         <div class="row">
           <label class="row" style="gap:5px;font-size:12px;color:var(--muted)" title="开启后仅允许请求列表内的模型">
-            <input type="checkbox" ${p.model_allowlist_only ? 'checked' : ''} onchange="setAllowlist('${p.id}', this.checked)" style="width:auto"> 仅允许列表内模型
+            <input type="checkbox" ${p.model_allowlist_only ? 'checked' : ''} onchange="setAllowlist('${p.id}', this.checked)"> 仅允许列表内模型
           </label>
-          <button class="ghost small" onclick="fetchUpstreamModels('${p.id}')">从上游拉取</button>
+          <button class="small" onclick="fetchUpstreamModels('${p.id}')">从上游拉取</button>
         </div>
       </div>
-      ${p.models.length ? `<table>
+      ${p.models.length ? `<table style="margin-top:8px">
         <tr><th>模型 ID</th><th>状态</th><th></th></tr>
         ${p.models.map(m => `<tr>
           <td><span class="keytag">${esc(m.id)}</span></td>
-          <td>${m.enabled ? '<span class="ok">启用</span>' : '<span class="cooling">已禁用</span>'}</td>
+          <td>${m.enabled ? '<span class="st ok">启用</span>' : '<span class="st off">已禁用</span>'}</td>
           <td class="row">
-            <button class="ghost small" onclick="toggleModel('${p.id}','${esc(m.id)}')">${m.enabled ? '禁用' : '启用'}</button>
-            <button class="danger small" onclick="delModel('${p.id}','${esc(m.id)}')">删除</button>
+            <button class="small" onclick="toggleModel('${p.id}','${esc(m.id)}')">${m.enabled ? '禁用' : '启用'}</button>
+            <button class="small danger" onclick="delModel('${p.id}','${esc(m.id)}')">删除</button>
           </td></tr>`).join('')}
       </table>` : ''}
-      <div class="row" style="margin-top:8px">
-        <input placeholder="模型 ID，如 gpt-4o" id="nm-${p.id}" style="flex:1;min-width:220px">
+      <div class="row" style="margin-top:10px">
+        <input placeholder="模型 ID，如 gpt-4o" id="nm-${p.id}" style="flex:1;min-width:200px">
         <button onclick="addModel('${p.id}')">添加模型</button>
       </div>
     </div>
-    <div class="row" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
-      <span class="muted" style="font-size:12px">别名:</span>
-      ${Object.entries(p.aliases).map(([a,m]) => `<span class="keytag">${esc(a)} → ${esc(m)} <a href="#" style="color:var(--danger);text-decoration:none" onclick="delAlias('${p.id}','${esc(a)}');return false"> ✕</a></span>`).join('') || '<span class="muted" style="font-size:12px">无</span>'}
-      <input placeholder="别名" id="al-${p.id}" style="width:120px">
-      <input placeholder="上游模型名" id="am-${p.id}" style="width:160px">
-      <button class="ghost small" onclick="addAlias('${p.id}')">添加别名</button>
+
+    <div class="pad divider row">
+      <span class="faint" style="font-size:12px">别名</span>
+      ${Object.entries(p.aliases).map(([a,m]) => `<span class="keytag">${esc(a)} → ${esc(m)} <a href="#" style="color:var(--err);text-decoration:none" onclick="delAlias('${p.id}','${esc(a)}');return false"> ✕</a></span>`).join('') || '<span class="faint" style="font-size:12px">无</span>'}
+      <input placeholder="别名" id="al-${p.id}" style="width:110px">
+      <input placeholder="上游模型名" id="am-${p.id}" style="width:150px">
+      <button class="small" onclick="addAlias('${p.id}')">添加别名</button>
     </div>
   </div>`).join('');
 }
@@ -244,17 +449,17 @@ function openModal(pid, models, existing) {
   if (!overlay) {
     overlay = document.createElement('div');
     overlay.id = 'modal-overlay';
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:10';
-    overlay.innerHTML = `<div class="card" style="width:420px;max-height:70vh;overflow:auto">
-      <h3 style="font-size:15px">导入模型</h3>
+    overlay.className = 'overlay';
+    overlay.innerHTML = `<div class="box">
+      <h3>导入模型</h3>
       <div class="row" style="margin:8px 0">
-        <button class="ghost small" onclick="modalToggleAll()">全选 / 全不选</button>
-        <span class="muted" style="font-size:12px" id="modal-count"></span>
+        <button class="small" onclick="modalToggleAll()">全选 / 全不选</button>
+        <span class="faint" style="font-size:12px" id="modal-count"></span>
       </div>
       <div id="modal-list"></div>
-      <div class="row" style="margin-top:12px;justify-content:flex-end">
-        <button class="ghost" onclick="document.getElementById('modal-overlay').remove()">取消</button>
-        <button onclick="modalImport()">导入所选</button>
+      <div class="row" style="margin-top:14px;justify-content:flex-end">
+        <button onclick="document.getElementById('modal-overlay').remove()">取消</button>
+        <button class="primary" onclick="modalImport()">导入所选</button>
       </div>
     </div>`;
     document.body.appendChild(overlay);
@@ -262,10 +467,10 @@ function openModal(pid, models, existing) {
   }
   overlay.dataset.pid = pid;
   $('modal-list').innerHTML = models.map(m => `
-    <label class="row" style="gap:8px;padding:4px 0;font-size:13px">
-      <input type="checkbox" class="modal-cb" value="${esc(m)}" ${existing.has(m) ? '' : 'checked'} style="width:auto">
+    <label class="row" style="gap:8px;padding:5px 0;font-size:13px">
+      <input type="checkbox" class="modal-cb" value="${esc(m)}" ${existing.has(m) ? '' : 'checked'}>
       <span class="keytag">${esc(m)}</span>
-      ${existing.has(m) ? '<span class="muted" style="font-size:11px">已存在</span>' : ''}
+      ${existing.has(m) ? '<span class="faint" style="font-size:11px">已存在</span>' : ''}
     </label>`).join('');
   updateModalCount();
 }
