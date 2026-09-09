@@ -49,6 +49,15 @@ async fn chat(_state: State<Arc<()>>, headers: HeaderMap, Json(body): Json<serde
         )
             .into_response();
     }
+    if auth.contains("sk-dead") {
+        // Invalid credentials: retrying can never succeed — used to verify the
+        // gateway's long quarantine for 401/403 keys.
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": { "code": 16, "message": "Forbidden" } })),
+        )
+            .into_response();
+    }
 
     let model = body.get("model").and_then(|m| m.as_str()).unwrap_or("?");
     let stream = body.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);

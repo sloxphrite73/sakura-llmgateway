@@ -143,14 +143,24 @@ pub async fn chat_completions(
         let reason = format!("HTTP {}: {}", status.as_u16(), snippet);
 
         if should_rotate(status.as_u16()) {
-            if status.as_u16() == 429 {
+            let code = status.as_u16();
+            if code == 429 {
+                // Rate limited: honor Retry-After (or the global default), and back off
+                // briefly before hammering the next key — TPM limits are per-minute, so
+                // an instant retry with the same large payload burns the next key too.
                 app.mark_cooldown(&provider_id, &key.id, retry_after, &reason);
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+            } else if code == 401 || code == 403 {
+                // Auth failure = the key itself is dead (invalid/revoked/out of quota
+                // tier). A 5s cooldown just lets round-robin feed it again forever;
+                // quarantine it for 30 minutes and surface it as 无效 in the UI.
+                app.mark_invalid(&provider_id, &key.id, 30 * 60, &reason);
             } else {
-                // Short cooldown for rotated-out keys: long enough to not retry it this
-                // round, short enough that fixing the key is picked up quickly.
+                // Other key-scoped errors (408/5xx): short rotate-out cooldown, long
+                // enough to not retry this round, short enough to recover quickly.
                 app.mark_cooldown(&provider_id, &key.id, Some(5), &reason);
             }
-            // Loop continues: pick_key() skips cooling keys and serves a fresh one.
+            // Loop continues: pick_key() skips cooling/invalid keys and serves a fresh one.
             continue;
         }
 

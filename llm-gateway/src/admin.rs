@@ -387,12 +387,18 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                         .and_then(|c| c.get(&k.id))
                         .cloned()
                         .unwrap_or(serde_json::Value::Null);
+                    let invalid = pool
+                        .get("invalid")
+                        .and_then(|c| c.get(&k.id))
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
                     serde_json::json!({
                         "id": k.id,
                         "key": mask(&k.key),
                         "label": k.label,
                         "cooldown_secs": k.cooldown_secs,
                         "cooling": cooling,
+                        "invalid": invalid,
                         "requests": pool.get("requests").and_then(|r| r.get(&k.id)).cloned().unwrap_or(serde_json::json!(0)),
                         "last_error": pool.get("last_error").and_then(|r| r.get(&k.id)).cloned().unwrap_or(serde_json::Value::Null),
                     })

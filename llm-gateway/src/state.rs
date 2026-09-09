@@ -9,6 +9,10 @@ pub(crate) struct PoolRuntime {
     counters: HashMap<String, usize>,
     /// key id -> cooldown expiry
     cooling: HashMap<String, Instant>,
+    /// key id -> "invalid" (auth-failed) cooldown expiry. Auth failures (401/403) mean
+    /// the key itself is dead — retrying in seconds never succeeds, so these get a long
+    /// quarantine that round-robin skips, instead of the 5s rotate-out cooldown.
+    invalid: HashMap<String, Instant>,
     /// key id -> last error string (for the UI)
     last_error: HashMap<String, String>,
     /// key id -> total requests routed through this key
@@ -71,7 +75,16 @@ impl App {
         pool.last_error.insert(key_id.to_string(), reason.to_string());
     }
 
-    /// Pick the next healthy key for a provider (round-robin, skipping keys in cooldown).
+    /// Quarantine a key whose credentials were rejected (401/403): round-robin skips it
+    /// until `secs` elapse. Manual "解除冷却" in the UI clears it immediately.
+    pub fn mark_invalid(&self, _provider_id: &str, key_id: &str, secs: u64, reason: &str) {
+        let mut pool = self.pool.lock().unwrap();
+        pool.invalid.insert(key_id.to_string(), Instant::now() + Duration::from_secs(secs));
+        pool.last_error.insert(key_id.to_string(), reason.to_string());
+    }
+
+    /// Pick the next healthy key for a provider (round-robin, skipping keys in cooldown
+    /// and quarantined-invalid keys).
     pub fn pick_key(&self, provider: &Provider) -> Option<crate::config::ApiKey> {
         let now = Instant::now();
         let mut pool = self.pool.lock().unwrap();
@@ -82,10 +95,11 @@ impl App {
         let start = *pool.counters.entry(provider.id.clone()).or_insert(0) % n;
         // prune expired cooldowns so status stays accurate
         pool.cooling.retain(|_, until| *until > now);
+        pool.invalid.retain(|_, until| *until > now);
         for i in 0..n {
             let idx = (start + i) % n;
             let key = &provider.keys[idx];
-            if pool.cooling.contains_key(&key.id) {
+            if pool.cooling.contains_key(&key.id) || pool.invalid.contains_key(&key.id) {
                 continue;
             }
             pool.counters.insert(provider.id.clone(), idx + 1);
@@ -100,7 +114,9 @@ impl App {
     }
 
     pub fn clear_cooldown(&self, key_id: &str) {
-        self.pool.lock().unwrap().cooling.remove(key_id);
+        let mut pool = self.pool.lock().unwrap();
+        pool.cooling.remove(key_id);
+        pool.invalid.remove(key_id);
     }
     /// Pool status snapshot for the UI: per key -> { cooling_until_ms, requests, last_error }.
     pub fn status(&self) -> serde_json::Value {
@@ -108,15 +124,34 @@ impl App {
         // Expire cooldowns here too (not just in pick_key): the UI polls status, not the
         // proxy path, so without this a finished cooldown would show "0s" forever.
         pool.cooling.retain(|_, until| *until > Instant::now());
+        pool.invalid.retain(|_, until| *until > Instant::now());
+        let now_ms = now_ms();
+        let fmt_remaining = |until: &Instant| -> u64 {
+            until.saturating_duration_since(Instant::now()).as_secs()
+        };
         let cooling: serde_json::Map<String, serde_json::Value> = pool
             .cooling
             .iter()
             .map(|(k, until)| {
-                let remaining = until.saturating_duration_since(Instant::now()).as_secs();
+                let remaining = fmt_remaining(until);
                 (
                     k.clone(),
                     serde_json::json!({
-                        "until_ms": now_ms() + remaining * 1000,
+                        "until_ms": now_ms + remaining * 1000,
+                        "remaining_secs": remaining,
+                    }),
+                )
+            })
+            .collect();
+        let invalid: serde_json::Map<String, serde_json::Value> = pool
+            .invalid
+            .iter()
+            .map(|(k, until)| {
+                let remaining = fmt_remaining(until);
+                (
+                    k.clone(),
+                    serde_json::json!({
+                        "until_ms": now_ms + remaining * 1000,
                         "remaining_secs": remaining,
                     }),
                 )
@@ -124,6 +159,7 @@ impl App {
             .collect();
         serde_json::json!({
             "cooling": cooling,
+            "invalid": invalid,
             "requests": pool.requests,
             "last_error": pool.last_error,
         })
