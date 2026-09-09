@@ -6,9 +6,17 @@ use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use std::time::Duration;
 
-/// Status codes that trigger a key-rotate retry (before first byte).
-fn is_retryable(status: u16) -> bool {
-    status == 429 || status == 500 || status == 502 || status == 503 || status == 504
+/// Status codes that mean "this key can't serve right now" -> rotate to the next key.
+/// (429 rate-limit, key-scoped auth failures, request timeouts and upstream 5xx.)
+fn should_rotate(status: u16) -> bool {
+    status == 429
+        || status == 401
+        || status == 403
+        || status == 408
+        || status == 500
+        || status == 502
+        || status == 503
+        || status == 504
 }
 
 fn parse_retry_after(v: &str) -> Option<u64> {
@@ -69,10 +77,16 @@ pub async fn chat_completions(
         );
     }
 
-    let max_attempts = cfg.max_attempts.clamp(1, 10);
+    // Retry budget: every key that fails is marked cooling, so pick_key() never hands out
+    // the same key again until its cooldown expires. The budget is therefore bounded by
+    // (one attempt per key) x max_attempts, and the request only fails to the client once
+    // the whole pool is exhausted (pick_key -> None). Usable keys are never left untried.
+    let max_attempts = (cfg.max_attempts.clamp(1, 10) as usize)
+        .saturating_mul(provider.keys.len())
+        .max(1);
     let url = format!("{}/chat/completions", provider.base_url.trim_end_matches('/'));
 
-    for attempt in 1..=max_attempts {
+    for _attempt in 1..=max_attempts {
         let key = match app.pick_key(&provider) {
             Some(k) => k,
             None => {
@@ -95,7 +109,7 @@ pub async fn chat_completions(
             .http
             .post(&url)
             .bearer_auth(&key.key)
-            // no total timeout; streams may be long (connect timeout set on client)
+            // long enough for streams; connect timeout is set on the client
             .timeout(Duration::from_secs(600))
             .json(&payload)
             .send()
@@ -104,11 +118,10 @@ pub async fn chat_completions(
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
-                app.mark_cooldown(&provider_id, &key.id, None, &format!("network error: {e}"));
-                if attempt < max_attempts {
-                    continue;
-                }
-                return error_response(StatusCode::BAD_GATEWAY, format!("upstream unreachable: {e}"));
+                // Timeout / connection failure: rotate to the next key. The key gets a
+                // short cooldown (not a rate-limit cooldown) so it recovers quickly.
+                app.mark_cooldown(&provider_id, &key.id, Some(5), &format!("network error: {e}"));
+                continue;
             }
         };
 
@@ -118,31 +131,42 @@ pub async fn chat_completions(
             return passthrough(resp).await;
         }
 
-        // Error before first byte -> maybe rotate to next key.
+        // Error before first byte. Rotate to the next key for key-scoped failures
+        // (429 / 401 / 403 / 408 / 5xx); a 4xx that is the *request's* fault (e.g. 400
+        // bad body) would fail identically on every key, so return it immediately.
         let retry_after = resp
             .headers()
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
             .and_then(parse_retry_after);
         let snippet: String = resp.text().await.unwrap_or_default().chars().take(500).collect();
-        app.mark_cooldown(
-            &provider_id,
-            &key.id,
-            if status.as_u16() == 429 { retry_after } else { None },
-            &format!("HTTP {}: {}", status.as_u16(), snippet),
-        );
+        let reason = format!("HTTP {}: {}", status.as_u16(), snippet);
 
-        if is_retryable(status.as_u16()) && attempt < max_attempts {
+        if should_rotate(status.as_u16()) {
+            if status.as_u16() == 429 {
+                app.mark_cooldown(&provider_id, &key.id, retry_after, &reason);
+            } else {
+                // Short cooldown for rotated-out keys: long enough to not retry it this
+                // round, short enough that fixing the key is picked up quickly.
+                app.mark_cooldown(&provider_id, &key.id, Some(5), &reason);
+            }
+            // Loop continues: pick_key() skips cooling keys and serves a fresh one.
             continue;
         }
 
-        // Not retryable or out of attempts -> return upstream error body as-is.
+        // Request-scoped client error: same result on every key — don't burn the pool.
         return error_response(
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
             format!("upstream error: {}", snippet),
         );
     }
-    unreachable!()
+
+    // Only reachable if a short cooldown expires mid-loop and keys keep failing until the
+    // budget runs out. Never panic on the request path — fail fast with 429 instead.
+    error_response(
+        StatusCode::TOO_MANY_REQUESTS,
+        format!("retry budget exhausted for provider `{}` (all keys failing)", provider.name),
+    )
 }
 
 fn passthrough(resp: reqwest::Response) -> impl std::future::Future<Output = Response> {

@@ -104,7 +104,10 @@ impl App {
     }
     /// Pool status snapshot for the UI: per key -> { cooling_until_ms, requests, last_error }.
     pub fn status(&self) -> serde_json::Value {
-        let pool = self.pool.lock().unwrap();
+        let mut pool = self.pool.lock().unwrap();
+        // Expire cooldowns here too (not just in pick_key): the UI polls status, not the
+        // proxy path, so without this a finished cooldown would show "0s" forever.
+        pool.cooling.retain(|_, until| *until > Instant::now());
         let cooling: serde_json::Map<String, serde_json::Value> = pool
             .cooling
             .iter()
