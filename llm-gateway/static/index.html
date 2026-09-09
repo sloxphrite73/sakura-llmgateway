@@ -16,10 +16,35 @@
     --faint: #5d6373;
     --sakura: #f2a6b8;
     --sakura-dim: #b9768c;
+    --sakura-contrast: #1a0d12;
     --ok: #7fc9a2;
     --warn: #e0b072;
     --err: #e08a8a;
     --radius: 4px;
+    --overlay: rgba(6, 7, 10, .72);
+    --toast-shadow: 0 4px 24px rgba(0,0,0,.4);
+    color-scheme: dark;
+  }
+  /* Light theme — same hue family, daylight values. Sakura deepens just enough to
+     keep contrast on white; status colors darken for legibility on light panels. */
+  :root[data-theme="light"] {
+    --bg: #f7f5f2;
+    --panel: #ffffff;
+    --panel-2: #f1eeea;
+    --border: #e3dfd8;
+    --border-strong: #cfc9bf;
+    --text: #2b2a28;
+    --muted: #6d6e75;
+    --faint: #a0a0a6;
+    --sakura: #c95d7c;
+    --sakura-dim: #a94a68;
+    --sakura-contrast: #ffffff;
+    --ok: #2e7d54;
+    --warn: #9a6a1f;
+    --err: #b34545;
+    --overlay: rgba(43, 42, 40, .45);
+    --toast-shadow: 0 4px 24px rgba(43,42,40,.18);
+    color-scheme: light;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html { -webkit-text-size-adjust: 100%; }
@@ -63,6 +88,8 @@
     margin-left: auto;
   }
   .masthead .api-line code { color: var(--sakura); }
+  .masthead .theme-toggle { margin-left: 4px; flex: none; }
+  :root[data-theme="light"] .masthead .api-line code { color: var(--sakura-dim); }
 
   .wrap { max-width: 980px; margin: 0 auto; padding: 0 28px; }
 
@@ -114,8 +141,8 @@
   }
   button:hover { border-color: var(--sakura-dim); color: var(--sakura); }
   button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--sakura); outline-offset: 2px; }
-  button.primary { background: var(--sakura); border-color: var(--sakura); color: #1a0d12; font-weight: 600; }
-  button.primary:hover { background: #f6bcc9; color: #1a0d12; }
+  button.primary { background: var(--sakura); border-color: var(--sakura); color: var(--sakura-contrast); font-weight: 600; }
+  button.primary:hover { background: var(--sakura-dim); border-color: var(--sakura-dim); color: var(--sakura-contrast); }
   button.danger:hover { border-color: var(--err); color: var(--err); }
   button.small { padding: 3px 9px; font-size: 12px; }
   button:disabled { opacity: .45; cursor: default; }
@@ -171,7 +198,7 @@
   /* ---------- modal ---------- */
   .overlay {
     position: fixed; inset: 0;
-    background: rgba(6, 7, 10, .72);
+    background: var(--overlay);
     display: flex; align-items: center; justify-content: center;
     z-index: 10; padding: 20px;
   }
@@ -195,7 +222,7 @@
     border-radius: var(--radius);
     display: none;
     max-width: 420px;
-    box-shadow: 0 4px 24px rgba(0,0,0,.4);
+    box-shadow: var(--toast-shadow);
   }
   code {
     font-family: ui-monospace, Consolas, monospace;
@@ -220,6 +247,7 @@
 <header class="masthead">
   <h1><span class="petal" aria-hidden="true"></span>Sakura Gateway</h1>
   <div class="api-line">OpenAI 兼容接口 <code id="api-url">…</code> · 模型用 <code>provider/model</code> 或别名</div>
+  <button class="small theme-toggle" id="theme-toggle" aria-label="切换浅色/深色主题" title="切换浅色/深色主题"></button>
 </header>
 
 <main class="wrap">
@@ -266,6 +294,21 @@
 <script>
 const $ = id => document.getElementById(id);
 let STATUS = null;
+
+// ---------- theme ----------
+const THEME_KEY = 'sakura-theme';
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  $('theme-toggle').textContent = t === 'light' ? '🌙 深色' : '☀️ 浅色';
+  try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
+}
+(function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem(THEME_KEY); } catch (e) {}
+  applyTheme(saved === 'light' ? 'light' : 'dark');
+})();
+$('theme-toggle').addEventListener('click', () =>
+  applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'));
 
 async function api(method, url, body) {
   const r = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined });
