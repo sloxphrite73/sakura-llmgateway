@@ -1,6 +1,6 @@
 # Sakura LLM Gateway
 
-English | [简体中文](README.zh-CN.md) · 📖 Full usage guide: [doc/USAGE.md](doc/USAGE.md) · 完整使用说明：[doc/使用说明.md](doc/使用说明.md)
+English | [简体中文](README.zh-CN.md) · 📖 使用说明 Usage guide: [English](doc/USAGE.md) · ：[中文](doc/使用说明.md)
 
 A high-performance local LLM API gateway written in **Rust** (axum + tokio). It exposes an
 OpenAI-compatible endpoint on `127.0.0.1:8000/v1`, load-balances across a pool of API keys
