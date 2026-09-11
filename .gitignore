@@ -4,10 +4,17 @@ target/
 
 # Local config with API keys — never commit
 llm-gateway/gateway.json
+gateway.json
 *.local.json
+
+# Freebuff agent state / handoff notes
+.freebuff/
+PASS.md
 
 # Test artifacts
 llm-gateway/*.log
+# test config may hold real keys during local testing — keep out of git
+llm-gateway/test/gateway.json
 
 # OS / editor
 .DS_Store
