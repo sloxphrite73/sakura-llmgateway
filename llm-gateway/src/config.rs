@@ -13,6 +13,10 @@ pub struct ApiKey {
     /// Per-key cooldown override in seconds. `None` = use global default.
     #[serde(default)]
     pub cooldown_secs: Option<u64>,
+    /// Cooldown in seconds learned by post-429 probing. Machine-written, distinct from
+    /// the user-set `cooldown_secs`; beats it in cooldown resolution order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub learned_cooldown: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +102,14 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Parse a config from a raw JSON string without touching disk. Used by the import
+    /// endpoint's validate-then-swap: the whole file is rejected on any error.
+    pub fn parse_str(raw: &str) -> ConfigResult<Self> {
+        let cfg: Config = serde_json::from_str(raw)
+            .map_err(|e| format!("invalid config: {e}"))?;
+        Ok(cfg)
+    }
+
     pub fn load(path: &Path) -> ConfigResult<Self> {
         if !path.exists() {
             let cfg = Config::default();
@@ -121,6 +133,10 @@ impl Config {
 
     pub fn provider_by_id(&self, id: &str) -> Option<&Provider> {
         self.providers.iter().find(|p| p.id == id)
+    }
+
+    pub fn provider_by_id_mut(&mut self, id: &str) -> Option<&mut Provider> {
+        self.providers.iter_mut().find(|p| p.id == id)
     }
 
     /// Resolve a client-supplied `model` string to (provider, upstream model).

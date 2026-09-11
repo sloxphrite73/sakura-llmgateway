@@ -1,0 +1,65 @@
+name: Release
+
+# Build the single-file Windows binary (embedded UI via rust-embed) and attach it
+# to a GitHub Release. Trigger: push a tag like v0.1.0, or run manually from the
+# Actions tab (workflow_dispatch).
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write # required to create the Release and upload assets
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            llm-gateway/target
+          key: cargo-release-${{ hashFiles('llm-gateway/Cargo.lock') }}
+          restore-keys: cargo-release-
+
+      - name: Build release binary
+        working-directory: llm-gateway
+        run: cargo build --release
+
+      - name: Smoke test (binary starts and serves UI)
+        working-directory: llm-gateway
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath "target/release/llm-gateway.exe" -ArgumentList "--config","test/gateway.json" -PassThru -NoNewWindow
+          Start-Sleep -Seconds 5
+          try {
+            $r = Invoke-WebRequest -Uri "http://127.0.0.1:8801/" -UseBasicParsing -TimeoutSec 10
+            if ($r.StatusCode -ne 200) { throw "UI check failed: HTTP $($r.StatusCode)" }
+            Write-Host "Smoke test passed: UI served with HTTP 200"
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Rename artifact
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF -like "refs/tags/*") { $env:GITHUB_REF -replace "refs/tags/","" } else { "dev" }
+          Copy-Item "llm-gateway/target/release/llm-gateway.exe" "sakura-llmgateway-$version-x86_64-pc-windows-msvc.exe"
+          Write-Host "Artifact: sakura-llmgateway-$version-x86_64-pc-windows-msvc.exe"
+
+      - name: Create Release and upload artifact
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: sakura-llmgateway-*-x86_64-pc-windows-msvc.exe

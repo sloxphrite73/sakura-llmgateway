@@ -113,6 +113,7 @@ pub async fn add_key(
                 key: input.key.trim().to_string(),
                 label: input.label.trim().to_string(),
                 cooldown_secs: input.cooldown_secs,
+                learned_cooldown: None,
             });
             found = true;
         }
@@ -369,6 +370,143 @@ pub async fn update_settings(
     ok(cfg)
 }
 
+// ---------- config import / export ----------
+
+/// GET /api/config/export — returns gateway.json as a download.
+pub async fn export_config(State(app): State<std::sync::Arc<App>>) -> Response {
+    let cfg = app.read_config();
+    match serde_json::to_string_pretty(&cfg) {
+        Ok(body) => {
+            let filename = app
+                .config_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("gateway.json")
+                .to_string();
+            (
+                StatusCode::OK,
+                [
+                    ("content-type", "application/json; charset=utf-8"),
+                    (
+                        "content-disposition",
+                        Box::leak(format!("attachment; filename=\"{filename}\"\0").into_boxed_str())
+                            .strip_suffix('\0')
+                            .unwrap_or("attachment"),
+                    ),
+                ],
+                body,
+            )
+                .into_response()
+        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &format!("serialize failed: {e}")),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct ImportConfigInput {
+    /// Raw gateway.json content. Must be a complete, valid config: the whole file is
+    /// rejected on any error (validate-then-swap).
+    pub content: String,
+}
+
+/// POST /api/config/import — validate-then-swap hot reload of gateway.json.
+/// In-flight requests finish on the old state (config is behind a RwLock); no restart.
+pub async fn import_config(
+    State(app): State<std::sync::Arc<App>>,
+    Json(input): Json<ImportConfigInput>,
+) -> Response {
+    let cfg = match crate::config::Config::parse_str(&input.content) {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+    // Atomic swap under the write lock, then persist the new file to disk.
+    {
+        let mut cur = app.config.write().unwrap();
+        *cur = cfg.clone();
+    }
+    if let Err(e) = cfg.save(&app.config_path) {
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("imported in memory but failed to persist: {e}"),
+        );
+    }
+    ok(cfg)
+}
+
+// ---------- stats ----------
+
+/// GET /api/stats — aggregated success/fail stats for the Status page.
+pub async fn get_stats(State(app): State<std::sync::Arc<App>>) -> Response {
+    let stats = app.stats.lock().unwrap().clone();
+    let cfg = app.read_config();
+    let now = now_ms();
+
+    // Current hour + previous 23 buckets -> [{hour_ms, success, fail}]
+    let cutoff = now / 3_600_000 - 23;
+    let histogram: Vec<serde_json::Value> = (cutoff..=now / 3_600_000)
+        .map(|h| {
+            let b = stats.hourly.get(&h);
+            serde_json::json!({
+                "hour_ms": h * 3_600_000,
+                "success": b.map(|b| b.success).unwrap_or(0),
+                "fail": b.map(|b| b.fail).unwrap_or(0),
+            })
+        })
+        .collect();
+
+    let key_name = |id: &str| -> String {
+        cfg.providers
+            .iter()
+            .find_map(|p| p.keys.iter().find(|k| k.id == id).map(|k| k.label.clone()))
+            .unwrap_or_else(|| id.to_string())
+    };
+    let provider_name = |id: &str| -> String {
+        cfg.provider_by_id(id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+
+    let keys: serde_json::Map<String, serde_json::Value> = stats
+        .keys
+        .iter()
+        .map(|(id, b)| {
+            (
+                id.clone(),
+                serde_json::json!({ "name": key_name(id), "success": b.success, "fail": b.fail }),
+            )
+        })
+        .collect();
+    let providers: serde_json::Map<String, serde_json::Value> = stats
+        .providers
+        .iter()
+        .map(|(id, b)| {
+            (
+                id.clone(),
+                serde_json::json!({ "name": provider_name(id), "success": b.success, "fail": b.fail }),
+            )
+        })
+        .collect();
+    let models: serde_json::Map<String, serde_json::Value> = stats
+        .models
+        .iter()
+        .map(|(m, b)| {
+            (
+                m.clone(),
+                serde_json::json!({ "success": b.success, "fail": b.fail }),
+            )
+        })
+        .collect();
+
+    ok(serde_json::json!({
+        "now_ms": now,
+        "total": { "success": stats.total.success, "fail": stats.total.fail },
+        "histogram": histogram,
+        "keys": keys,
+        "providers": providers,
+        "models": models,
+    }))
+}
+
 // ---------- status ----------
 
 pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
@@ -397,6 +535,7 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                         "key": mask(&k.key),
                         "label": k.label,
                         "cooldown_secs": k.cooldown_secs,
+                        "learned_cooldown": k.learned_cooldown,
                         "cooling": cooling,
                         "invalid": invalid,
                         "requests": pool.get("requests").and_then(|r| r.get(&k.id)).cloned().unwrap_or(serde_json::json!(0)),

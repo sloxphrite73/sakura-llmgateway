@@ -15,6 +15,9 @@ PASS.md
 llm-gateway/*.log
 # test config may hold real keys during local testing — keep out of git
 llm-gateway/test/gateway.json
+llm-gateway/test/stats.json
+# runtime stats file (may be created next to any config)
+stats.json
 
 # OS / editor
 .DS_Store

@@ -25,8 +25,6 @@
     --toast-shadow: 0 4px 24px rgba(0,0,0,.4);
     color-scheme: dark;
   }
-  /* Light theme — same hue family, daylight values. Sakura deepens just enough to
-     keep contrast on white; status colors darken for legibility on light panels. */
   :root[data-theme="light"] {
     --bg: #f7f5f2;
     --panel: #ffffff;
@@ -63,7 +61,9 @@
   .masthead {
     border-bottom: 1px solid var(--border);
     background: var(--panel);
-    padding: 20px 28px 18px;
+    padding: 20px 28px 0;
+  }
+  .masthead .top {
     display: flex;
     align-items: baseline;
     gap: 18px;
@@ -91,6 +91,26 @@
   .masthead .theme-toggle { margin-left: 4px; flex: none; }
   :root[data-theme="light"] .masthead .api-line code { color: var(--sakura-dim); }
 
+  /* ---------- tabs ---------- */
+  .tabs { display: flex; gap: 4px; margin-top: 14px; }
+  .tabs button {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    color: var(--muted);
+    font-size: 14px;
+    padding: 8px 16px;
+  }
+  .tabs button:hover { color: var(--sakura); }
+  .tabs button.active {
+    color: var(--text);
+    border-bottom-color: var(--sakura);
+    font-weight: 600;
+  }
+  .page { display: none; }
+  .page.active { display: block; }
+
   .wrap { max-width: 980px; margin: 0 auto; padding: 0 28px; }
 
   /* ---------- sections ---------- */
@@ -117,6 +137,51 @@
     margin-top: 12px;
   }
   .card-pad { padding: 16px 18px; }
+
+  /* ---------- stats ---------- */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .stat-box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+  }
+  .stat-box .num { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat-box .label { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .stat-box.ok .num { color: var(--ok); }
+  .stat-box.err .num { color: var(--err); }
+
+  .hist { display: flex; align-items: flex-end; gap: 3px; height: 120px; margin-top: 14px; }
+  .hist .bar-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    height: 100%;
+    position: relative;
+    min-width: 0;
+  }
+  .hist .bar {
+    width: 100%;
+    background: var(--sakura-dim);
+    border-radius: 2px 2px 0 0;
+    min-height: 1px;
+  }
+  .hist .bar.fail { background: var(--err); opacity: .8; }
+  .hist .bar.ok { background: var(--ok); opacity: .75; }
+  .hist-x {
+    display: flex;
+    gap: 3px;
+    margin-top: 6px;
+    font-size: 10px;
+    color: var(--faint);
+  }
+  .hist-x span { flex: 1; text-align: center; overflow: visible; white-space: nowrap; }
 
   /* ---------- forms ---------- */
   input, button, select {
@@ -233,7 +298,7 @@
   }
 
   @media (max-width: 640px) {
-    .masthead { padding: 16px 18px; }
+    .masthead { padding: 16px 18px 0; }
     .wrap { padding: 0 18px; }
     .masthead .api-line { margin-left: 0; width: 100%; }
   }
@@ -245,47 +310,107 @@
 <body>
 
 <header class="masthead">
-  <h1><span class="petal" aria-hidden="true"></span>Sakura Gateway</h1>
-  <div class="api-line">OpenAI 兼容接口 <code id="api-url">…</code> · 模型用 <code>provider/model</code> 或别名</div>
-  <button class="small theme-toggle" id="theme-toggle" aria-label="切换浅色/深色主题" title="切换浅色/深色主题"></button>
+  <div class="top">
+    <h1><span class="petal" aria-hidden="true"></span>Sakura Gateway</h1>
+    <div class="api-line">OpenAI 兼容接口 <code id="api-url">…</code> · 模型用 <code>provider/model</code> 或别名</div>
+    <button class="small theme-toggle" id="theme-toggle" aria-label="切换浅色/深色主题" title="切换浅色/深色主题"></button>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button id="tab-status" class="active" role="tab" onclick="switchPage('status')">Status / 统计</button>
+    <button id="tab-config" role="tab" onclick="switchPage('config')">Config / 配置</button>
+  </nav>
 </header>
 
 <main class="wrap">
 
-  <section class="section">
-    <h2 class="section-title">全局设置 <span class="note">端口修改后重启生效</span></h2>
-    <div class="card">
-      <div class="card-pad">
-        <div class="settings-grid">
-          <label class="f">默认冷却时间（秒）<input id="s-cooldown" type="number" min="1"></label>
-          <label class="f">每请求最大尝试次数<input id="s-attempts" type="number" min="1" max="10"></label>
-          <label class="f">API 端口<input id="s-apiport" type="number"></label>
-          <label class="f">UI 端口<input id="s-uiport" type="number"></label>
-        </div>
-        <div class="row" style="margin-top:14px">
-          <label class="row" style="gap:6px"><input type="checkbox" id="s-auth"> 启用本地 API 鉴权</label>
-          <input id="s-authkeys" placeholder="鉴权 Key，逗号分隔" style="flex:1;min-width:240px">
-          <button class="primary" onclick="saveSettings()">保存设置</button>
-        </div>
-      </div>
-    </div>
-  </section>
+  <!-- ======================= STATUS PAGE ======================= -->
+  <div class="page active" id="page-status">
 
-  <section class="section">
-    <h2 class="section-title">提供商</h2>
-    <div id="providers"></div>
+    <section class="section">
+      <h2 class="section-title">总览 <span class="note">每 5 秒自动刷新 · 统计数据已持久化，重启不丢失</span></h2>
+      <div class="stat-grid">
+        <div class="stat-box ok"><div class="num" id="st-ok">0</div><div class="label">成功请求</div></div>
+        <div class="stat-box err"><div class="num" id="st-fail">0</div><div class="label">失败请求</div></div>
+        <div class="stat-box"><div class="num" id="st-rate">—</div><div class="label">成功率</div></div>
+      </div>
+    </section>
 
-    <div class="card">
-      <div class="provider-head">
-        <div><h3>添加提供商</h3></div>
+    <section class="section">
+      <h2 class="section-title">过去 24 小时请求 <span class="note">每小时一柱 · 粉=成功 红=失败</span></h2>
+      <div class="card card-pad">
+        <div class="hist" id="hist"></div>
+        <div class="hist-x" id="hist-x"></div>
       </div>
-      <div class="pad divider row">
-        <input id="np-name" placeholder="名称，如 openai">
-        <input id="np-url" placeholder="Base URL，如 https://api.openai.com/v1" style="flex:1;min-width:280px">
-        <button class="primary" onclick="addProvider()">添加</button>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">供应商</h2>
+      <div class="card"><table id="tbl-providers"></table></div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">API Key</h2>
+      <div class="card"><table id="tbl-keys"></table></div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">模型</h2>
+      <div class="card"><table id="tbl-models"></table></div>
+    </section>
+
+  </div>
+
+  <!-- ======================= CONFIG PAGE ======================= -->
+  <div class="page" id="page-config">
+
+    <section class="section">
+      <h2 class="section-title">配置文件 <span class="note">gateway.json · 导出用于迁移，导入即时热生效，无需重启</span></h2>
+      <div class="card card-pad">
+        <div class="row">
+          <button onclick="exportConfig()">导出配置</button>
+          <button onclick="document.getElementById('import-file').click()">导入配置</button>
+          <input type="file" id="import-file" accept=".json,application/json" style="display:none" onchange="importConfig(event)">
+          <span class="faint" style="font-size:12px">导入会整体替换当前配置（含端口与鉴权），文件无效则整体拒绝</span>
+        </div>
       </div>
-    </div>
-  </section>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">全局设置 <span class="note">端口修改后重启生效</span></h2>
+      <div class="card">
+        <div class="card-pad">
+          <div class="settings-grid">
+            <label class="f">默认冷却时间（秒）<input id="s-cooldown" type="number" min="1"></label>
+            <label class="f">每请求最大尝试次数<input id="s-attempts" type="number" min="1" max="10"></label>
+            <label class="f">API 端口<input id="s-apiport" type="number"></label>
+            <label class="f">UI 端口<input id="s-uiport" type="number"></label>
+          </div>
+          <div class="row" style="margin-top:14px">
+            <label class="row" style="gap:6px"><input type="checkbox" id="s-auth"> 启用本地 API 鉴权</label>
+            <input id="s-authkeys" placeholder="鉴权 Key，逗号分隔" style="flex:1;min-width:240px">
+            <button class="primary" onclick="saveSettings()">保存设置</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">提供商</h2>
+      <div id="providers"></div>
+
+      <div class="card">
+        <div class="provider-head">
+          <div><h3>添加提供商</h3></div>
+        </div>
+        <div class="pad divider row">
+          <input id="np-name" placeholder="名称，如 openai">
+          <input id="np-url" placeholder="Base URL，如 https://api.openai.com/v1" style="flex:1;min-width:280px">
+          <button class="primary" onclick="addProvider()">添加</button>
+        </div>
+      </div>
+    </section>
+
+  </div>
 
 </main>
 
@@ -293,7 +418,8 @@
 
 <script>
 const $ = id => document.getElementById(id);
-let STATUS = null;
+let STATUS = null;   // /api/status (config + pool state)
+let STATS = null;    // /api/stats (request statistics)
 
 // ---------- theme ----------
 const THEME_KEY = 'sakura-theme';
@@ -310,40 +436,98 @@ function applyTheme(t) {
 $('theme-toggle').addEventListener('click', () =>
   applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'));
 
+// ---------- tabs ----------
+function switchPage(name) {
+  for (const p of ['status', 'config']) {
+    $('page-' + p).classList.toggle('active', p === name);
+    $('tab-' + p).classList.toggle('active', p === name);
+  }
+}
+
+// ---------- helpers ----------
 async function api(method, url, body) {
   const r = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined });
   if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || r.status); }
   return r.json();
 }
 function toast(t) { const m = $('msg'); m.textContent = t; m.style.display='block'; setTimeout(()=>m.style.display='none', 2500); }
-function esc(s) { return String(s).replace(/[&<>\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c])); }
+function esc(s) { return String(s).replace(/[&<>\\\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\\\"':'&quot;'}[c])); }
 
+// ---------- data loading ----------
 async function refresh() {
-  STATUS = await api('GET', '/api/status');
-  $('api-url').textContent = `http://127.0.0.1:${STATUS.api_port}/v1`;
-  $('s-cooldown').value = STATUS.default_cooldown_secs;
-  $('s-attempts').value = STATUS.max_attempts;
-  $('s-apiport').value = STATUS.api_port;
-  $('s-uiport').value = STATUS.ui_port;
-  $('s-auth').checked = STATUS.auth.enabled;
-  $('s-authkeys').value = (STATUS.auth.keys || []).join(',');
-  render();
-}
-
-async function saveSettings() {
   try {
-    await api('PUT', '/api/settings', {
-      default_cooldown_secs: +$('s-cooldown').value || 60,
-      max_attempts: +$('s-attempts').value || 3,
-      api_port: +$('s-apiport').value || 8000,
-      ui_port: +$('s-uiport').value || 8001,
-      auth: { enabled: $('s-auth').checked, keys: $('s-authkeys').value.split(',').map(s=>s.trim()).filter(Boolean) }
-    });
-    toast('已保存'); refresh();
-  } catch (e) { toast('失败: ' + e.message); }
+    STATUS = await api('GET', '/api/status');
+    $('api-url').textContent = `http://127.0.0.1:${STATUS.api_port}/v1`;
+    $('s-cooldown').value = STATUS.default_cooldown_secs;
+    $('s-attempts').value = STATUS.max_attempts;
+    $('s-apiport').value = STATUS.api_port;
+    $('s-uiport').value = STATUS.ui_port;
+    $('s-auth').checked = STATUS.auth.enabled;
+    $('s-authkeys').value = (STATUS.auth.keys || []).join(',');
+    renderConfig();
+    renderStatus();
+  } catch (e) { console.error('refresh failed', e); }
 }
 
-function render() {
+async function refreshStats() {
+  try {
+    STATS = await api('GET', '/api/stats');
+    renderStats();
+  } catch (e) { console.error('stats failed', e); }
+}
+
+// ---------- STATUS page ----------
+function renderStats() {
+  if (!STATS) return;
+  const total = STATS.total || { success: 0, fail: 0 };
+  $('st-ok').textContent = total.success;
+  $('st-fail').textContent = total.fail;
+  const all = total.success + total.fail;
+  $('st-rate').textContent = all ? (total.success / all * 100).toFixed(1) + '%' : '—';
+
+  // 24h histogram: stacked ok/fail bars scaled to the busiest hour
+  const hist = STATS.histogram || [];
+  const peak = Math.max(1, ...hist.map(h => h.success + h.fail));
+  $('hist').innerHTML = hist.map(h => {
+    const okH = (h.success / peak * 100).toFixed(2);
+    const failH = (h.fail / peak * 100).toFixed(2);
+    const totalH = h.success + h.fail;
+    return `<div class="bar-wrap" title="${new Date(h.hour_ms).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit'})}时 · 成功 ${h.success} / 失败 ${h.fail}">
+      ${h.fail ? `<div class="bar fail" style="height:${failH}%"></div>` : ''}
+      ${h.success ? `<div class="bar ok" style="height:${okH}%"></div>` : (totalH ? '' : '')}
+    </div>`;
+  }).join('');
+  $('hist-x').innerHTML = hist.map((h, i) =>
+    (i % 4 === 0) ? `<span>${new Date(h.hour_ms).getHours()}:00</span>` : '<span></span>').join('');
+
+  // provider table
+  const provs = Object.entries(STATS.providers || {});
+  $('tbl-providers').innerHTML = `<tr><th>供应商</th><th>成功</th><th>失败</th><th>成功率</th></tr>` +
+    (provs.length ? provs.map(([id, p]) => {
+      const all = p.success + p.fail;
+      return `<tr><td>${esc(p.name)}</td><td class="num">${p.success}</td><td class="num">${p.fail}</td><td class="num">${all ? (p.success/all*100).toFixed(1)+'%' : '—'}</td></tr>`;
+    }).join('') : `<tr><td colspan="4" class="faint">暂无数据</td></tr>`);
+
+  // key table
+  const keys = Object.entries(STATS.keys || {});
+  $('tbl-keys').innerHTML = `<tr><th>API Key</th><th>成功</th><th>失败</th><th>成功率</th></tr>` +
+    (keys.length ? keys.map(([id, k]) => {
+      const all = k.success + k.fail;
+      return `<tr><td>${esc(k.name)}</td><td class="num">${k.success}</td><td class="num">${k.fail}</td><td class="num">${all ? (k.success/all*100).toFixed(1)+'%' : '—'}</td></tr>`;
+    }).join('') : `<tr><td colspan="4" class="faint">暂无数据</td></tr>`);
+
+  // model table
+  const models = Object.entries(STATS.models || {});
+  $('tbl-models').innerHTML = `<tr><th>模型</th><th>成功</th><th>失败</th><th>成功率</th></tr>` +
+    (models.length ? models.map(([m, s]) => {
+      const all = s.success + s.fail;
+      return `<tr><td><span class="keytag">${esc(m)}</span></td><td class="num">${s.success}</td><td class="num">${s.fail}</td><td class="num">${all ? (s.success/all*100).toFixed(1)+'%' : '—'}</td></tr>`;
+    }).join('') : `<tr><td colspan="4" class="faint">暂无数据</td></tr>`);
+}
+
+// ---------- CONFIG page ----------
+function renderConfig() {
+  if (!STATUS) return;
   $('providers').innerHTML = STATUS.providers.map(p => `
   <div class="card" data-pid="${p.id}">
     <div class="provider-head">
@@ -359,26 +543,28 @@ function render() {
     </div>
 
     <table class="divider">
-      <tr><th>API Key</th><th>状态</th><th>冷却配置</th><th>请求数</th><th>最近错误</th><th></th></tr>
+      <tr><th>API Key</th><th>状态</th><th>冷却配置</th><th>学习冷却</th><th>请求数</th><th>最近错误</th><th></th></tr>
       ${p.keys.length ? p.keys.map(k => {
         const c = k.cooling, iv = k.invalid;
-        // Live countdown from the server's absolute until_ms; flips to 可用 at 0.
         const st = iv
           ? `<span class="st off" data-until="${iv.until_ms}" data-kind="invalid">无效 · 剩余 ${Math.max(0, Math.ceil((iv.until_ms - STATUS.now_ms)/1000))}s</span>`
           : c
           ? `<span class="st cool" data-until="${c.until_ms}">冷却 · 剩余 ${Math.max(0, Math.ceil((c.until_ms - STATUS.now_ms)/1000))}s</span>`
           : `<span class="st ok">可用</span>`;
         return `<tr>
-          <td><span class="keytag">${esc(k.label || k.key)}</span></td>
+          <td><span class="keytag" data-key-id="${k.id}" data-revealed="0">${esc(k.key)}</span></td>
           <td>${st}</td>
           <td class="num">${k.cooldown_secs ?? '默认'}</td>
+          <td class="num">${k.learned_cooldown != null ? `<span class="pill" title="由 429 探测自动学习">${k.learned_cooldown}s</span>` : '—'}</td>
           <td class="num">${k.requests}</td>
           <td class="err-cell" title="${esc(k.last_error||'')}">${esc(k.last_error||'—')}</td>
           <td class="row">
+            <button class="small" onclick="toggleKey('${k.id}', this)">显示</button>
+            <button class="small" onclick="copyKey('${k.id}', this)">复制</button>
             ${(c || iv) ? `<button class="small" onclick="clearCooldown('${k.id}')">解除${iv ? '无效' : '冷却'}</button>` : ''}
             <button class="small danger" onclick="delKey('${p.id}','${k.id}')">删除</button>
           </td></tr>`;
-      }).join('') : `<tr><td colspan="6" class="faint">还没有 Key，添加第一把后这个提供商才能服务请求</td></tr>`}
+      }).join('') : `<tr><td colspan="7" class="faint">还没有 Key，添加第一把后这个提供商才能服务请求</td></tr>`}
     </table>
     <div class="pad divider row">
       <input placeholder="API Key" id="nk-${p.id}" style="flex:1;min-width:200px">
@@ -426,6 +612,82 @@ function render() {
   </div>`).join('');
 }
 
+async function saveSettings() {
+  try {
+    await api('PUT', '/api/settings', {
+      default_cooldown_secs: +$('s-cooldown').value || 60,
+      max_attempts: +$('s-attempts').value || 3,
+      api_port: +$('s-apiport').value || 8000,
+      ui_port: +$('s-uiport').value || 8001,
+      auth: { enabled: $('s-auth').checked, keys: $('s-authkeys').value.split(',').map(s=>s.trim()).filter(Boolean) }
+    });
+    toast('已保存'); refresh();
+  } catch (e) { toast('失败: ' + e.message); }
+}
+
+// ---------- config import / export ----------
+function exportConfig() {
+  window.open('/api/config/export', '_blank');
+  toast('已触发下载');
+}
+async function importConfig(ev) {
+  const file = ev.target.files[0];
+  ev.target.value = '';
+  if (!file) return;
+  if (!confirm(`导入 ${file.name} 将整体替换当前配置（含端口与鉴权设置），确定继续？`)) return;
+  try {
+    const content = await file.text();
+    // client-side sanity check for fast feedback; the server re-validates fully
+    JSON.parse(content);
+    await api('POST', '/api/config/import', { content });
+    toast('导入成功，已热生效');
+    refresh();
+  } catch (e) { toast('导入失败: ' + e.message); }
+}
+
+// ---------- key show / copy ----------
+// The status endpoint ships keys pre-masked; "显示"/"复制" fetch the real key from
+// the export endpoint (which returns the live config) — no separate reveal API needed.
+async function findRealKey(keyId) {
+  const cfg = await api('GET', '/api/config/export');
+  for (const p of (cfg.providers || [])) {
+    for (const k of (p.keys || [])) {
+      if (k.id === keyId) return k.key;
+    }
+  }
+  return null;
+}
+async function toggleKey(keyId, btn) {
+  const tag = document.querySelector(`.keytag[data-key-id="${keyId}"]`);
+  if (!tag) return;
+  if (tag.dataset.revealed === '1') {
+    // Re-mask using the latest status snapshot (falls back to a bullet run).
+    const k = (STATUS?.providers || []).flatMap(p => p.keys).find(k => k.id === keyId);
+    tag.textContent = k ? k.key : '••••';
+    tag.dataset.revealed = '0';
+    btn.textContent = '显示';
+    return;
+  }
+  try {
+    const real = await findRealKey(keyId);
+    if (!real) { toast('未找到该 Key'); return; }
+    tag.textContent = real;
+    tag.dataset.revealed = '1';
+    btn.textContent = '隐藏';
+  } catch (e) { toast('显示失败: ' + e.message); }
+}
+async function copyKey(keyId, btn) {
+  try {
+    const real = await findRealKey(keyId);
+    if (!real) { toast('未找到该 Key'); return; }
+    await navigator.clipboard.writeText(real);
+    const old = btn.textContent;
+    btn.textContent = '已复制';
+    setTimeout(() => btn.textContent = old, 1200);
+  } catch (e) { toast('复制失败: ' + e.message); }
+}
+
+// ---------- provider / key / model actions ----------
 async function addProvider() {
   try { await api('POST', '/api/providers', { name: $('np-name').value, base_url: $('np-url').value }); $('np-name').value=''; $('np-url').value=''; refresh(); }
   catch(e){ toast(e.message); }
@@ -545,8 +807,11 @@ async function modalImport() {
   } catch(e){ toast(e.message); }
 }
 
+// ---------- polling loops ----------
 refresh();
-setInterval(refresh, 5000); // pull fresh state from the server
+refreshStats();
+setInterval(refresh, 5000);     // config + pool state
+setInterval(refreshStats, 5000); // request statistics
 
 // Local 1s countdown between refreshes: keeps the remaining-secs display live without
 // extra requests, and flips a key back to 可用 the moment its cooldown hits 0.

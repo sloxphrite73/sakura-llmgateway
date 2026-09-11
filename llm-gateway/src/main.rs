@@ -2,6 +2,7 @@ mod admin;
 mod config;
 mod proxy;
 mod state;
+mod stats;
 mod ui;
 
 use axum::routing::{delete, get, post, put};
@@ -78,7 +79,29 @@ async fn main() {
         )
         .route("/api/settings", put(admin::update_settings))
         .route("/api/status", get(admin::status))
+        .route("/api/stats", get(admin::get_stats))
+        .route("/api/config/export", get(admin::export_config))
+        .route("/api/config/import", post(admin::import_config))
         .with_state(app.clone());
+
+    // Background flushers: stats.json every 5s; gateway.json debounced 10s after the
+    // last learned-cooldown change (so 429 storms don't churn the config file).
+    let stats_app = app.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            stats_app.flush_stats();
+        }
+    });
+    let config_app = app.clone();
+    tokio::spawn(async move {
+        let mut last_change: Option<std::time::Instant> = None;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            config_app.flush_config_if_due(&mut last_change);
+        }
+    });
+    // Flush stats on shutdown is best-effort: the 5s loop bounds the loss.
 
     let api_listener = tokio::net::TcpListener::bind(("127.0.0.1", app.read_config().api_port))
         .await
