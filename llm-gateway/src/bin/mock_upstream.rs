@@ -1,5 +1,7 @@
 //! Mock OpenAI-compatible upstream for testing the gateway.
 //! - `sk-bad` key always returns 429 with Retry-After: 2
+//! - `sk-slow` key returns 429 unless at least `SLOW_WINDOW_SECS` have passed since its
+//!   first request (simulates a rate-limit window, for testing cooldown learning)
 //! - any other key returns a chat completion (SSE if "stream": true) and a model list.
 
 use axum::extract::State;
@@ -11,18 +13,22 @@ use futures_util::StreamExt;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Rate-limit window simulated for the `sk-slow` key (seconds).
+const SLOW_WINDOW_SECS: u64 = 8;
+
 #[tokio::main]
 async fn main() {
+    let slow_first = Arc::new(tokio::sync::Mutex::new(Option::<std::time::Instant>::None));
     let app = Router::new()
         .route("/v1/chat/completions", post(chat))
         .route("/v1/models", get(models))
-        .with_state(Arc::new(()));
+        .with_state(slow_first);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:9001").await.unwrap();
     println!("[mock-upstream] listening on 127.0.0.1:9001");
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn models(_state: State<Arc<()>>) -> Response {
+async fn models(_state: State<Arc<tokio::sync::Mutex<Option<std::time::Instant>>>>) -> Response {
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -36,7 +42,11 @@ async fn models(_state: State<Arc<()>>) -> Response {
         .into_response()
 }
 
-async fn chat(_state: State<Arc<()>>, headers: HeaderMap, Json(body): Json<serde_json::Value>) -> Response {
+async fn chat(
+    State(slow_first): State<Arc<tokio::sync::Mutex<Option<std::time::Instant>>>>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
     let auth = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -48,6 +58,20 @@ async fn chat(_state: State<Arc<()>>, headers: HeaderMap, Json(body): Json<serde
             Json(serde_json::json!({ "error": { "message": "rate limited" } })),
         )
             .into_response();
+    }
+    if auth.contains("sk-slow") {
+        // 429 until SLOW_WINDOW_SECS have elapsed since the key's first request;
+        // then behave like a normal key. Lets the prober's bisection converge.
+        let mut first = slow_first.lock().await;
+        let t0 = *first.get_or_insert(std::time::Instant::now());
+        drop(first);
+        if t0.elapsed() < Duration::from_secs(SLOW_WINDOW_SECS) {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!({ "error": { "message": "rate limited (slow window)" } })),
+            )
+                .into_response();
+        }
     }
     if auth.contains("sk-dead") {
         // Invalid credentials: retrying can never succeed — used to verify the

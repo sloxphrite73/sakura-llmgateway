@@ -37,6 +37,9 @@ pub struct App {
     pub stats_path: std::path::PathBuf,
     /// Set when learned-cooldown values changed and gateway.json needs a debounced flush.
     config_dirty: Mutex<bool>,
+    /// key id -> Instant when its learned_cooldown was last written (in-process only;
+    /// used to rate-limit re-learning probes, not persisted).
+    learned_at: Mutex<std::collections::HashMap<String, std::time::Instant>>,
 }
 
 pub fn now_ms() -> u64 {
@@ -62,6 +65,7 @@ impl App {
             stats: Mutex::new(stats),
             stats_path,
             config_dirty: Mutex::new(false),
+            learned_at: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -88,6 +92,14 @@ impl App {
     pub fn record_key_stat(&self, success: bool, key_id: &str) {
         let mut stats = self.stats.lock().unwrap();
         stats.record_key_only(success, key_id);
+    }
+
+    /// Record that a key was rotated out (real upstream failure the retry layer
+    /// absorbed). Shown on the Status page so provider health is visible even when
+    /// every client request ultimately succeeds.
+    pub fn record_rotation(&self, provider_id: &str) {
+        let mut stats = self.stats.lock().unwrap();
+        stats.record_rotation(provider_id);
     }
 
     /// Save stats.json (call from the periodic flusher). Prunes the histogram first.
@@ -127,6 +139,33 @@ impl App {
             *last_change = Some(Instant::now());
         }
         due
+    }
+
+    /// Global default cooldown (prober's initial guess when nothing was learned yet).
+    pub fn default_cooldown_secs(&self) -> u64 {
+        self.read_config().default_cooldown_secs
+    }
+
+    /// The key's current learned_cooldown, if any.
+    pub fn learned_cooldown_of(&self, provider_id: &str, key_id: &str) -> Option<u64> {
+        self.read_config()
+            .provider_by_id(provider_id)?
+            .keys
+            .iter()
+            .find(|k| k.id == key_id)?
+            .learned_cooldown
+    }
+
+    /// Seconds since learned_cooldown was last written for this key (None = never).
+    /// learned_cooldown_changed_at is updated by set_learned_cooldown.
+    pub fn learned_cooldown_age_secs(&self, _provider_id: &str, key_id: &str) -> Option<u64> {
+        let at = *self
+            .learned_at
+            .lock()
+            .unwrap()
+            .get(key_id)?;
+        let elapsed = std::time::Instant::now().saturating_duration_since(at);
+        Some(elapsed.as_secs())
     }
 
     pub fn read_config(&self) -> Config {
@@ -223,6 +262,10 @@ impl App {
             }
         }
         drop(cfg);
+        self.learned_at
+            .lock()
+            .unwrap()
+            .insert(key_id.to_string(), std::time::Instant::now());
         self.mark_config_dirty();
     }
     /// Pool status snapshot for the UI: per key -> { cooling_until_ms, requests, last_error }.

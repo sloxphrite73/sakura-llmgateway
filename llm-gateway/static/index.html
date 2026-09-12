@@ -155,6 +155,7 @@
   .stat-box .label { font-size: 12px; color: var(--muted); margin-top: 2px; }
   .stat-box.ok .num { color: var(--ok); }
   .stat-box.err .num { color: var(--err); }
+  .stat-box.warn .num { color: #e0a83f; }
 
   .hist { display: flex; align-items: flex-end; gap: 3px; height: 120px; margin-top: 14px; }
   .hist .bar-wrap {
@@ -331,6 +332,7 @@
       <div class="stat-grid">
         <div class="stat-box ok"><div class="num" id="st-ok">0</div><div class="label">成功请求</div></div>
         <div class="stat-box err"><div class="num" id="st-fail">0</div><div class="label">失败请求</div></div>
+        <div class="stat-box warn"><div class="num" id="st-rot">0</div><div class="label">换 Key 次数</div></div>
         <div class="stat-box"><div class="num" id="st-rate">—</div><div class="label">成功率</div></div>
       </div>
     </section>
@@ -482,6 +484,7 @@ function renderStats() {
   const total = STATS.total || { success: 0, fail: 0 };
   $('st-ok').textContent = total.success;
   $('st-fail').textContent = total.fail;
+  $('st-rot').textContent = STATS.rotations_total || 0;
   const all = total.success + total.fail;
   $('st-rate').textContent = all ? (total.success / all * 100).toFixed(1) + '%' : '—';
 
@@ -502,11 +505,11 @@ function renderStats() {
 
   // provider table
   const provs = Object.entries(STATS.providers || {});
-  $('tbl-providers').innerHTML = `<tr><th>供应商</th><th>成功</th><th>失败</th><th>成功率</th></tr>` +
+  $('tbl-providers').innerHTML = `<tr><th>供应商</th><th>成功</th><th>失败</th><th>换Key</th><th>成功率</th></tr>` +
     (provs.length ? provs.map(([id, p]) => {
       const all = p.success + p.fail;
-      return `<tr><td>${esc(p.name)}</td><td class="num">${p.success}</td><td class="num">${p.fail}</td><td class="num">${all ? (p.success/all*100).toFixed(1)+'%' : '—'}</td></tr>`;
-    }).join('') : `<tr><td colspan="4" class="faint">暂无数据</td></tr>`);
+      return `<tr><td>${esc(p.name)}</td><td class="num">${p.success}</td><td class="num">${p.fail}</td><td class="num">${p.rotations || 0}</td><td class="num">${all ? (p.success/all*100).toFixed(1)+'%' : '—'}</td></tr>`;
+    }).join('') : `<tr><td colspan="5" class="faint">暂无数据</td></tr>`);
 
   // key table
   const keys = Object.entries(STATS.keys || {});

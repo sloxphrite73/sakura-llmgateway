@@ -32,6 +32,12 @@ pub struct Stats {
     pub providers: BTreeMap<String, Bucket>,
     /// client-facing model string -> bucket
     pub models: BTreeMap<String, Bucket>,
+    /// Times a key was rotated out mid-request (429/401/403/408/5xx/network error)
+    /// while the client request ultimately succeeded on another key. These are real
+    /// upstream failures the client never saw — surfaced separately so the Status page
+    /// reflects provider health even when the retry layer absorbs them.
+    #[serde(default)]
+    pub rotations: BTreeMap<String, u64>,
 }
 
 const HOUR_MS: u64 = 3_600_000;
@@ -59,6 +65,12 @@ impl Stats {
         } else {
             self.keys.entry(key.to_string()).or_default().fail += 1;
         }
+    }
+
+    /// Record that a key was rotated out for `provider` (key-scoped failure the retry
+    /// layer absorbed). Bumped per provider; shown on the Status page as 换Key次数.
+    pub fn record_rotation(&mut self, provider: &str) {
+        *self.rotations.entry(provider.to_string()).or_insert(0) += 1;
     }
 
     /// Keep only the trailing 24 hourly buckets (current hour + previous 23).

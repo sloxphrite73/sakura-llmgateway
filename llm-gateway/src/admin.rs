@@ -491,7 +491,8 @@ pub async fn get_stats(State(app): State<std::sync::Arc<App>>) -> Response {
         .map(|(id, b)| {
             (
                 id.clone(),
-                serde_json::json!({ "name": provider_name(id), "success": b.success, "fail": b.fail }),
+                serde_json::json!({ "name": provider_name(id), "success": b.success, "fail": b.fail,
+                    "rotations": stats.rotations.get(id).copied().unwrap_or(0) }),
             )
         })
         .collect();
@@ -509,6 +510,7 @@ pub async fn get_stats(State(app): State<std::sync::Arc<App>>) -> Response {
     ok(serde_json::json!({
         "now_ms": now,
         "total": { "success": stats.total.success, "fail": stats.total.fail },
+        "rotations_total": stats.rotations.values().sum::<u64>(),
         "histogram": histogram,
         "keys": keys,
         "providers": providers,

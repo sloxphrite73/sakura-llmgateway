@@ -127,6 +127,7 @@ pub async fn chat_completions(
                 // short cooldown (not a rate-limit cooldown) so it recovers quickly.
                 // Per-key tally: this key failed and is being rotated out.
                 app.record_key_stat(false, &key.id);
+                app.record_rotation(&provider_id);
                 app.mark_cooldown(&provider_id, &key.id, Some(5), &format!("network error: {e}"));
                 continue;
             }
@@ -162,18 +163,28 @@ pub async fn chat_completions(
             // Per-key tally: this key failed and is being rotated out. The client-level
             // request is counted separately by whichever key ultimately serves it.
             app.record_key_stat(false, &key.id);
+            app.record_rotation(&provider_id);
             if code == 429 {
                 // Rate limited: honor Retry-After (or the learned/global default), and
                 // back off briefly before hammering the next key — TPM limits are
                 // per-minute, so an instant retry with the same large payload burns the
                 // next key too. A background prober then measures the key's real window.
                 app.mark_cooldown(&provider_id, &key.id, retry_after, &reason);
+                // Probe with the first enabled managed model (real upstreams reject
+                // unknown models with 400, which made the old "probe" model unlearnable).
+                let probe_model = provider
+                    .models
+                    .iter()
+                    .find(|m| m.enabled)
+                    .map(|m| m.id.clone())
+                    .unwrap_or_else(|| "probe".to_string());
                 spawn_prober(
                     app.clone(),
                     provider_id.clone(),
                     key.id.clone(),
                     key.key.clone(),
                     url.clone(),
+                    probe_model,
                 );
                 tokio::time::sleep(Duration::from_millis(1500)).await;
             } else if code == 401 || code == 403 {
@@ -292,64 +303,118 @@ fn finish_ok(
     }
 }
 
-/// Background prober: after a key gets 429'd, measure its real rate-limit window by
-/// sending tiny probe requests at increasing intervals until one succeeds. The measured
-/// interval becomes the key's `learned_cooldown` (debounced config write).
+/// Background prober: after a key gets 429'd, measure its real rate-limit window with a
+/// binary search. Start from T (the key's learned_cooldown if one exists, else the
+/// global default): probe at T — success means the window is shorter (explore [T/2, T]),
+/// 429 means it is longer (explore [T, 2T]). Then bisect the bracket for a few rounds
+/// and store the midpoint as the key's `learned_cooldown` (debounced config write).
 ///
-/// Bounded: gives up after `PROBE_MAX_ROUNDS` rounds so a dead/limited key doesn't probe
-/// forever, and only one prober per key runs at a time (`claim_probe`).
-fn spawn_prober(app: Arc<App>, provider_id: String, key_id: String, key_secret: String, url: String) {
-    const PROBE_START_SECS: u64 = 5;
-    const PROBE_MAX_SECS: u64 = 300;
-    const PROBE_MAX_ROUNDS: u32 = 12;
+/// Bounded: bisection rounds and probe count are capped so a dead/limited key doesn't
+/// burn quota forever; only one prober per key runs at a time (`claim_probe`).
+fn spawn_prober(
+    app: Arc<App>,
+    provider_id: String,
+    key_id: String,
+    key_secret: String,
+    url: String,
+    probe_model: String,
+) {
+    /// Minimum window the search considers (seconds).
+    const PROBE_MIN_SECS: u64 = 2;
+    /// Maximum window the search considers (seconds) — 15 min covers common per-minute
+    /// and per-hour windows without probing all day.
+    const PROBE_MAX_SECS: u64 = 900;
+    /// Bisection iterations after the initial bracket is found.
+    const PROBE_BISECT_ROUNDS: u32 = 5;
+    /// Hard cap on probes per measurement (bracketing + bisection).
+    const PROBE_MAX_PROBES: u32 = 10;
+    /// Re-learn interval: recalibrate only if the last measurement is older than this.
+    const RELEARN_AFTER_SECS: u64 = 3600;
 
     if !app.claim_probe(&key_id) {
         return; // a prober is already measuring this key
     }
     tokio::spawn(async move {
-        let mut wait = PROBE_START_SECS;
-        let mut measured: Option<u64> = None;
-        for _ in 0..PROBE_MAX_ROUNDS {
-            tokio::time::sleep(Duration::from_secs(wait)).await;
+        // Skip re-learning when a fresh measurement already exists.
+        if app.learned_cooldown_age_secs(&provider_id, &key_id)
+            .map(|age| age < RELEARN_AFTER_SECS)
+            .unwrap_or(false)
+        {
+            app.release_probe(&key_id);
+            return;
+        }
 
-            // Tiny 1-token probe: minimal quota burn, still exercises the rate limiter.
-            let probe_body = serde_json::json!({
-                "model": "probe",
-                "messages": [{"role": "user", "content": "1"}],
-                "max_tokens": 1,
-            });
+        // Initial guess: previous learned value, else the global default cooldown.
+        let t = app
+            .learned_cooldown_of(&provider_id, &key_id)
+            .unwrap_or_else(|| app.default_cooldown_secs())
+            .clamp(PROBE_MIN_SECS, PROBE_MAX_SECS);
+
+        let probe_body = serde_json::json!({
+            "model": probe_model,
+            "messages": [{"role": "user", "content": "1"}],
+            "max_tokens": 1,
+        });
+        let mut probes_used = 0u32;
+
+        // One probe after waiting `secs`. Ok(true)=success, Ok(false)=still 429,
+        // Err=unlearnable (401/403/4xx/network) — abort without writing a value.
+        async fn probe(
+            app: &Arc<App>,
+            url: &str,
+            key_secret: &str,
+            body: &serde_json::Value,
+            secs: u64,
+            probes_used: &mut u32,
+        ) -> Result<bool, ()> {
+            if *probes_used >= PROBE_MAX_PROBES {
+                return Err(());
+            }
+            *probes_used += 1;
+            tokio::time::sleep(Duration::from_secs(secs)).await;
             let result = app
                 .http
-                .post(&url)
-                .bearer_auth(&key_secret)
+                .post(url)
+                .bearer_auth(key_secret)
                 .timeout(Duration::from_secs(20))
-                .json(&probe_body)
+                .json(body)
                 .send()
                 .await;
-
             match result {
-                Ok(r) if r.status().is_success() => {
-                    measured = Some(wait);
-                    break;
-                }
-                Ok(r) if r.status().as_u16() == 429 => {
-                    // Still limited: widen the interval and keep measuring.
-                    wait = (wait * 2).min(PROBE_MAX_SECS);
-                }
-                Ok(r) if r.status().as_u16() == 401 || r.status().as_u16() == 403 => {
-                    // Key is dead, not rate-limited: stop probing, learn nothing.
-                    break;
-                }
-                Ok(_) | Err(_) => {
-                    // Other errors (400 on probe model, upstream hiccup): inconclusive —
-                    // stop rather than record a wrong interval.
-                    break;
-                }
+                Ok(r) if r.status().is_success() => Ok(true),
+                Ok(r) if r.status().as_u16() == 429 => Ok(false),
+                Ok(r) if r.status().as_u16() == 401 || r.status().as_u16() == 403 => Err(()),
+                Ok(_) | Err(_) => Err(()), // unknown model / upstream hiccup: inconclusive
             }
         }
+
+        // Phase 1 — bracket the window around the initial guess T.
+        let (mut low, mut high) = match probe(&app, &url, &key_secret, &probe_body, t, &mut probes_used).await {
+            Ok(true) => (t / 2, t), // window is shorter than T
+            Ok(false) => (t, (t * 2).min(PROBE_MAX_SECS)), // longer than T
+            Err(()) => {
+                app.release_probe(&key_id);
+                return;
+            }
+        };
+
+        // Phase 2 — bisect [low, high] until the bracket is tight.
+        for _ in 0..PROBE_BISECT_ROUNDS {
+            if high - low <= 1 {
+                break;
+            }
+            let mid = (low + high) / 2;
+            match probe(&app, &url, &key_secret, &probe_body, mid, &mut probes_used).await {
+                Ok(true) => high = mid,
+                Ok(false) => low = mid,
+                Err(()) => break, // keep whatever bracket we have; still write midpoint
+            }
+        }
+
         app.release_probe(&key_id);
-        if let Some(secs) = measured {
-            app.set_learned_cooldown(&provider_id, &key_id, secs);
+        let learned = (low + high) / 2;
+        if learned >= PROBE_MIN_SECS {
+            app.set_learned_cooldown(&provider_id, &key_id, learned);
             app.clear_error(&key_id);
         }
     });
