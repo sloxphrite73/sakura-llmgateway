@@ -41,11 +41,11 @@ jobs:
         working-directory: llm-gateway
         shell: pwsh
         run: |
-          # test/gateway.json is gitignored (may hold real keys locally), so
-          # generate a self-contained placeholder config for CI only.
+          # test/ may not exist on the CI checkout (its only file is gitignored),
+          # so write the generated config to the working-dir root instead.
           $cfg = '{"api_port":8801,"ui_port":8800,"providers":[{"id":"mock","name":"mock","base_url":"http://127.0.0.1:1/v1","models":[{"id":"demo","enabled":true}],"keys":[{"id":"k1","key":"sk-placeholder","label":"ci","cooldown_secs":null}]}]}'
-          Set-Content -Path "test/gateway.json" -Value $cfg -Encoding utf8NoBOM
-          $proc = Start-Process -FilePath "target/release/llm-gateway.exe" -ArgumentList "--config","test/gateway.json" -PassThru -NoNewWindow
+          Set-Content -Path "ci-gateway.json" -Value $cfg -Encoding utf8NoBOM
+          $proc = Start-Process -FilePath "target/release/llm-gateway.exe" -ArgumentList "--config","ci-gateway.json" -PassThru -NoNewWindow
           Start-Sleep -Seconds 5
           try {
             $r = Invoke-WebRequest -Uri "http://127.0.0.1:8800/" -UseBasicParsing -TimeoutSec 10
