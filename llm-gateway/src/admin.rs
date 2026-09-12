@@ -457,7 +457,16 @@ pub async fn get_stats(State(app): State<std::sync::Arc<App>>) -> Response {
     let key_name = |id: &str| -> String {
         cfg.providers
             .iter()
-            .find_map(|p| p.keys.iter().find(|k| k.id == id).map(|k| k.label.clone()))
+            .find_map(|p| p.keys.iter().find(|k| k.id == id))
+            .map(|k| {
+                // Show the masked key so rows are never blank even when the user
+                // never set a label; the label (if any) prefixes it.
+                if k.label.is_empty() {
+                    mask(&k.key)
+                } else {
+                    format!("{} ({})", k.label, mask(&k.key))
+                }
+            })
             .unwrap_or_else(|| id.to_string())
     };
     let provider_name = |id: &str| -> String {

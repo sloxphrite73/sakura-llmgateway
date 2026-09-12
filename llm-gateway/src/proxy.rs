@@ -125,6 +125,8 @@ pub async fn chat_completions(
             Err(e) => {
                 // Timeout / connection failure: rotate to the next key. The key gets a
                 // short cooldown (not a rate-limit cooldown) so it recovers quickly.
+                // Per-key tally: this key failed and is being rotated out.
+                app.record_key_stat(false, &key.id);
                 app.mark_cooldown(&provider_id, &key.id, Some(5), &format!("network error: {e}"));
                 continue;
             }
