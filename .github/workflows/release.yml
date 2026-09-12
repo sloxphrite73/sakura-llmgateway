@@ -41,6 +41,20 @@ jobs:
         working-directory: llm-gateway
         shell: pwsh
         run: |
+          # test/gateway.json is gitignored (may hold real keys locally), so
+          # generate a self-contained placeholder config for CI only.
+          @'
+          {
+            "api_port": 8801,
+            "ui_port": 8800,
+            "providers": [{
+              "id": "mock",
+              "base_url": "http://127.0.0.1:1/v1",
+              "models": [{"id": "demo", "upstream_model": "demo", "aliases": []}],
+              "keys": [{"id": "k1", "key": "sk-placeholder", "label": "ci", "cooldown_secs": null}]
+            }]
+          }
+          '@ | Set-Content -Path "test/gateway.json" -Encoding utf8
           $proc = Start-Process -FilePath "target/release/llm-gateway.exe" -ArgumentList "--config","test/gateway.json" -PassThru -NoNewWindow
           Start-Sleep -Seconds 5
           try {
