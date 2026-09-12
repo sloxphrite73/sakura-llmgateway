@@ -49,8 +49,9 @@ jobs:
             "ui_port": 8800,
             "providers": [{
               "id": "mock",
+              "name": "mock",
               "base_url": "http://127.0.0.1:1/v1",
-              "models": [{"id": "demo", "upstream_model": "demo", "aliases": []}],
+              "models": [{"id": "demo", "enabled": true}],
               "keys": [{"id": "k1", "key": "sk-placeholder", "label": "ci", "cooldown_secs": null}]
             }]
           }
@@ -58,7 +59,7 @@ jobs:
           $proc = Start-Process -FilePath "target/release/llm-gateway.exe" -ArgumentList "--config","test/gateway.json" -PassThru -NoNewWindow
           Start-Sleep -Seconds 5
           try {
-            $r = Invoke-WebRequest -Uri "http://127.0.0.1:8801/" -UseBasicParsing -TimeoutSec 10
+            $r = Invoke-WebRequest -Uri "http://127.0.0.1:8800/" -UseBasicParsing -TimeoutSec 10
             if ($r.StatusCode -ne 200) { throw "UI check failed: HTTP $($r.StatusCode)" }
             Write-Host "Smoke test passed: UI served with HTTP 200"
           } finally {
