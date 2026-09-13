@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- sakura blossom: five petals -->
+    <group android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#E88FA2"
+            android:pathData="M54,30 C60,38 60,46 54,52 C48,46 48,38 54,30 Z" />
+        <path android:fillColor="#E88FA2"
+            android:pathData="M54,30 C60,38 60,46 54,52 C48,46 48,38 54,30 Z"
+            android:rotation="72" />
+        <path android:fillColor="#E88FA2"
+            android:pathData="M54,30 C60,38 60,46 54,52 C48,46 48,38 54,30 Z"
+            android:rotation="144" />
+        <path android:fillColor="#E88FA2"
+            android:pathData="M54,30 C60,38 60,46 54,52 C48,46 48,38 54,30 Z"
+            android:rotation="216" />
+        <path android:fillColor="#E88FA2"
+            android:pathData="M54,30 C60,38 60,46 54,52 C48,46 48,38 54,30 Z"
+            android:rotation="288" />
+        <path android:fillColor="#FFF6F2" android:pathData="M54,50 m-3,0 a3,3 0 1,1 6,0 a3,3 0 1,1 -6,0" />
+    </group>
+</vector>

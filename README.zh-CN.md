@@ -69,11 +69,17 @@
 
 ## 🚀 快速开始
 
-### 方式一：下载 Release（Windows，无需工具链）
+### 方式一：下载 Release（Windows exe / 安卓 APK，无需工具链）
 
 从 [GitHub Releases](https://github.com/sloxphrite73/sakura-llmgateway/releases)
 下载 `sakura-llmgateway-vX.Y.Z-x86_64-pc-windows-msvc.exe`，放到一个空文件夹，
 双击运行即可。Web 控制台地址：`http://127.0.0.1:8001/`。
+
+**安卓：** 在同一 Release 下载 `sakura-llmgateway-vX.Y.Z-universal.apk` 安装
+（如提示需允许"安装未知应用"）。首次启动可导入电脑上导出的 `gateway.json`，
+也可以先跳过、用空配置启动后在控制台里添加。App 以前台服务方式运行网关
+（常驻通知 + 10 秒探活看门狗），全屏显示同一个 Web 控制台；在文件管理器里对
+`gateway.json` 用"打开方式 → Sakura LLM Gateway"即可导入（网关运行中会热加载）。
 
 ### 方式二：一键脚本
 
@@ -243,8 +249,16 @@ llm-gateway/
 ├── test/
 │   └── gateway.json   mock 上游测试配置（已 gitignore，请自行创建）
 ├── install.bat / start.bat   Windows 一键脚本
-└── install.sh / start.sh     Linux / macOS / Git Bash 脚本
+├── install.sh / start.sh     Linux / macOS / Git Bash 脚本
+└── android/         安卓应用（Kotlin，WebView 控制台 + 前台服务）
 ```
+
+### 安卓端
+
+APK 是同一个 Rust 二进制的原生薄壳：CI 里交叉编译 `arm64-v8a` / `armeabi-v7a` /
+`x86_64` 三个架构，以 `jniLibs/*/libllmgateway.so` 打包，由前台服务 spawn 拉起，
+并带 10 秒 HTTP 看门狗（探活 `/api/status`，死亡或假死即重启）。UI 就是内嵌控制台
+的全屏 WebView；配置导出走系统保存对话框，`gateway.json` 导入对运行中的网关热加载。
 
 ## 🛠️ 技术栈
 

@@ -303,6 +303,31 @@
     .wrap { padding: 0 18px; }
     .masthead .api-line { margin-left: 0; width: 100%; }
   }
+  /* ---------- mobile / touch (Android WebView console) ---------- */
+  @media (max-width: 640px) {
+    body { font-size: 15px; padding-bottom: 90px; }
+    /* larger touch targets */
+    button, .btn, select, input[type="text"], input[type="number"], input[type="password"] {
+      min-height: 40px;
+      font-size: 15px;
+    }
+    button, .btn { padding: 8px 14px; }
+    /* tables overflow-scroll instead of squashing */
+    .tbl-wrap, table { display: block; }
+    .tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    table { min-width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 10px; white-space: nowrap; }
+    td.wrap, td .wrap-txt { white-space: normal; word-break: break-all; }
+    /* stat cards stack */
+    .stat-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+    /* histogram bars stay visible */
+    .hist { height: 90px; }
+    /* key strings wrap instead of overflowing */
+    code, .mono { word-break: break-all; }
+    /* tab bar sticky and tappable */
+    .tabs { position: sticky; top: 0; z-index: 10; background: var(--panel); }
+    .tabs button { min-height: 44px; }
+  }
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sakura LLM Gateway</string>
+    <string name="notif_title">Sakura LLM Gateway 运行中</string>
+    <string name="notif_text">本机网关 http://127.0.0.1:8000 · 控制台 :8001</string>
+    <string name="notif_channel">gateway</string>
+</resources>

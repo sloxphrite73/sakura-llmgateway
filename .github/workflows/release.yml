@@ -1,8 +1,8 @@
 name: Release
 
-# Build the single-file Windows binary (embedded UI via rust-embed) and attach it
-# to a GitHub Release. Trigger: push a tag like v0.1.0, or run manually from the
-# Actions tab (workflow_dispatch).
+# Build the single-file Windows binary (embedded UI via rust-embed) and the
+# universal Android APK, and attach both to a GitHub Release.
+# Trigger: push a tag like v0.1.0, or run manually from the Actions tab.
 on:
   push:
     tags:
@@ -13,7 +13,7 @@ permissions:
   contents: write # required to create the Release and upload assets
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,8 +62,121 @@ jobs:
           Copy-Item "llm-gateway/target/release/llm-gateway.exe" "sakura-llmgateway-$version-x86_64-pc-windows-msvc.exe"
           Write-Host "Artifact: sakura-llmgateway-$version-x86_64-pc-windows-msvc.exe"
 
-      - name: Create Release and upload artifact
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: sakura-llmgateway-*-x86_64-pc-windows-msvc.exe
+          if-no-files-found: error
+
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            llm-gateway/target
+          key: cargo-android-${{ hashFiles('llm-gateway/Cargo.lock') }}
+          restore-keys: cargo-android-
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Cross-compile gateway for three Android ABIs
+        working-directory: llm-gateway
+        run: |
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -p 26 -- \
+            cargo build --release --locked
+
+      - name: Place gateway binaries into jniLibs
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a \
+                   android/app/src/main/jniLibs/armeabi-v7a \
+                   android/app/src/main/jniLibs/x86_64
+          cp llm-gateway/target/aarch64-linux-android/release/llm-gateway android/app/src/main/jniLibs/arm64-v8a/libllmgateway.so
+          cp llm-gateway/target/armv7-linux-androideabi/release/llm-gateway android/app/src/main/jniLibs/armeabi-v7a/libllmgateway.so
+          cp llm-gateway/target/x86_64-linux-android/release/llm-gateway android/app/src/main/jniLibs/x86_64/libllmgateway.so
+          chmod +x android/app/src/main/jniLibs/*/libllmgateway.so
+          ls -la android/app/src/main/jniLibs/*/
+
+      - name: Decode signing keystore
+        if: env.ANDROID_KEYSTORE_B64 != ''
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          echo "$ANDROID_KEYSTORE_B64" | base64 -d > android/app/keystore.jks
+          echo "keystore decoded: $(wc -c < android/app/keystore.jks) bytes"
+
+      - name: Build signed universal APK
+        working-directory: android
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION_NAME="${TAG#v}"
+          VERSION_CODE=$(git rev-list --count HEAD)
+          if [ -f app/keystore.jks ]; then
+            echo "Building signed release APK"
+            ./gradlew assembleRelease \
+              -PversionName="$VERSION_NAME" \
+              -PversionCode="$VERSION_CODE" \
+              -Pandroid.keystore.path=keystore.jks \
+              -Pandroid.keystore.password="${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+              -Pandroid.keystore.alias="${{ secrets.ANDROID_KEY_ALIAS }}" \
+              -Pandroid.keystore.keypassword="${{ secrets.ANDROID_KEY_PASSWORD }}"
+          else
+            echo "WARNING: no keystore secret set - building UNSIGNED APK"
+            ./gradlew assembleRelease \
+              -PversionName="$VERSION_NAME" \
+              -PversionCode="$VERSION_CODE"
+          fi
+
+      - name: Rename artifact
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk \
+             "sakura-llmgateway-${TAG}-universal.apk"
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: sakura-llmgateway-*-universal.apk
+          if-no-files-found: error
+
+  release:
+    needs: [build-windows, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - name: Create Release and upload artifacts
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: sakura-llmgateway-*-x86_64-pc-windows-msvc.exe
+          files: |
+            dist/sakura-llmgateway-*-x86_64-pc-windows-msvc.exe
+            dist/sakura-llmgateway-*-universal.apk

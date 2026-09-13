@@ -75,12 +75,20 @@
 
 ## 🚀 Quick start
 
-### Option 1: Download a release (Windows, no toolchain)
+### Option 1: Download a release (Windows exe / Android APK, no toolchain)
 
 Grab `sakura-llmgateway-vX.Y.Z-x86_64-pc-windows-msvc.exe` from
 [GitHub Releases](https://github.com/sloxphrite73/sakura-llmgateway/releases),
 put it in an empty folder, and double-click it. The web console opens at
 `http://127.0.0.1:8001/`.
+
+**Android:** grab `sakura-llmgateway-vX.Y.Z-universal.apk` from the same release and
+install it (allow "install unknown apps" if asked). First launch offers to import a
+`gateway.json` exported from your desktop, or you can skip and start with an empty
+config and add keys in the console. The app runs the gateway as a foreground service
+(notification + 10s health watchdog) and shows the same web console full-screen;
+`gateway.json` from a file manager can be imported via "Open with → Sakura LLM Gateway"
+(hot-reloads if the gateway is running).
 
 ### Option 2: One-click scripts
 
@@ -253,8 +261,18 @@ llm-gateway/
 ├── test/
 │   └── gateway.json   mock-upstream test config (gitignored; create your own)
 ├── install.bat / start.bat   Windows one-click scripts
-└── install.sh / start.sh     Linux / macOS / Git Bash scripts
+├── install.sh / start.sh     Linux / macOS / Git Bash scripts
+└── android/         Android app (Kotlin, WebView console + foreground service)
 ```
+
+### Android app
+
+The APK is a thin native shell around the same Rust binary:
+the gateway is cross-compiled for `arm64-v8a` / `armeabi-v7a` / `x86_64` in CI,
+packaged as `jniLibs/*/libllmgateway.so`, and spawned by a foreground service with
+a 10-second HTTP watchdog (probes `/api/status`; restarts on death or hang).
+The UI is the embedded console in a fullscreen WebView; config export goes through
+the system save dialog, and `gateway.json` imports hot-reload a running gateway.
 
 ## 🛠️ Tech stack
 
