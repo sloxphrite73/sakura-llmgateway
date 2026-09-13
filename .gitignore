@@ -19,6 +19,12 @@ llm-gateway/test/stats.json
 # runtime stats file (may be created next to any config)
 stats.json
 
+# Signing keystore + credentials — never commit
+*.jks
+*.keystore
+sakura-keystore-pass.txt
+sakura-keystore-b64.txt
+
 # OS / editor
 .DS_Store
 Thumbs.db
