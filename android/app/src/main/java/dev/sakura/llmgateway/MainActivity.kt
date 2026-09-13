@@ -41,7 +41,7 @@ import java.net.URL
  * Also handles ACTION_VIEW for gateway.json from file managers ("open with"):
  * the file is copied into filesDir and hot-reloaded via /api/config/import.
  */
-class MainActivity : Activity() {
+class MainActivity : androidx.activity.ComponentActivity() {
 
     companion object {
         const val UI_URL = "http://127.0.0.1:8001"

@@ -95,6 +95,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
@@ -140,7 +145,7 @@ jobs:
           VERSION_CODE=$(git rev-list --count HEAD)
           if [ -f app/keystore.jks ]; then
             echo "Building signed release APK"
-            ./gradlew assembleRelease \
+            gradle assembleRelease \
               -PversionName="$VERSION_NAME" \
               -PversionCode="$VERSION_CODE" \
               -Pandroid.keystore.path=keystore.jks \
@@ -149,7 +154,7 @@ jobs:
               -Pandroid.keystore.keypassword="${{ secrets.ANDROID_KEY_PASSWORD }}"
           else
             echo "WARNING: no keystore secret set - building UNSIGNED APK"
-            ./gradlew assembleRelease \
+            gradle assembleRelease \
               -PversionName="$VERSION_NAME" \
               -PversionCode="$VERSION_CODE"
           fi
