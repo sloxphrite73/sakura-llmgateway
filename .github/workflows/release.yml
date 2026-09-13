@@ -108,8 +108,9 @@ jobs:
         working-directory: llm-gateway
         run: |
           echo "NDK home: $ANDROID_NDK_LATEST_HOME"
-          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -p 26 -- \
-            cargo build --release --locked
+          # NOTE: -P (capital) = platform/API level in cargo-ndk 4.x; -p means --package.
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -P 26 \
+            --manifest-path Cargo.toml -- build --release --locked
 
       - name: Place gateway binaries into jniLibs
         run: |
