@@ -4,22 +4,37 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- sakura blossom: five petals -->
-    <group android:pivotX="54" android:pivotY="54">
-        <path android:fillColor="#E88FA2"
-            android:pathData="M54,30 C60,38 60,46 54,52 C48,46 48,38 54,30 Z" />
-        <path android:fillColor="#E88FA2"
-            android:pathData="M54,30 C60,38 60,46 54,52 C48,46 48,38 54,30 Z"
-            android:rotation="72" />
-        <path android:fillColor="#E88FA2"
-            android:pathData="M54,30 C60,38 60,46 54,52 C48,46 48,38 54,30 Z"
-            android:rotation="144" />
-        <path android:fillColor="#E88FA2"
-            android:pathData="M54,30 C60,38 60,46 54,52 C48,46 48,38 54,30 Z"
-            android:rotation="216" />
-        <path android:fillColor="#E88FA2"
-            android:pathData="M54,30 C60,38 60,46 54,52 C48,46 48,38 54,30 Z"
-            android:rotation="288" />
-        <path android:fillColor="#FFF6F2" android:pathData="M54,50 m-3,0 a3,3 0 1,1 6,0 a3,3 0 1,1 -6,0" />
+    <!-- Sakura blossom matching the onboarding screen's 🌸 emoji:
+         five rounded, notched petals in deep pink on a white
+         background. Center at (54,56), petal tip r=34. -->
+    <group android:pivotX="54" android:pivotY="56">
+        <!-- one petal: rounded heart shape with outer notch, pointing up -->
+        <path
+            android:fillColor="#F08CA8"
+            android:pathData="M54,22 C63,22 70,30 70,39 C70,46 65,52 58,54 L54,58 L50,54 C43,52 38,46 38,39 C38,30 45,22 54,22 Z" />
+        <group android:rotation="72" android:pivotX="54" android:pivotY="56">
+            <path
+                android:fillColor="#F08CA8"
+                android:pathData="M54,22 C63,22 70,30 70,39 C70,46 65,52 58,54 L54,58 L50,54 C43,52 38,46 38,39 C38,30 45,22 54,22 Z" />
+        </group>
+        <group android:rotation="144" android:pivotX="54" android:pivotY="56">
+            <path
+                android:fillColor="#F08CA8"
+                android:pathData="M54,22 C63,22 70,30 70,39 C70,46 65,52 58,54 L54,58 L50,54 C43,52 38,46 38,39 C38,30 45,22 54,22 Z" />
+        </group>
+        <group android:rotation="216" android:pivotX="54" android:pivotY="56">
+            <path
+                android:fillColor="#F08CA8"
+                android:pathData="M54,22 C63,22 70,30 70,39 C70,46 65,52 58,54 L54,58 L50,54 C43,52 38,46 38,39 C38,30 45,22 54,22 Z" />
+        </group>
+        <group android:rotation="288" android:pivotX="54" android:pivotY="56">
+            <path
+                android:fillColor="#F08CA8"
+                android:pathData="M54,22 C63,22 70,30 70,39 C70,46 65,52 58,54 L54,58 L50,54 C43,52 38,46 38,39 C38,30 45,22 54,22 Z" />
+        </group>
+        <!-- stamen center -->
+        <path
+            android:fillColor="#FFE3A6"
+            android:pathData="M54,56 m-4.5,0 a4.5,4.5 0 1,1 9,0 a4.5,4.5 0 1,1 -9,0" />
     </group>
 </vector>
