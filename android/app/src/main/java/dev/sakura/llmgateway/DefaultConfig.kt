@@ -6,8 +6,10 @@ import java.io.File
 /**
  * Minimal valid gateway.json for the "skip onboarding" path.
  * Matches the Rust config schema (llm-gateway/src/config.rs):
- * `providers` is a non-empty array with one placeholder provider and no keys,
- * so the gateway starts, the console works, and real keys get added in the UI.
+ * `providers` is EMPTY — no placeholder provider, so the console starts clean
+ * and users add their own providers/keys in the UI. An empty provider list is a
+ * first-class runtime state (it's exactly what `Config::default()` produces when
+ * the gateway's config file is missing).
  */
 object DefaultConfig {
     const val JSON = """{
@@ -16,17 +18,7 @@ object DefaultConfig {
   "default_cooldown_secs": 60,
   "max_attempts": 3,
   "auth": { "enabled": false, "keys": [] },
-  "providers": [
-    {
-      "id": "sensenova",
-      "name": "sensenova",
-      "base_url": "https://token.sensenova.cn/v1",
-      "keys": [],
-      "models": [],
-      "model_allowlist_only": false,
-      "aliases": {}
-    }
-  ]
+  "providers": []
 }"""
 
     fun writeIfMissing(ctx: Context) {
