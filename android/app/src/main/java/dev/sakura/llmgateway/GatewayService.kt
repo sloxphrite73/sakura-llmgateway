@@ -76,7 +76,18 @@ class GatewayService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        // Idempotent start: the activity calls start() from several places (onboarding
+        // skip, Console's DisposableEffect, open-with import) and Android may redeliver
+        // the intent. Each start() previously spawned ANOTHER gateway process — the
+        // duplicates panicked with AddrInUse (the first process still holds the ports),
+        // the watchdog then babysat the dead duplicate while the healthy original was
+        // orphaned, and eventually nothing listened on :8001 (ERR_CONNECTION_REFUSED).
+        if (process?.isAlive == true) {
+            state.set("running")
+            return START_STICKY
+        }
         state.set("starting")
+        killProcess() // clear any stale/dead handle before spawning a fresh process
         spawnGateway()
         startWatchdog()
         isRunning = true
@@ -108,7 +119,8 @@ class GatewayService : Service() {
                     lines.forEach { android.util.Log.i("gateway", it) }
                 }
             }.start()
-            state.set("running")
+            // Stay in "starting" until the watchdog's first health check succeeds —
+            // the process can still die right after spawn (e.g. port already in use).
         } catch (e: Exception) {
             android.util.Log.e("GatewayService", "spawn failed", e)
             state.set("stopped")
@@ -125,7 +137,9 @@ class GatewayService : Service() {
                     return@Thread
                 }
                 val alive = process?.isAlive == true && healthy()
-                if (!alive) {
+                if (alive) {
+                    state.set("running")
+                } else {
                     android.util.Log.w("GatewayService", "watchdog: gateway unhealthy, restarting")
                     killProcess()
                     state.set("starting")

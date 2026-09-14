@@ -103,10 +103,34 @@ async fn main() {
     });
     // Flush stats on shutdown is best-effort: the 5s loop bounds the loss.
 
-    let api_listener = tokio::net::TcpListener::bind(("127.0.0.1", app.read_config().api_port))
+    // Bind with a short retry window: a stale twin process (e.g. the Android app's
+    // service racing a restart) may still hold the ports for a few seconds. Panicking
+    // here turned every transient clash into a dead gateway (ERR_CONNECTION_REFUSED).
+    let bind_retry = |port: u16| {
+        let app = app.clone();
+        async move {
+            let mut delay = std::time::Duration::from_millis(500);
+            for _ in 0..10 {
+                match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+                    Ok(l) => return Ok(l),
+                    Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                        tokio::time::sleep(delay).await;
+                        delay = (delay * 2).min(std::time::Duration::from_secs(2));
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            let _ = app; // keep closure self-contained
+            Err(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                format!("port {port} still in use after ~10s of retries"),
+            ))
+        }
+    };
+    let api_listener = bind_retry(app.read_config().api_port)
         .await
         .expect("failed to bind api port");
-    let ui_listener = tokio::net::TcpListener::bind(("127.0.0.1", app.read_config().ui_port))
+    let ui_listener = bind_retry(app.read_config().ui_port)
         .await
         .expect("failed to bind ui port");
 

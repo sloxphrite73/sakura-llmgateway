@@ -29,6 +29,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -250,6 +251,35 @@ class MainActivity : androidx.activity.ComponentActivity() {
             GatewayService.start(ctx)
             onDispose { /* keep service running when activity recreated */ }
         }
+        // Track gateway health so we can show a retry screen instead of WebView's
+        // dead "ERR_CONNECTION_REFUSED" page while the process is still booting.
+        var gatewayUp by remember { mutableStateOf(GatewayService.currentState() == "running") }
+        LaunchedEffect(Unit) {
+            while (true) {
+                gatewayUp = isGatewayUp()
+                if (gatewayUp) break
+                kotlinx.coroutines.delay(500)
+            }
+        }
+        if (!gatewayUp) {
+            Column(
+                Modifier.fillMaxSize().padding(32.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                CircularProgressIndicator()
+                Spacer(Modifier.height(16.dp))
+                Text("网关启动中…", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "正在等待 127.0.0.1:8001 就绪（通常不到一秒）。\n若长时间停留在此页面，请下拉通知栏用「停止」后重开 app。",
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            return
+        }
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
@@ -320,6 +350,20 @@ class MainActivity : androidx.activity.ComponentActivity() {
                 if (view.url != UI_URL) view.loadUrl(UI_URL)
             }
         )
+    }
+
+    /** GET /api/status with a short timeout — used to gate the WebView on gateway readiness. */
+    private fun isGatewayUp(): Boolean {
+        return try {
+            val conn = URL("http://127.0.0.1:8001/api/status").openConnection() as HttpURLConnection
+            conn.connectTimeout = 1500
+            conn.readTimeout = 1500
+            val ok = conn.responseCode == 200
+            conn.disconnect()
+            ok
+        } catch (_: Exception) {
+            false
+        }
     }
 
     override fun onBackPressed() {
