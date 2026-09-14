@@ -1,6 +1,7 @@
 package dev.sakura.llmgateway
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.Intent
 import android.net.Uri
@@ -9,6 +10,9 @@ import android.provider.OpenableColumns
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
+import android.webkit.JsResult
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -60,6 +64,17 @@ class MainActivity : androidx.activity.ComponentActivity() {
     private val exportDoc =
         registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri: Uri? ->
             if (uri != null) saveExport(uri)
+        }
+
+    // WebView <input type=file> support (WebChromeClient.onShowFileChooser -> SAF picker).
+    // Without this, the console's 导入配置 button does nothing on Android.
+    private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
+
+    private val fileChooser =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+            val cb = fileChooserCallback
+            fileChooserCallback = null
+            cb?.onReceiveValue(uri?.let { arrayOf(it) })
         }
 
     // ---- lifecycle -----------------------------------------------------------
@@ -241,6 +256,39 @@ class MainActivity : androidx.activity.ComponentActivity() {
                 WebView(context).apply {
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
+                    webChromeClient = object : WebChromeClient() {
+                        // file input (导入配置 in the console)
+                        override fun onShowFileChooser(
+                            webView: WebView,
+                            callback: ValueCallback<Array<Uri>>,
+                            params: FileChooserParams
+                        ): Boolean {
+                            fileChooserCallback?.onReceiveValue(null) // cancel any pending one
+                            fileChooserCallback = callback
+                            fileChooser.launch(arrayOf("application/json", "application/octet-stream", "*/*"))
+                            return true
+                        }
+
+                        // JS alert()/confirm() used by the console (import confirmation, toasts)
+                        override fun onJsAlert(view: WebView, url: String, message: String, result: JsResult): Boolean {
+                            AlertDialog.Builder(context)
+                                .setMessage(message)
+                                .setPositiveButton("确定") { _, _ -> result.confirm() }
+                                .setOnCancelListener { result.cancel() }
+                                .show()
+                            return true
+                        }
+
+                        override fun onJsConfirm(view: WebView, url: String, message: String, result: JsResult): Boolean {
+                            AlertDialog.Builder(context)
+                                .setMessage(message)
+                                .setPositiveButton("确定") { _, _ -> result.confirm() }
+                                .setNegativeButton("取消") { _, _ -> result.cancel() }
+                                .setOnCancelListener { result.cancel() }
+                                .show()
+                            return true
+                        }
+                    }
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                             // external links open in the browser
@@ -266,7 +314,11 @@ class MainActivity : androidx.activity.ComponentActivity() {
                     loadUrl(UI_URL)
                 }
             },
-            update = { it.loadUrl(UI_URL) }
+            update = { view ->
+                // Only (re)load when not already on the console URL — reloading on every
+                // recomposition would wipe the user's console state mid-interaction.
+                if (view.url != UI_URL) view.loadUrl(UI_URL)
+            }
         )
     }
 
