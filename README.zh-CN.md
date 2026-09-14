@@ -10,6 +10,10 @@
 - 🔌 **OpenAI 兼容 API** - 任何 agent / 工具直接接入 `http://127.0.0.1:8000/v1`
   - `POST /v1/chat/completions`（流式 SSE 与非流式）
   - `GET /v1/models`（聚合所有提供商的托管模型 + 别名）
+- 🌸 **Anthropic Messages 协议** - 同时暴露 `POST /v1/messages`（Claude Code、
+  Anthropic SDK 可直接接入）；每个提供商可选 `openai` 或 `anthropic` 协议，
+  网关自动做双向翻译——任意入站协议 × 任意上游协议均可组合（OpenAI 客户端
+  也能用真 Claude API 的 Key 池）；支持 tools / 图片 / 流式事件互转 / count_tokens
 - 🔑 **API-Key 池** - 多把 Key 轮询调度；某把 Key 收到 `429` 立即冷却并切到下一把，
   请求不中断
 - ⏱️ **智能冷却** - 冷却时长解析顺序：上游 `Retry-After` 响应头 →
@@ -206,11 +210,13 @@ client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="anything")
 
 ## 📡 API 概览
 
-### 网关 API（OpenAI 兼容）
+### 网关 API（OpenAI + Anthropic 兼容）
 
 | 接口 | 方法 | 说明 |
 |------|------|------|
 | `/v1/chat/completions` | POST | Chat Completions（流式 + 非流式） |
+| `/v1/messages` | POST | Anthropic Messages（流式 + 非流式，tools / 图片） |
+| `/v1/messages/count_tokens` | POST | Token 计数（Anthropic 上游透传，OpenAI 上游本地估算） |
 | `/v1/models` | GET | 聚合模型列表 |
 
 ### 控制台 API

@@ -1,5 +1,6 @@
 mod admin;
 mod config;
+mod protocol;
 mod proxy;
 mod state;
 mod stats;
@@ -36,6 +37,7 @@ async fn main() {
     println!("[gateway] config file: {}", config_path.display());
     println!("[gateway] web ui:     http://127.0.0.1:{}/", cfg.ui_port);
     println!("[gateway] openai api: http://127.0.0.1:{}/v1", cfg.api_port);
+    println!("[gateway] anthropic api: http://127.0.0.1:{}/v1/messages", cfg.api_port);
     if cfg.auth.enabled {
         println!("[gateway] auth:       ENABLED ({} keys)", cfg.auth.keys.len());
     } else {
@@ -47,6 +49,8 @@ async fn main() {
     // Local OpenAI-compatible API
     let api = Router::new()
         .route("/v1/chat/completions", post(proxy::chat_completions))
+        .route("/v1/messages", post(proxy::anthropic_messages))
+        .route("/v1/messages/count_tokens", post(proxy::anthropic_count_tokens))
         .route("/v1/models", get(proxy::list_models))
         .with_state(app.clone());
 

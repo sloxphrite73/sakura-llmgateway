@@ -9,6 +9,11 @@
 - 🔌 **OpenAI-compatible API** - point any agent/tool at `http://127.0.0.1:8000/v1`
   - `POST /v1/chat/completions` (streaming SSE and non-streaming)
   - `GET /v1/models` (aggregated from all providers + aliases)
+- 🌸 **Anthropic Messages protocol** - also exposes `POST /v1/messages` (Claude Code
+  and Anthropic SDKs connect directly); each provider can be set to `openai` or
+  `anthropic` protocol and the gateway translates bidirectionally — any inbound
+  protocol × any upstream protocol works (OpenAI clients can use a real Claude API
+  key pool too); tools / images / streaming events / count_tokens all supported
 - 🔑 **API-Key Pool** - round-robin across keys; a key that receives `429` is put into
   cooldown and traffic rotates to the next key immediately
 - ⏱️ **Smart cooldown** - resolution order: upstream `Retry-After` header →
@@ -221,11 +226,13 @@ Notes:
 
 ## 📡 API overview
 
-### Gateway API (OpenAI-compatible)
+### Gateway API (OpenAI + Anthropic compatible)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/v1/chat/completions` | POST | Chat completions (streaming + non-streaming) |
+| `/v1/messages` | POST | Anthropic Messages (streaming + non-streaming, tools / images) |
+| `/v1/messages/count_tokens` | POST | Token counting (proxied for Anthropic upstreams, local estimate for OpenAI ones) |
 | `/v1/models` | GET | Aggregated model list |
 
 ### Console API

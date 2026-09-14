@@ -1,3 +1,6 @@
+use crate::protocol::{
+    self, AnthropicToOpenAiStream, OpenAiToAnthropicStream, Protocol,
+};
 use crate::state::{now_ms, App};
 use axum::body::Body;
 use axum::extract::State;
@@ -31,55 +34,300 @@ fn error_response(status: StatusCode, message: String) -> Response {
     (status, axum::Json(body)).into_response()
 }
 
+/// Error response rendered in the *client's* protocol (Anthropic clients expect
+/// `{"type":"error","error":{...}}` shapes).
+fn error_response_for(status: StatusCode, message: String, inbound: Protocol) -> Response {
+    match inbound {
+        Protocol::OpenAi => error_response(status, message),
+        Protocol::Anthropic => {
+            let body = serde_json::json!({
+                "type": "error",
+                "error": { "type": "gateway_error", "message": message }
+            });
+            (status, axum::Json(body)).into_response()
+        }
+    }
+}
+
+/// Gateway-level auth. Accepts the token from `Authorization: Bearer <t>` or —
+/// for Anthropic clients (Claude Code etc.) — from `x-api-key: <t>`.
+fn extract_auth_token(headers: &HeaderMap) -> String {
+    if let Some(v) = headers.get(axum::http::header::AUTHORIZATION) {
+        if let Ok(s) = v.to_str() {
+            if let Some(t) = s.strip_prefix("Bearer ") {
+                return t.to_string();
+            }
+        }
+    }
+    headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string()
+}
+
 fn check_auth(app: &App, headers: &HeaderMap) -> Result<(), Response> {
     let cfg = app.read_config();
     if !cfg.auth.enabled {
         return Ok(());
     }
-    let token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("");
-    if !token.is_empty() && cfg.auth.keys.iter().any(|k| k == token) {
+    let token = extract_auth_token(headers);
+    if !token.is_empty() && cfg.auth.keys.iter().any(|k| k == &token) {
         return Ok(());
     }
     Err(error_response(StatusCode::UNAUTHORIZED, "invalid or missing gateway API key".into()))
 }
 
+// ---------------------------------------------------------------------------
+// Shared upstream-call plumbing
+// ---------------------------------------------------------------------------
+
+/// Upstream URL for a chat-completion-style call, following each protocol's
+/// base_url convention: OpenAI upstreams take `{base}/chat/completions`
+/// (base usually ends in `/v1`); Anthropic upstreams take `{base}/messages`
+/// (base may be the API root *or* already include `/v1`).
+fn upstream_chat_url(base: &str, protocol: Protocol) -> String {
+    let base = base.trim_end_matches('/');
+    match protocol {
+        Protocol::OpenAi => format!("{base}/chat/completions"),
+        Protocol::Anthropic => {
+            if base.ends_with("/v1") {
+                format!("{base}/messages")
+            } else {
+                format!("{base}/v1/messages")
+            }
+        }
+    }
+}
+
+/// Apply the upstream's auth headers to a request builder.
+fn apply_upstream_auth(
+    builder: reqwest::RequestBuilder,
+    key: &str,
+    protocol: Protocol,
+) -> reqwest::RequestBuilder {
+    match protocol {
+        Protocol::OpenAi => builder.bearer_auth(key),
+        Protocol::Anthropic => builder
+            .header("x-api-key", key)
+            .header("anthropic-version", "2023-06-01"),
+    }
+}
+
+/// Build the probe body for the cooldown prober in the provider's protocol.
+fn probe_body_for(protocol: Protocol, model: &str) -> serde_json::Value {
+    match protocol {
+        Protocol::OpenAi => serde_json::json!({
+            "model": model, "messages": [{"role": "user", "content": "1"}], "max_tokens": 1,
+        }),
+        Protocol::Anthropic => serde_json::json!({
+            "model": model, "messages": [{"role": "user", "content": [{"type": "text", "text": "1"}]}],
+            "max_tokens": 1,
+        }),
+    }
+}
+
+/// One upstream chat call with the given key. Returns the raw reqwest response.
+async fn call_upstream(
+    app: &App,
+    provider: &crate::config::Provider,
+    key_secret: &str,
+    url: &str,
+    payload: &serde_json::Value,
+) -> Result<reqwest::Response, reqwest::Error> {
+    let builder = apply_upstream_auth(
+        app.http.post(url).timeout(Duration::from_secs(600)),
+        key_secret,
+        provider.protocol(),
+    );
+    builder.json(payload).send().await
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1/chat/completions
+// ---------------------------------------------------------------------------
+
 /// POST /v1/chat/completions
 pub async fn chat_completions(
     State(app): State<Arc<App>>,
     headers: HeaderMap,
-    axum::Json(mut body): axum::Json<serde_json::Value>,
+    axum::Json(body): axum::Json<serde_json::Value>,
 ) -> Response {
     if let Err(resp) = check_auth(&app, &headers) {
         return resp;
     }
+    forward(
+        app,
+        body,
+        Protocol::OpenAi,
+        |app, payload, provider_id, client_model, is_stream| {
+            finish_openai(app, payload, provider_id, client_model, is_stream)
+        },
+    )
+    .await
+}
 
+// ---------------------------------------------------------------------------
+// POST /v1/messages (+ count_tokens)
+// ---------------------------------------------------------------------------
+
+/// POST /v1/messages — Anthropic Messages inbound.
+pub async fn anthropic_messages(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Response {
+    if let Err(resp) = check_auth(&app, &headers) {
+        return resp;
+    }
+    forward(
+        app,
+        body,
+        Protocol::Anthropic,
+        |app, payload, provider_id, client_model, is_stream| {
+            finish_anthropic(app, payload, provider_id, client_model, is_stream)
+        },
+    )
+    .await
+}
+
+/// POST /v1/messages/count_tokens — proxy to the upstream when it speaks
+/// Anthropic; local estimate otherwise (never 404: Claude Code depends on this).
+pub async fn anthropic_count_tokens(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Response {
+    if let Err(resp) = check_auth(&app, &headers) {
+        return resp;
+    }
     let client_model = body.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
+    let cfg = app.read_config();
+    let (provider_id, upstream_model) = match cfg.resolve_model(&client_model) {
+        Ok(r) => r,
+        Err(reason) => {
+            return error_response_for(StatusCode::NOT_FOUND, reason, Protocol::Anthropic)
+        }
+    };
+    let provider = match cfg.provider_by_id(&provider_id) {
+        Some(p) => p.clone(),
+        None => {
+            return error_response_for(
+                StatusCode::NOT_FOUND,
+                "provider disappeared".into(),
+                Protocol::Anthropic,
+            )
+        }
+    };
+
+    let mut req = body.clone();
+    req["model"] = serde_json::Value::String(upstream_model);
+
+    match provider.protocol() {
+        Protocol::Anthropic => {
+            let key = provider.keys.first().map(|k| k.key.clone()).unwrap_or_default();
+            let base = provider.base_url.trim_end_matches('/');
+            let url = if base.ends_with("/v1") {
+                format!("{base}/messages/count_tokens")
+            } else {
+                format!("{base}/v1/messages/count_tokens")
+            };
+            let builder = apply_upstream_auth(
+                app.http.post(&url).timeout(Duration::from_secs(30)),
+                &key,
+                Protocol::Anthropic,
+            );
+            match builder.json(&req).send().await {
+                Ok(resp) => {
+                    let status = StatusCode::from_u16(resp.status().as_u16())
+                        .unwrap_or(StatusCode::BAD_GATEWAY);
+                    let bytes = resp.bytes().await.unwrap_or_default();
+                    (status, bytes).into_response()
+                }
+                Err(e) => error_response_for(
+                    StatusCode::BAD_GATEWAY,
+                    format!("upstream count_tokens failed: {e}"),
+                    Protocol::Anthropic,
+                ),
+            }
+        }
+        Protocol::OpenAi => {
+            let est = protocol::estimate_tokens_anthropic_request(&req);
+            (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({ "input_tokens": est })),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Core forwarder: protocol-agnostic key-pool loop
+// ---------------------------------------------------------------------------
+
+/// Translate + dispatch + retry-loop shared by both inbound endpoints.
+/// `finish` renders the final success response in the client's protocol.
+async fn forward<F, Fut>(
+    app: Arc<App>,
+    inbound_body: serde_json::Value,
+    inbound: Protocol,
+    finish: F,
+) -> Response
+where
+    F: FnOnce(Arc<App>, reqwest::Response, String, String, bool) -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
+    let client_model = inbound_body
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .to_string();
     let (provider_id, upstream_model) = match app.read_config().resolve_model(&client_model) {
         Ok(r) => r,
         Err(reason) => {
             // Unresolvable model = no key touched it; still count it as a failed request.
             app.record_stat(false, None, "unknown", &client_model);
-            return error_response(StatusCode::NOT_FOUND, reason);
+            return error_response_for(StatusCode::NOT_FOUND, reason, inbound);
         }
     };
-    body["model"] = serde_json::Value::String(upstream_model);
 
     let cfg = app.read_config();
     let provider = match cfg.provider_by_id(&provider_id) {
         Some(p) => p.clone(),
-        None => return error_response(StatusCode::NOT_FOUND, "provider disappeared".into()),
+        None => return error_response_for(StatusCode::NOT_FOUND, "provider disappeared".into(), inbound),
     };
     if provider.keys.is_empty() {
         app.record_stat(false, None, &provider_id, &client_model);
-        return error_response(
+        return error_response_for(
             StatusCode::SERVICE_UNAVAILABLE,
             format!("provider `{}` has no API keys configured", provider.name),
+            inbound,
         );
     }
+
+    // Payload in the *upstream's* protocol, regardless of what the client spoke.
+    let upstream_payload = match (inbound, provider.protocol()) {
+        (Protocol::OpenAi, Protocol::OpenAi) | (Protocol::Anthropic, Protocol::Anthropic) => {
+            let mut b = inbound_body.clone();
+            b["model"] = serde_json::Value::String(upstream_model.clone());
+            b
+        }
+        (Protocol::Anthropic, Protocol::OpenAi) => {
+            let mut b = protocol::anthropic_to_openai_request(&inbound_body);
+            b["model"] = serde_json::Value::String(upstream_model.clone());
+            b
+        }
+        (Protocol::OpenAi, Protocol::Anthropic) => {
+            let mut b = protocol::openai_to_anthropic_request(&inbound_body);
+            b["model"] = serde_json::Value::String(upstream_model.clone());
+            b
+        }
+    };
+    let is_stream = upstream_payload
+        .get("stream")
+        .and_then(|s| s.as_bool())
+        .unwrap_or(false);
 
     // Retry budget: every key that fails is marked cooling, so pick_key() never hands out
     // the same key again until its cooldown expires. The budget is therefore bounded by
@@ -88,7 +336,8 @@ pub async fn chat_completions(
     let max_attempts = (cfg.max_attempts.clamp(1, 10) as usize)
         .saturating_mul(provider.keys.len())
         .max(1);
-    let url = format!("{}/chat/completions", provider.base_url.trim_end_matches('/'));
+    let url = upstream_chat_url(&provider.base_url, provider.protocol());
+    let upstream_proto = provider.protocol();
 
     for _attempt in 1..=max_attempts {
         let key = match app.pick_key(&provider) {
@@ -97,7 +346,7 @@ pub async fn chat_completions(
                 // All keys cooling down -> fail fast with 429 (per spec).
                 app.record_stat(false, None, &provider_id, &client_model);
                 let cooling: Vec<String> = provider.keys.iter().map(|k| k.label.clone()).collect();
-                return error_response(
+                return error_response_for(
                     StatusCode::TOO_MANY_REQUESTS,
                     format!(
                         "all {} key(s) for provider `{}` are rate-limited (cooling down). Keys: {}",
@@ -105,20 +354,12 @@ pub async fn chat_completions(
                         provider.name,
                         cooling.join(", ")
                     ),
+                    inbound,
                 );
             }
         };
 
-        let payload = body.clone();
-        let resp = app
-            .http
-            .post(&url)
-            .bearer_auth(&key.key)
-            // long enough for streams; connect timeout is set on the client
-            .timeout(Duration::from_secs(600))
-            .json(&payload)
-            .send()
-            .await;
+        let resp = call_upstream(&app, &provider, &key.key, &url, &upstream_payload).await;
 
         let resp = match resp {
             Ok(r) => r,
@@ -136,15 +377,7 @@ pub async fn chat_completions(
         let status = resp.status();
         if status.is_success() {
             app.clear_error(&key.id);
-            return finish_ok(
-                &app,
-                resp,
-                &provider_id,
-                &key.id,
-                &client_model,
-                body.get("stream").and_then(|s| s.as_bool()).unwrap_or(false),
-            )
-            .await;
+            return finish(app, resp, provider_id, key.id, is_stream).await;
         }
 
         // Error before first byte. Rotate to the next key for key-scoped failures
@@ -184,7 +417,8 @@ pub async fn chat_completions(
                     key.id.clone(),
                     key.key.clone(),
                     url.clone(),
-                    probe_model,
+                    probe_body_for(upstream_proto, &probe_model),
+                    upstream_proto,
                 );
                 tokio::time::sleep(Duration::from_millis(1500)).await;
             } else if code == 401 || code == 403 {
@@ -203,38 +437,78 @@ pub async fn chat_completions(
 
         // Request-scoped client error: same result on every key — don't burn the pool.
         app.record_stat(false, Some(&key.id), &provider_id, &client_model);
-        return error_response(
+        return error_response_for(
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            format!("upstream error: {}", snippet),
+            format!("upstream error: {snippet}"),
+            inbound,
         );
     }
 
     // Only reachable if a short cooldown expires mid-loop and keys keep failing until the
     // budget runs out. Never panic on the request path — fail fast with 429 instead.
     app.record_stat(false, None, &provider_id, &client_model);
-    error_response(
+    error_response_for(
         StatusCode::TOO_MANY_REQUESTS,
         format!("retry budget exhausted for provider `{}` (all keys failing)", provider.name),
+        inbound,
     )
 }
 
-/// Wrap a successful upstream response: stats counting and interruption handling happen
-/// around the body, since "did the client receive bytes" is only known while streaming.
-fn finish_ok(
-    app: &Arc<App>,
+// ---------------------------------------------------------------------------
+// Success rendering — OpenAI client
+// ---------------------------------------------------------------------------
+
+fn finish_openai(
+    app: Arc<App>,
     resp: reqwest::Response,
-    provider_id: &str,
-    key_id: &str,
-    client_model: &str,
+    provider_id: String,
+    key_id: String,
     is_stream: bool,
 ) -> impl std::future::Future<Output = Response> {
-    let app = app.clone();
-    let provider_id = provider_id.to_string();
-    let key_id = key_id.to_string();
-    let client_model = client_model.to_string();
+    finish_generic(
+        app,
+        resp,
+        provider_id,
+        key_id,
+        is_stream,
+        /*client_is_anthropic*/ false,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Success rendering — Anthropic client
+// ---------------------------------------------------------------------------
+
+fn finish_anthropic(
+    app: Arc<App>,
+    resp: reqwest::Response,
+    provider_id: String,
+    key_id: String,
+    is_stream: bool,
+) -> impl std::future::Future<Output = Response> {
+    finish_generic(
+        app,
+        resp,
+        provider_id,
+        key_id,
+        is_stream,
+        /*client_is_anthropic*/ true,
+    )
+}
+
+/// Shared success path: forward headers, then either buffer (non-streaming,
+/// translating if protocols differ) or stream (translating SSE chunk-by-chunk if
+/// protocols differ). Stats and mid-stream interruption handling live here.
+fn finish_generic(
+    app: Arc<App>,
+    resp: reqwest::Response,
+    provider_id: String,
+    key_id: String,
+    client_wants_stream: bool,
+    client_is_anthropic: bool,
+) -> impl std::future::Future<Output = Response> {
     async move {
         // Headers first — the client must receive them regardless of how the body ends.
-        let status = resp.status();
         let mut headers = HeaderMap::new();
         for (name, value) in resp.headers() {
             if name == reqwest::header::CONTENT_LENGTH || name == reqwest::header::TRANSFER_ENCODING {
@@ -250,25 +524,61 @@ fn finish_ok(
 
         // --- non-streaming: buffer fully so upstream deaths before completion count as
         // a fail (and never deliver a truncated body as a success).
-        if !is_stream {
+        if !client_wants_stream {
             match resp.bytes().await {
                 Ok(bytes) => {
-                    let ok = serde_json::from_slice::<serde_json::Value>(&bytes)
-                        .map(|v| v.get("error").is_none())
-                        .unwrap_or(true);
-                    app.record_stat(ok, Some(&key_id), &provider_id, &client_model);
-                    let mut response = Response::new(Body::from(bytes));
+                    let parsed: Result<serde_json::Value, _> = serde_json::from_slice(&bytes);
+                    let ok = parsed.as_ref().map(|v| v.get("error").is_none()).unwrap_or(true);
+                    app.record_stat(ok, Some(&key_id), &provider_id, "");
+                    if !ok {
+                        return error_response_for(
+                            StatusCode::BAD_GATEWAY,
+                            "upstream returned an error body".into(),
+                            if client_is_anthropic { Protocol::Anthropic } else { Protocol::OpenAi },
+                        );
+                    }
+                    let inbound = if client_is_anthropic { Protocol::Anthropic } else { Protocol::OpenAi };
+                    let body = match parsed {
+                        Ok(v) => v,
+                        Err(_) => return error_response_for(
+                            StatusCode::BAD_GATEWAY,
+                            "upstream returned non-JSON body".into(),
+                            inbound,
+                        ),
+                    };
+                    // Translate only when the upstream protocol differs from the client's.
+                    // The upstream response is in the *upstream's* format; the client
+                    // needs it in *its* format.
+                    let out = match (inbound, upstream_proto_of(&app, &provider_id)) {
+                        (Protocol::Anthropic, Protocol::OpenAi) => {
+                            // OpenAI-shaped upstream response -> Anthropic client.
+                            let model = body.get("model").and_then(|m| m.as_str()).unwrap_or("gateway").to_string();
+                            protocol::openai_to_anthropic_response(&body, &model)
+                        }
+                        (Protocol::OpenAi, Protocol::Anthropic) => {
+                            // Anthropic-shaped upstream response -> OpenAI client.
+                            let model = body.get("model").and_then(|m| m.as_str()).unwrap_or("gateway").to_string();
+                            protocol::anthropic_to_openai_response(&body, &model)
+                        }
+                        _ => body,
+                    };
+                    let mut response = Response::new(Body::from(serde_json::to_vec(&out).unwrap_or_default()));
+                    headers.insert(
+                        axum::http::header::CONTENT_TYPE,
+                        axum::http::HeaderValue::from_static("application/json"),
+                    );
                     *response.headers_mut() = headers;
-                    *response.status_mut() = status;
+                    *response.status_mut() = StatusCode::OK;
                     return response;
                 }
                 Err(e) => {
                     // Connection dropped before the client saw anything: counted as a
                     // failed request.
-                    app.record_stat(false, Some(&key_id), &provider_id, &client_model);
-                    return error_response(
+                    app.record_stat(false, Some(&key_id), &provider_id, "");
+                    return error_response_for(
                         StatusCode::BAD_GATEWAY,
                         format!("upstream connection failed mid-body: {e}"),
+                        if client_is_anthropic { Protocol::Anthropic } else { Protocol::OpenAi },
                     );
                 }
             }
@@ -276,32 +586,169 @@ fn finish_ok(
 
         // --- streaming: forward chunks as they arrive. Success is counted up-front
         // (the key served the request); a mid-stream interruption after bytes were
-        // sent to the client cannot be retried, so we append an OpenAI-style SSE error
-        // chunk and end the stream cleanly.
-        app.record_stat(true, Some(&key_id), &provider_id, &client_model);
+        // sent to the client cannot be retried, so we append an error event in the
+        // client's protocol and end the stream cleanly.
+        app.record_stat(true, Some(&key_id), &provider_id, "");
+
+        let needs_translation = client_is_anthropic != (upstream_proto_of(&app, &provider_id) == Protocol::Anthropic);
+        if !needs_translation {
+            // Same protocol both sides: raw byte passthrough (the old fast path).
+            let upstream = resp.bytes_stream();
+            let stream = upstream.map(move |r| match r {
+                Ok(chunk) => Ok::<_, std::io::Error>(chunk),
+                Err(e) => Ok(openai_stream_error_chunk(&e).into_bytes().into()),
+            });
+            let mut response = Response::new(Body::from_stream(stream));
+            *response.headers_mut() = headers;
+            *response.status_mut() = StatusCode::OK;
+            return response;
+        }
+
+        if client_is_anthropic {
+            // OpenAI upstream -> Anthropic client: synthesize Anthropic SSE events.
+            let model = app.read_config()
+                .provider_by_id(&provider_id)
+                .map(|_| "gateway".to_string())
+                .unwrap_or_else(|| "gateway".to_string());
+            let mut state = OpenAiToAnthropicStream::new(model);
+            let upstream = resp.bytes_stream();
+            let stream = upstream
+                .map(move |r| -> Result<axum::body::Bytes, std::io::Error> {
+                    match r {
+                        Ok(chunk) => Ok(translate_openai_chunk(&mut state, &chunk).into_bytes().into()),
+                        Err(e) => Ok(openai_stream_error_chunk(&e).into_bytes().into()),
+                    }
+                });
+            let mut response = Response::new(Body::from_stream(stream));
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("text/event-stream"),
+            );
+            *response.headers_mut() = headers;
+            *response.status_mut() = StatusCode::OK;
+            return response;
+        }
+
+        // Anthropic upstream -> OpenAI client: parse Anthropic SSE events, emit chunks.
+        let mut state = AnthropicToOpenAiStream::new();
+        let mut buffer: Vec<u8> = Vec::new();
         let upstream = resp.bytes_stream();
-        let stream = upstream.map(move |r| match r {
-            Ok(chunk) => Ok(chunk),
-            Err(e) => {
-                let err_chunk = format!(
-                    "data: {}\n\ndata: [DONE]\n\n",
-                    serde_json::json!({
-                        "error": {
-                            "message": format!("stream interrupted before finish_reason: {e}"),
-                            "type": "gateway_error",
-                            "code": 502,
-                        }
-                    })
-                );
-                Ok::<_, std::io::Error>(err_chunk.into_bytes().into())
+        let stream = upstream.map(move |r| -> Result<axum::body::Bytes, std::io::Error> {
+            match r {
+                Ok(chunk) => Ok(translate_anthropic_chunk(&mut state, &mut buffer, &chunk).into_bytes().into()),
+                Err(e) => Ok(openai_stream_error_chunk(&e).into_bytes().into()),
             }
         });
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("text/event-stream"),
+        );
         let mut response = Response::new(Body::from_stream(stream));
         *response.headers_mut() = headers;
-        *response.status_mut() = status;
+        *response.status_mut() = StatusCode::OK;
         response
     }
 }
+
+/// The upstream protocol as recorded in the current config (read live because the
+/// user may have edited the provider while a request is in flight).
+fn upstream_proto_of(app: &App, provider_id: &str) -> Protocol {
+    app.read_config()
+        .provider_by_id(provider_id)
+        .map(|p| p.protocol())
+        .unwrap_or(Protocol::OpenAi)
+}
+
+/// Mid-stream failure chunk for OpenAI clients.
+fn openai_stream_error_chunk(e: &reqwest::Error) -> String {
+    format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        serde_json::json!({
+            "error": {
+                "message": format!("stream interrupted before finish_reason: {e}"),
+                "type": "gateway_error",
+                "code": 502,
+            }
+        })
+    )
+}
+
+/// Feed one raw OpenAI SSE byte chunk through the translator, returning the
+/// Anthropic SSE bytes to forward. Buffers partially-received lines itself.
+fn translate_openai_chunk(state: &mut OpenAiToAnthropicStream, chunk: &[u8]) -> String {
+    let mut out = String::new();
+    let text = String::from_utf8_lossy(chunk);
+    for line in text.split_inclusive('\n') {
+        let line = line.trim();
+        let payload = match line.strip_prefix("data:") {
+            Some(p) => p.trim(),
+            None => continue,
+        };
+        if payload == "[DONE]" {
+            for e in state.feed(None) {
+                out.push_str(&e);
+            }
+            continue;
+        }
+        if payload.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
+            for e in state.feed(Some(&v)) {
+                out.push_str(&e);
+            }
+        }
+    }
+    out
+}
+
+/// Feed one raw Anthropic SSE byte chunk through the translator, returning the
+/// OpenAI SSE bytes to forward. SSE events can span chunk boundaries, so a
+/// carry-over buffer holds partial events until their terminating blank line.
+fn translate_anthropic_chunk(
+    state: &mut AnthropicToOpenAiStream,
+    buffer: &mut Vec<u8>,
+    chunk: &[u8],
+) -> String {
+    buffer.extend_from_slice(chunk);
+    let mut out = String::new();
+    // SSE events are separated by a blank line; process every complete one.
+    while let Some(pos) = find_event_end(buffer) {
+        let raw: Vec<u8> = buffer.drain(..pos).collect();
+        let text = String::from_utf8_lossy(&raw);
+        let mut event_name = String::from("message");
+        let mut data = String::new();
+        for line in text.lines() {
+            if let Some(name) = line.strip_prefix("event: ") {
+                event_name = name.trim().to_string();
+            } else if let Some(d) = line.strip_prefix("data: ") {
+                data.push_str(d);
+            }
+        }
+        if data.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<serde_json::Value>(&data) {
+            Ok(v) => {
+                for c in state.feed(&event_name, &v) {
+                    out.push_str(&c);
+                }
+            }
+            Err(_) => {} // keep-alive comments / partial JSON: skip
+        }
+    }
+    out
+}
+
+/// Index just past the double-newline terminating a complete SSE event.
+fn find_event_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+        .or_else(|| buf.windows(2).position(|w| w == b"\n\n").map(|p| p + 2))
+}
+
+// ---------------------------------------------------------------------------
+// Background prober (binary-search cooldown learning)
+// ---------------------------------------------------------------------------
 
 /// Background prober: after a key gets 429'd, measure its real rate-limit window with a
 /// binary search. Start from T (the key's learned_cooldown if one exists, else the
@@ -317,7 +764,8 @@ fn spawn_prober(
     key_id: String,
     key_secret: String,
     url: String,
-    probe_model: String,
+    probe_body: serde_json::Value,
+    upstream_proto: Protocol,
 ) {
     /// Minimum window the search considers (seconds).
     const PROBE_MIN_SECS: u64 = 2;
@@ -350,11 +798,6 @@ fn spawn_prober(
             .unwrap_or_else(|| app.default_cooldown_secs())
             .clamp(PROBE_MIN_SECS, PROBE_MAX_SECS);
 
-        let probe_body = serde_json::json!({
-            "model": probe_model,
-            "messages": [{"role": "user", "content": "1"}],
-            "max_tokens": 1,
-        });
         let mut probes_used = 0u32;
 
         // One probe after waiting `secs`. Ok(true)=success, Ok(false)=still 429,
@@ -366,20 +809,19 @@ fn spawn_prober(
             body: &serde_json::Value,
             secs: u64,
             probes_used: &mut u32,
+            proto: Protocol,
         ) -> Result<bool, ()> {
             if *probes_used >= PROBE_MAX_PROBES {
                 return Err(());
             }
             *probes_used += 1;
             tokio::time::sleep(Duration::from_secs(secs)).await;
-            let result = app
-                .http
-                .post(url)
-                .bearer_auth(key_secret)
-                .timeout(Duration::from_secs(20))
-                .json(body)
-                .send()
-                .await;
+            let builder = apply_upstream_auth(
+                app.http.post(url).timeout(Duration::from_secs(20)),
+                key_secret,
+                proto,
+            );
+            let result = builder.json(body).send().await;
             match result {
                 Ok(r) if r.status().is_success() => Ok(true),
                 Ok(r) if r.status().as_u16() == 429 => Ok(false),
@@ -389,7 +831,7 @@ fn spawn_prober(
         }
 
         // Phase 1 — bracket the window around the initial guess T.
-        let (mut low, mut high) = match probe(&app, &url, &key_secret, &probe_body, t, &mut probes_used).await {
+        let (mut low, mut high) = match probe(&app, &url, &key_secret, &probe_body, t, &mut probes_used, upstream_proto).await {
             Ok(true) => (t / 2, t), // window is shorter than T
             Ok(false) => (t, (t * 2).min(PROBE_MAX_SECS)), // longer than T
             Err(()) => {
@@ -404,7 +846,7 @@ fn spawn_prober(
                 break;
             }
             let mid = (low + high) / 2;
-            match probe(&app, &url, &key_secret, &probe_body, mid, &mut probes_used).await {
+            match probe(&app, &url, &key_secret, &probe_body, mid, &mut probes_used, upstream_proto).await {
                 Ok(true) => high = mid,
                 Ok(false) => low = mid,
                 Err(()) => break, // keep whatever bracket we have; still write midpoint

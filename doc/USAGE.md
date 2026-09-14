@@ -177,7 +177,45 @@ hour (`RELEARN_AFTER_SECS = 3600`); only one prober per key at a time.
 
 ---
 
-## 5. Model management
+## 5. Anthropic protocol (Claude Code integration)
+
+The gateway also exposes **Anthropic Messages protocol** endpoints, so Claude Code,
+Anthropic SDKs and similar clients connect directly with no translation layer:
+
+```
+ANTHROPIC_BASE_URL=http://127.0.0.1:8000   ANTHROPIC_API_KEY=<gateway key>  claude
+```
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /v1/messages` | Chat (streaming + non-streaming, tools / image blocks) |
+| `POST /v1/messages/count_tokens` | Token counting |
+
+- **Auth**: both `Authorization: Bearer <key>` and `x-api-key: <key>` are accepted;
+  the `anthropic-version` header is ignored.
+- **Provider protocol**: each provider has a `protocol` field (dropdown when adding
+  a provider in the console, or `"protocol": "openai" | "anthropic"` in the config;
+  default openai):
+  - `openai` — upstream is an OpenAI-compatible API (sensenova, openai, ...);
+    `/v1/messages` requests are translated to OpenAI format, and the response/stream
+    is translated back;
+  - `anthropic` — upstream is itself Anthropic-compatible (e.g. api.anthropic.com);
+    requests go to `{base_url}/v1/messages` with `x-api-key` + `anthropic-version`.
+- **Full matrix**: both inbound endpoints (`/v1/chat/completions`, `/v1/messages`)
+  × both upstream protocols — every combination works, so OpenAI clients can use a
+  real Claude API key pool too.
+- **Translation coverage**: top-level system field, max_tokens (required by
+  Anthropic), stop_sequences, tools/tool_choice (function ↔ tool_use both ways),
+  image content blocks (base64/URL), streaming event sequences (message_start →
+  content_block_delta... → message_stop ↔ OpenAI data: chunks), stop_reason ↔
+  finish_reason.
+- **count_tokens**: proxied to the real endpoint for Anthropic-protocol upstreams;
+  locally estimated (~4 chars/token) for OpenAI upstreams — never 404s.
+- The key pool, cooldowns, binary-search probing and stats all apply to Anthropic
+  upstreams too (probe bodies are built in the upstream's protocol).
+
+---
+## 6. Model management
 
 Per provider, the **模型 / Models** section manages a catalog of allowed
 models. Each entry is `{ id, enabled }`:
@@ -194,7 +232,7 @@ models. Each entry is `{ id, enabled }`:
 
 ---
 
-## 6. Model naming & aliases
+## 7. Model naming & aliases
 
 Agents request models as:
 
@@ -208,7 +246,7 @@ all valid aliases.
 
 ---
 
-## 7. Connecting agents & tools
+## 8. Connecting agents & tools
 
 Anything that speaks OpenAI works:
 
@@ -231,7 +269,7 @@ through byte-for-byte.
 
 ---
 
-## 8. Config file reference (`gateway.json`)
+## 9. Config file reference (`gateway.json`)
 
 ```json
 {
@@ -275,7 +313,7 @@ while the gateway runs is fine — but console changes overwrite manual ones.
 
 ---
 
-## 9. Testing with the mock upstream
+## 10. Testing with the mock upstream
 
 ```bash
 cargo run --bin mock_upstream          # 127.0.0.1:9001
@@ -287,7 +325,7 @@ handy for watching rotation and quarantine in action.
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Cause & fix |
 |---|---|
@@ -301,7 +339,7 @@ handy for watching rotation and quarantine in action.
 
 ---
 
-## 11. Admin REST API (used by the console)
+## 12. Admin REST API (used by the console)
 
 All on `http://127.0.0.1:8001`:
 

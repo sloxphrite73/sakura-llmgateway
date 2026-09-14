@@ -48,9 +48,18 @@ pub struct Provider {
     /// alias -> upstream model name, e.g. {"gpt4o": "gpt-4o-2024-08-06"}
     #[serde(default)]
     pub aliases: std::collections::BTreeMap<String, String>,
+    /// Wire protocol this upstream speaks: `"openai"` (default) or `"anthropic"`.
+    /// Auth header, request path and body format all follow from this.
+    #[serde(default)]
+    pub protocol: String,
 }
 
 impl Provider {
+    /// Wire protocol of this upstream (`openai` when unset — back-compat).
+    pub fn protocol(&self) -> crate::protocol::Protocol {
+        crate::protocol::Protocol::parse(&self.protocol)
+    }
+
     /// Allowlist check: pass when allowlist is off, or the list is empty (unmanaged),
     /// or the model is present and enabled.
     pub fn model_allowed(&self, model: &str) -> bool {

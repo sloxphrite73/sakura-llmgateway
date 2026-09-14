@@ -24,6 +24,8 @@ pub struct ProviderInput {
     pub name: String,
     pub base_url: String,
     pub model_allowlist_only: Option<bool>,
+    /// `"openai"` (default) or `"anthropic"` — the wire protocol this upstream speaks.
+    pub protocol: Option<String>,
 }
 
 pub async fn create_provider(
@@ -42,6 +44,7 @@ pub async fn create_provider(
             models: Vec::new(),
             model_allowlist_only: input.model_allowlist_only.unwrap_or(false),
             aliases: Default::default(),
+            protocol: input.protocol.unwrap_or_default(),
         });
     });
     ok(cfg)
@@ -59,6 +62,9 @@ pub async fn update_provider(
             p.base_url = input.base_url.trim().trim_end_matches('/').to_string();
             if let Some(allowlist) = input.model_allowlist_only {
                 p.model_allowlist_only = allowlist;
+            }
+            if let Some(protocol) = &input.protocol {
+                p.protocol = protocol.clone();
             }
             found = true;
         }

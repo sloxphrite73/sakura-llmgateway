@@ -432,6 +432,10 @@
         <div class="pad divider row">
           <input id="np-name" placeholder="名称，如 openai">
           <input id="np-url" placeholder="Base URL，如 https://api.openai.com/v1" style="flex:1;min-width:280px">
+          <select id="np-protocol" style="width:130px">
+            <option value="openai" selected>OpenAI 协议</option>
+            <option value="anthropic">Anthropic 协议</option>
+          </select>
           <button class="primary" onclick="addProvider()">添加</button>
         </div>
       </div>
@@ -560,7 +564,7 @@ function renderConfig() {
   <div class="card" data-pid="${p.id}">
     <div class="provider-head">
       <div>
-        <h3>${esc(p.name)}</h3>
+        <h3>${esc(p.name)}${(p.protocol || 'openai') === 'anthropic' ? ' <span class="pill">Anthropic</span>' : ''}</h3>
         <div class="base-url">${esc(p.base_url)}</div>
       </div>
       <div class="row">
@@ -717,14 +721,18 @@ async function copyKey(keyId, btn) {
 
 // ---------- provider / key / model actions ----------
 async function addProvider() {
-  try { await api('POST', '/api/providers', { name: $('np-name').value, base_url: $('np-url').value }); $('np-name').value=''; $('np-url').value=''; refresh(); }
+  try {
+    await api('POST', '/api/providers', { name: $('np-name').value, base_url: $('np-url').value, protocol: $('np-protocol').value });
+    $('np-name').value=''; $('np-url').value=''; refresh();
+  }
   catch(e){ toast(e.message); }
 }
 async function renameProvider(id) {
   const p = STATUS.providers.find(x=>x.id===id);
   const name = prompt('新名称', p.name); if (name===null) return;
   const url = prompt('新 Base URL', p.base_url); if (url===null) return;
-  try { await api('PUT', '/api/providers/'+id, { name, base_url: url }); refresh(); } catch(e){ toast(e.message); }
+  const proto = prompt('协议（openai / anthropic）', p.protocol || 'openai'); if (proto===null) return;
+  try { await api('PUT', '/api/providers/'+id, { name, base_url: url, protocol: proto }); refresh(); } catch(e){ toast(e.message); }
 }
 async function delProvider(id) {
   if (!confirm('删除该提供商及其所有 Key？')) return;
