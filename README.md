@@ -12,11 +12,25 @@
 - 🔑 **API-Key Pool** - round-robin across keys; a key that receives `429` is put into
   cooldown and traffic rotates to the next key immediately
 - ⏱️ **Smart cooldown** - resolution order: upstream `Retry-After` header →
-  `learned_cooldown` (measured by background probing) → per-key override → global
+  `learned_cooldown` (learned via binary-search probing) → per-key override → global
   default (60s); when all keys are cooling down, the gateway fails fast with `429`
-- 🔬 **Cooldown learning** - after a 429, a background prober sends tiny probe requests
-  at increasing intervals (5s → 300s) until one succeeds, then stores the measured
-  rate-limit window as `learned_cooldown` (debounced config writes, one prober per key)
+- 🔬 **Cooldown learning (binary-search prober)** - after a 429, a background prober
+  measures the key's real rate-limit window and stores it as `learned_cooldown`:
+  starting from T (the previous learned value, else the global default), it sends a
+  tiny probe after T seconds (the provider's first enabled managed model,
+  `max_tokens: 1`) — success means the window is shorter, bracketing `[T/2, T]`;
+  another 429 means longer, bracketing `[T, 2T]`. The bracket is then bisected for
+  ~5 rounds to ±1s and the **midpoint** is stored. Bounded by design: at most
+  10 probes per measurement, a 900s window cap, and at most one recalibration per
+  key per hour — so it never burns quota
+
+```
+Probe interval (seconds)
+T ──── 429 ──▶ [T, 2T]          success ──▶ [T/2, T]
+                 │                          │
+                 ▼ bisect ~5 rounds          ▼ bisect ~5 rounds
+            converge to ±1s ◀━━━━ midpoint stored as learned_cooldown
+```
 - 🚫 **Invalid-key quarantine** - `401/403` means the key itself is dead: it is
   quarantined for 30 minutes instead of the short rotate-out cooldown
 - 🔁 **Retry before first byte** - 429/5xx/timeouts rotate to the next key (budget =
@@ -200,7 +214,8 @@ per-provider / per-model success and failure counters. Stats persist to `stats.j
 Notes:
 
 - `cooldown_secs: null` on a key = use global default
-- `learned_cooldown` is machine-written by the 429 prober and beats `cooldown_secs`
+- `learned_cooldown` is machine-written by the binary-search prober (bracket
+  midpoint, ±1s accuracy) and beats `cooldown_secs`
 - `models` empty = unmanaged (all models pass through, backward compatible)
 - the file is rewritten (atomically) whenever you change something in the UI
 

@@ -41,9 +41,61 @@ After startup:
 | OpenAI-compatible API | `http://127.0.0.1:8000/v1` |
 | Web console | `http://127.0.0.1:8001/` |
 
+
 ---
 
-## 2. Web console
+## 2. Android (APK)
+
+The Android build is the **same Rust gateway** as the Windows build: CI
+cross-compiles it for `arm64-v8a` / `armeabi-v7a` / `x86_64`, packages all three
+ABIs into a universal APK, and a foreground service runs and supervises it.
+
+### Installation
+
+1. Download `sakura-llmgateway-vX.Y.Z-universal.apk` from
+   [GitHub Releases](https://github.com/sloxphrite73/sakura-llmgateway/releases)
+   (the phone's browser is fine).
+2. Tap to install; if prompted about "unknown apps", allow installs from that source.
+3. Open the app — the launcher icon is the same sakura 🌸 as the onboarding screen.
+
+### First launch
+
+- **Import gateway.json** — pick the config file exported from your desktop in the
+  file picker; it takes effect after validation.
+- **Skip, start with an empty config** — the app generates a valid empty config and
+  starts the gateway right away; add providers and keys in the console afterwards.
+
+### Daily use
+
+| Topic | Details |
+|---|---|
+| Foreground service | The gateway runs behind an ongoing notification ("Sakura LLM Gateway"); tapping it returns to the console, and it carries a Stop action |
+| Console | A fullscreen WebView inside the app — the same page as `http://127.0.0.1:8001/`; in-page import/export and confirm dialogs work |
+| Endpoint | On-device agents/tools point at `http://127.0.0.1:8000/v1` |
+| Lifecycle | The service keeps running in the background; START_STICKY restarts it if the system kills it; a 10s health watchdog restarts the gateway on hang or death |
+| In-app import | The console's import button opens the system file picker; imports hot-reload |
+| System-level import | "Open with → Sakura LLM Gateway" on a `gateway.json` in any file manager; hot-reloads while the gateway runs |
+| Export | The console's export button opens the system "Save as" dialog |
+
+### Migrating a config from desktop to phone
+
+1. **Desktop**: console → Config tab → **Export** to get `gateway.json`
+   (all providers, keys, models, aliases, and learned cooldowns included).
+2. **Transfer**: send it to the phone by USB, chat apps, cloud drive — anything.
+3. **Import** (either way):
+   - On first launch, choose "Import gateway.json"; or
+   - If already running: locate the file in a file manager → Open with →
+     **Sakura LLM Gateway**. The config hot-swaps with no restart.
+4. **Verify**: back in the app console, the Status tab should show all keys online;
+   make one `http://127.0.0.1:8000/v1/chat/completions` call from the phone's
+   browser or an on-device agent.
+
+> Tip: emulators (MuMu / LDPlayer / Nox) work too. If you hit "webpage not
+> available / ERR_CONNECTION_REFUSED", upgrade to v0.2.2+ (startup race fixed),
+> or tap Stop in the notification and reopen the app.
+
+---
+## 3. Web console
 
 Open `http://127.0.0.1:8001/`. From top to bottom:
 
@@ -83,12 +135,33 @@ choice is remembered per browser (localStorage); dark is the default.
 
 ---
 
-## 3. Key pool behavior (what happens on 429)
+## 4. Key pool behavior (what happens on 429)
 
 1. Requests are distributed round-robin across the provider's keys.
 2. A key that receives **429** is benched: cooldown = upstream `Retry-After`
-   header → per-key override → global default. The gateway waits **1.5s** and
+   header → `learned_cooldown` (learned via binary-search probing, see §4.1) →
+   per-key override → global default. The gateway waits **1.5s** and
    retries the same request on the next key.
+
+### 4.1 Cooldown learning (binary-search prober)
+
+After a key gets a 429, a background prober measures its real rate-limit window
+and stores it as `learned_cooldown` (visible in the console and config file):
+
+1. **Initial T** = the previous learned value (else the global default), clamped
+   to 2–900 seconds.
+2. **Bracket**: after waiting T seconds, send a tiny probe (the provider's first
+   enabled managed model, `max_tokens: 1`) — success means the window is shorter,
+   bracketing `[T/2, T]`; another 429 means longer, bracketing `[T, 2T]`
+   (900s cap).
+3. **Bisect**: bisect the bracket for ~5 rounds (probe the midpoint; success takes
+   the upper half, 429 the lower), converging to ±1 second.
+4. **Store**: the bracket **midpoint** becomes the key's `learned_cooldown`
+   (debounced config write).
+
+Guard rails: at most 10 probes per measurement; 401/403/other 4xx/network errors
+are "unlearnable" and abort the search; each key recalibrates at most once per
+hour (`RELEARN_AFTER_SECS = 3600`); only one prober per key at a time.
 3. **401/403** (invalid key) quarantines the key for 30 minutes instead —
    retrying a dead key just wastes calls.
 4. Other key-scoped errors (408/5xx, network errors) bench the key for 5s and
@@ -104,7 +177,7 @@ choice is remembered per browser (localStorage); dark is the default.
 
 ---
 
-## 4. Model management
+## 5. Model management
 
 Per provider, the **模型 / Models** section manages a catalog of allowed
 models. Each entry is `{ id, enabled }`:
@@ -121,7 +194,7 @@ models. Each entry is `{ id, enabled }`:
 
 ---
 
-## 5. Model naming & aliases
+## 6. Model naming & aliases
 
 Agents request models as:
 
@@ -135,7 +208,7 @@ all valid aliases.
 
 ---
 
-## 6. Connecting agents & tools
+## 7. Connecting agents & tools
 
 Anything that speaks OpenAI works:
 
@@ -158,7 +231,7 @@ through byte-for-byte.
 
 ---
 
-## 7. Config file reference (`gateway.json`)
+## 8. Config file reference (`gateway.json`)
 
 ```json
 {
@@ -202,7 +275,7 @@ while the gateway runs is fine — but console changes overwrite manual ones.
 
 ---
 
-## 8. Testing with the mock upstream
+## 9. Testing with the mock upstream
 
 ```bash
 cargo run --bin mock_upstream          # 127.0.0.1:9001
@@ -214,7 +287,7 @@ handy for watching rotation and quarantine in action.
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Cause & fix |
 |---|---|
@@ -228,7 +301,7 @@ handy for watching rotation and quarantine in action.
 
 ---
 
-## 10. Admin REST API (used by the console)
+## 11. Admin REST API (used by the console)
 
 All on `http://127.0.0.1:8001`:
 
