@@ -1,6 +1,6 @@
 # Sakura LLM Gateway
 
-🎯 A local-first LLM API gateway that pools API keys per provider, rotates them automatically on rate limits, and manages everything from a built-in web console.
+🎯 A local-first LLM API gateway that pools API keys per provider, rotates them automatically on rate limits with smart cooldowns, and manages everything from a built-in web console. Speaks both **OpenAI** and **Anthropic** protocols (any inbound × any upstream, translated automatically), ships as a single-file Windows exe and an Android APK, and lets any client — Claude Code, Cherry Studio, whatever — safely share your entire key pool.
 
 [English](README.md) | [简体中文](README.zh-CN.md) · 📖 Usage guide: [English](doc/USAGE.md) | [中文](doc/使用说明.md)
 

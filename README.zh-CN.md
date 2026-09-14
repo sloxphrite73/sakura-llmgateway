@@ -1,7 +1,9 @@
 # Sakura LLM Gateway
 
-🎯 一个本地优先的 LLM API 网关：为每个提供商维护 API-Key 池，遇到限流自动轮换，
-并提供内置 Web 控制台管理一切。
+🎯 一个本地优先的 LLM API 网关：为每个提供商维护 API-Key 池，遇到限流自动轮换、
+智能冷却，并提供内置 Web 控制台管理一切。同时支持 **OpenAI** 与 **Anthropic**
+两种协议（任意入站 × 任意上游自动互译），提供 Windows 单文件 exe 与安卓 APK，
+让 Claude Code、Cherry Studio 等任何客户端都能安全共享你的全部 Key。
 
 [English](README.md) | [简体中文](README.zh-CN.md) · 📖 使用说明：[中文](doc/使用说明.md) | [English](doc/USAGE.md)
 
