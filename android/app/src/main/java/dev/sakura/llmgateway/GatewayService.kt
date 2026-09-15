@@ -37,6 +37,7 @@ class GatewayService : Service() {
         const val UI_PORT = 8001L
         const val WATCHDOG_INTERVAL_MS = 10_000L
         const val WATCHDOG_TIMEOUT_MS = 5_000L
+        const val FIRST_CHECK_DELAY_MS = 2_000L
 
         @Volatile var isRunning: Boolean = false
             private set
@@ -57,6 +58,7 @@ class GatewayService : Service() {
 
     private var process: Process? = null
     @Volatile private var watchdogThread: Thread? = null
+    @Volatile private var firstCheck = true
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -88,6 +90,7 @@ class GatewayService : Service() {
         }
         state.set("starting")
         killProcess() // clear any stale/dead handle before spawning a fresh process
+        firstCheck = true
         spawnGateway()
         startWatchdog()
         isRunning = true
@@ -132,10 +135,13 @@ class GatewayService : Service() {
         watchdogThread = Thread {
             while (!Thread.currentThread().isInterrupted) {
                 try {
-                    Thread.sleep(WATCHDOG_INTERVAL_MS)
+                    // First check fires early (2s) so "running" flips quickly on a
+                    // healthy boot; subsequent checks use the normal 10s interval.
+                    Thread.sleep(if (firstCheck) FIRST_CHECK_DELAY_MS else WATCHDOG_INTERVAL_MS)
                 } catch (_: InterruptedException) {
                     return@Thread
                 }
+                firstCheck = false
                 val alive = process?.isAlive == true && healthy()
                 if (alive) {
                     state.set("running")

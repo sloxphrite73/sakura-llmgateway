@@ -82,8 +82,24 @@ class MainActivity : androidx.activity.ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestNotificationPermissionIfNeeded()
         handleOpenWith(intent)
         setContent { Root() }
+    }
+
+    /**
+     * POST_NOTIFICATIONS is a runtime permission since Android 13 (API 33). Without
+     * requesting it, the foreground-service notification (and its 停止 action) never
+     * shows even though the service itself runs. The service still works without it;
+     * this only controls notification visibility.
+     */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -253,10 +269,13 @@ class MainActivity : androidx.activity.ComponentActivity() {
         }
         // Track gateway health so we can show a retry screen instead of WebView's
         // dead "ERR_CONNECTION_REFUSED" page while the process is still booting.
+        // NOTE: the health probe does real socket I/O, so it MUST run on Dispatchers.IO.
+        // Doing it on the main thread throws NetworkOnMainThreadException, which the
+        // catch swallowed -> "false" forever -> the app was stuck on "网关启动中…".
         var gatewayUp by remember { mutableStateOf(GatewayService.currentState() == "running") }
         LaunchedEffect(Unit) {
             while (true) {
-                gatewayUp = isGatewayUp()
+                gatewayUp = withContext(Dispatchers.IO) { isGatewayUp() }
                 if (gatewayUp) break
                 kotlinx.coroutines.delay(500)
             }
