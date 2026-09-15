@@ -4,6 +4,8 @@
 Messages** 端点，按提供商维护智能负载均衡的 API-Key 池，支持流式输出，
 内置 Web 控制台。
 
+反馈 Bug 和功能建议进 QQ 群 348900172
+
 [English](README.md) | [简体中文](README.zh-CN.md) · 📖 使用说明：[中文](doc/使用说明.md) | [English](doc/USAGE.md)
 
 ## ✨ 特性
