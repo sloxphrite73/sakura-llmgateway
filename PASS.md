@@ -596,3 +596,13 @@ Android 在主线程做 socket I/O 会抛 NetworkOnMainThreadException，被 `ca
 2. 验证脚本里 `t('textarea')` 误匹配（`document.createElement('textarea')`），排查 missing-keys 假阳性时要排除这类非 i18n 调用。
 
 **遗留**：Issue #2（小屏设备滚动跳过后底部按钮不可点）待修，与本特性无关。
+
+## 17. Issue #2 修复：小屏设备引导页按钮过小/不可点（v0.3.2）
+
+**症状**（用户反馈，Android 8.1 / 441x537 / armeabi-v8a）：0.3.1 校验通过，但小屏设备上引导页最下面的「跳过，用空配置启动」按钮过小无法点击；跳过后在页面里点任何按钮都无响应。
+
+**诊断**：不是 WebUI 的问题——是 Compose 引导页布局问题。Onboarding() 用固定高度 + `Arrangement.Center` 的 Column，内容（大号 emoji + 标题 + 三行说明 + 两个按钮）在小屏上超出视口时，Center 排列会从上下两边同时压缩子元素，按钮被压到 48dp 最小点击目标以下，视觉上存在但 tap 区域几乎为零。等待页（网关启动中）同布局同隐患。WebUI 本身早有 mobile 媒体查询（40-44px 触控目标），不受此问题影响。
+
+**修复**：两个全屏 Compose Column 都改为 `verticalScroll(rememberScrollState())` 可滚动 + `heightIn(min = 48.dp)` 强制按钮最小高度 + `navigationBarsPadding()` 避开手势条；内容能放下时仍然垂直居中（Center 在可滚动容器内对超出内容自动退化为顶部对齐，不再挤压）。
+
+**验证**：无本地 Android 构建环境，反馈回路是 CI（历次 6 个 release 全绿）；修复本身是布局约束调整，无逻辑分支。

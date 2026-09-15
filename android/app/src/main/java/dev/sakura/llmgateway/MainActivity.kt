@@ -19,6 +19,8 @@ import android.webkit.WebViewClient
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -219,11 +221,19 @@ class MainActivity : androidx.activity.ComponentActivity() {
         val ctx = LocalContext.current
         val scope = rememberCoroutineScope()
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            // Issue #2 (small screens, e.g. 441x537): a fixed-height centered Column
+            // squeezes the two action buttons when content exceeds the viewport —
+            // the buttons shrink below their 48dp minimum tap target and become
+            // effectively untappable. scrollable + vertically-centered-when-it-fits:
             Column(
-                Modifier.fillMaxSize().padding(32.dp),
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 32.dp, vertical = 24.dp),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                Spacer(Modifier.navigationBarsPadding())
                 Text("🌸", style = MaterialTheme.typography.displayLarge)
                 Spacer(Modifier.height(16.dp))
                 Text(
@@ -241,7 +251,7 @@ class MainActivity : androidx.activity.ComponentActivity() {
                 Spacer(Modifier.height(32.dp))
                 Button(
                     onClick = { importConfig.launch(arrayOf("application/json", "application/octet-stream", "*/*")) },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                 ) { Text("导入 gateway.json") }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(
@@ -254,8 +264,9 @@ class MainActivity : androidx.activity.ComponentActivity() {
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                 ) { Text("跳过，用空配置启动") }
+                Spacer(Modifier.navigationBarsPadding())
             }
         }
     }
@@ -281,8 +292,12 @@ class MainActivity : androidx.activity.ComponentActivity() {
             }
         }
         if (!gatewayUp) {
+            // Scrollable for the same small-screen reason as Onboarding (issue #2).
             Column(
-                Modifier.fillMaxSize().padding(32.dp),
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 32.dp, vertical = 24.dp),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
