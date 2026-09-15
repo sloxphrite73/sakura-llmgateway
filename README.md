@@ -4,6 +4,8 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) · 📖 Usage guide: [English](doc/USAGE.md) | [中文](doc/使用说明.md)
 
+[Bugs report and communication with dev(Telegram)](https://t.me/+4NfMkc8SJDwzYWZl)
+
 ## ✨ Features
 
 - 🔌 **OpenAI-compatible API** - point any agent/tool at `http://127.0.0.1:8000/v1`
