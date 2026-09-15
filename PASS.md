@@ -576,3 +576,23 @@ Android 在主线程做 socket I/O 会抛 NetworkOnMainThreadException，被 `ca
 - **运行时权限必须在代码里请求**：清单声明 ≠ 授权。Android 13+ 上前台服务的可见性完全依赖 POST_NOTIFICATIONS 的运行时授予。新权限加进清单时要同步问自己"这是不是运行时权限"。
 - **GitHub Actions 的 runner 镜像会漂移**：android-actions/setup-android 在新镜像上 v3/v4 都会挂（'tools' 包被 cmdline-tools 移除）。镜像自带 SDK 足够时，直接用 sdkmanager 反而更稳。CI 挂了先看是不是镜像漂移，再怀疑自己的代码。
 - Release: v0.3.1（commits 6703dce / eb443a8 / bc356d4），APK 11.6 MB + exe 4.7 MB。
+
+## 16. WebUI i18n + Anthropic 地址展示（未发版）
+
+**需求**（grill-me 两轮敲定）：顶部 api-line 在 OpenAI 地址旁并列展示 Anthropic Messages 地址；顶栏加中/英语言切换；全量翻译（含 confirm/prompt 弹窗、placeholder、动态表格/toast）；默认语言跟随浏览器（`navigator.language`），手动切换后 localStorage 记住；切换控件用与主题按钮一致的小按钮（EN/中）；两个地址点击复制。
+
+**实现**（`static/index.html`，单文件内 ~119 对 key 的 `I18N` 字典 + `applyLang()` + `data-i18n`/`data-i18n-ph` 标记）：
+
+- 静态 HTML 用 data-i18n 标记；JS 渲染的表格/按钮/toast/confirm/prompt 全部走 `t(key)` 查表；带参数的文案用函数值（`modal_selected: n => ...`）。
+- `applyLang()` 切换后立即重渲染（renderConfig/renderStats），保证动态区域同步。
+- 初始化顺序：i18n 先于 theme（theme 按钮文案走 t()），二者互不依赖。
+- api-line 两个地址 `<code>` 均可点击复制（clipboard API + execCommand 兜底——Android WebView 老内核可能没有 navigator.clipboard）。
+
+**验证反馈回路**：本地 release 构建 + mock_upstream 起真实进程，preview 截图 + 快照验证：中文默认 → 点 EN 全部切换（含表格表头、按钮、placeholder）→ localStorage 持久化 → 切回中文恢复；两地址内容正确（`:9400/v1` 与 `:9400/v1/messages`）。改完 UI 必须 cargo build 重新内嵌（rust-embed）——只刷新浏览器无效。
+
+**坑**：
+
+1. 写 node 转换脚本改 markdown/HTML 时，模板字符串里的反引号会被 bash 吃掉——上次的教训仍然适用；这次直接用 str_replace 分批改，避开脚本（本条目本身也是用数组拼接 + `String.fromCharCode(96)` 绕开的）。
+2. 验证脚本里 `t('textarea')` 误匹配（`document.createElement('textarea')`），排查 missing-keys 假阳性时要排除这类非 i18n 调用。
+
+**遗留**：Issue #2（小屏设备滚动跳过后底部按钮不可点）待修，与本特性无关。

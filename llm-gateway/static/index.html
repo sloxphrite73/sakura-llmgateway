@@ -88,7 +88,7 @@
     margin-left: auto;
   }
   .masthead .api-line code { color: var(--sakura); }
-  .masthead .theme-toggle { margin-left: 4px; flex: none; }
+  .masthead .theme-toggle, .masthead .lang-toggle { margin-left: 4px; flex: none; }
   :root[data-theme="light"] .masthead .api-line code { color: var(--sakura-dim); }
 
   /* ---------- tabs ---------- */
@@ -338,12 +338,13 @@
 <header class="masthead">
   <div class="top">
     <h1><span class="petal" aria-hidden="true"></span>Sakura Gateway</h1>
-    <div class="api-line">OpenAI 兼容接口 <code id="api-url">…</code> · 模型用 <code>provider/model</code> 或别名</div>
+    <div class="api-line"><span data-i18n="api_openai">OpenAI 兼容接口</span> <code id="api-url">…</code> · <span data-i18n="api_anthropic">Anthropic Messages</span> <code id="api-url-anthropic">…</code> · <span data-i18n="api_models_hint">模型用</span> <code>provider/model</code> <span data-i18n="api_models_hint2">或别名</span></div>
+    <button class="small lang-toggle" id="lang-toggle" aria-label="切换中文/English" title="切换中文/English">EN</button>
     <button class="small theme-toggle" id="theme-toggle" aria-label="切换浅色/深色主题" title="切换浅色/深色主题"></button>
   </div>
   <nav class="tabs" role="tablist">
-    <button id="tab-status" class="active" role="tab" onclick="switchPage('status')">Status / 统计</button>
-    <button id="tab-config" role="tab" onclick="switchPage('config')">Config / 配置</button>
+    <button id="tab-status" class="active" role="tab" onclick="switchPage('status')" data-i18n="tab_status">Status / 统计</button>
+    <button id="tab-config" role="tab" onclick="switchPage('config')" data-i18n="tab_config">Config / 配置</button>
   </nav>
 </header>
 
@@ -353,17 +354,17 @@
   <div class="page active" id="page-status">
 
     <section class="section">
-      <h2 class="section-title">总览 <span class="note">每 5 秒自动刷新 · 统计数据已持久化，重启不丢失</span></h2>
+      <h2 class="section-title"><span data-i18n="overview">总览</span> <span class="note" data-i18n="overview_note">每 5 秒自动刷新 · 统计数据已持久化，重启不丢失</span></h2>
       <div class="stat-grid">
-        <div class="stat-box ok"><div class="num" id="st-ok">0</div><div class="label">成功请求</div></div>
-        <div class="stat-box err"><div class="num" id="st-fail">0</div><div class="label">失败请求</div></div>
-        <div class="stat-box warn"><div class="num" id="st-rot">0</div><div class="label">换 Key 次数</div></div>
-        <div class="stat-box"><div class="num" id="st-rate">—</div><div class="label">成功率</div></div>
+        <div class="stat-box ok"><div class="num" id="st-ok">0</div><div class="label" data-i18n="stat_ok">成功请求</div></div>
+        <div class="stat-box err"><div class="num" id="st-fail">0</div><div class="label" data-i18n="stat_fail">失败请求</div></div>
+        <div class="stat-box warn"><div class="num" id="st-rot">0</div><div class="label" data-i18n="stat_rot">换 Key 次数</div></div>
+        <div class="stat-box"><div class="num" id="st-rate">—</div><div class="label" data-i18n="stat_rate">成功率</div></div>
       </div>
     </section>
 
     <section class="section">
-      <h2 class="section-title">过去 24 小时请求 <span class="note">每小时一柱 · 粉=成功 红=失败</span></h2>
+      <h2 class="section-title"><span data-i18n="hist_title">过去 24 小时请求</span> <span class="note" data-i18n="hist_note">每小时一柱 · 粉=成功 红=失败</span></h2>
       <div class="card card-pad">
         <div class="hist" id="hist"></div>
         <div class="hist-x" id="hist-x"></div>
@@ -371,17 +372,17 @@
     </section>
 
     <section class="section">
-      <h2 class="section-title">供应商</h2>
+      <h2 class="section-title" data-i18n="sec_providers">供应商</h2>
       <div class="card"><table id="tbl-providers"></table></div>
     </section>
 
     <section class="section">
-      <h2 class="section-title">API Key</h2>
+      <h2 class="section-title" data-i18n="sec_keys">API Key</h2>
       <div class="card"><table id="tbl-keys"></table></div>
     </section>
 
     <section class="section">
-      <h2 class="section-title">模型</h2>
+      <h2 class="section-title" data-i18n="sec_models">模型</h2>
       <div class="card"><table id="tbl-models"></table></div>
     </section>
 
@@ -391,52 +392,52 @@
   <div class="page" id="page-config">
 
     <section class="section">
-      <h2 class="section-title">配置文件 <span class="note">gateway.json · 导出用于迁移，导入即时热生效，无需重启</span></h2>
+      <h2 class="section-title"><span data-i18n="cfg_file">配置文件</span> <span class="note" data-i18n="cfg_file_note">gateway.json · 导出用于迁移，导入即时热生效，无需重启</span></h2>
       <div class="card card-pad">
         <div class="row">
-          <button onclick="exportConfig()">导出配置</button>
-          <button onclick="document.getElementById('import-file').click()">导入配置</button>
+          <button onclick="exportConfig()" data-i18n="btn_export">导出配置</button>
+          <button onclick="document.getElementById('import-file').click()" data-i18n="btn_import">导入配置</button>
           <input type="file" id="import-file" accept=".json,application/json" style="display:none" onchange="importConfig(event)">
-          <span class="faint" style="font-size:12px">导入会整体替换当前配置（含端口与鉴权），文件无效则整体拒绝</span>
+          <span class="faint" style="font-size:12px" data-i18n="import_warn">导入会整体替换当前配置（含端口与鉴权），文件无效则整体拒绝</span>
         </div>
       </div>
     </section>
 
     <section class="section">
-      <h2 class="section-title">全局设置 <span class="note">端口修改后重启生效</span></h2>
+      <h2 class="section-title"><span data-i18n="global_settings">全局设置</span> <span class="note" data-i18n="settings_note">端口修改后重启生效</span></h2>
       <div class="card">
         <div class="card-pad">
           <div class="settings-grid">
-            <label class="f">默认冷却时间（秒）<input id="s-cooldown" type="number" min="1"></label>
-            <label class="f">每请求最大尝试次数<input id="s-attempts" type="number" min="1" max="10"></label>
-            <label class="f">API 端口<input id="s-apiport" type="number"></label>
-            <label class="f">UI 端口<input id="s-uiport" type="number"></label>
+            <label class="f"><span data-i18n="set_cooldown">默认冷却时间（秒）</span><input id="s-cooldown" type="number" min="1"></label>
+            <label class="f"><span data-i18n="set_attempts">每请求最大尝试次数</span><input id="s-attempts" type="number" min="1" max="10"></label>
+            <label class="f"><span data-i18n="set_apiport">API 端口</span><input id="s-apiport" type="number"></label>
+            <label class="f"><span data-i18n="set_uiport">UI 端口</span><input id="s-uiport" type="number"></label>
           </div>
           <div class="row" style="margin-top:14px">
-            <label class="row" style="gap:6px"><input type="checkbox" id="s-auth"> 启用本地 API 鉴权</label>
-            <input id="s-authkeys" placeholder="鉴权 Key，逗号分隔" style="flex:1;min-width:240px">
-            <button class="primary" onclick="saveSettings()">保存设置</button>
+            <label class="row" style="gap:6px"><input type="checkbox" id="s-auth"> <span data-i18n="set_auth">启用本地 API 鉴权</span></label>
+            <input id="s-authkeys" data-i18n-ph="ph_authkeys" placeholder="鉴权 Key，逗号分隔" style="flex:1;min-width:240px">
+            <button class="primary" onclick="saveSettings()" data-i18n="btn_save">保存设置</button>
           </div>
         </div>
       </div>
     </section>
 
     <section class="section">
-      <h2 class="section-title">提供商</h2>
+      <h2 class="section-title" data-i18n="sec_providers2">提供商</h2>
       <div id="providers"></div>
 
       <div class="card">
         <div class="provider-head">
-          <div><h3>添加提供商</h3></div>
+          <div><h3 data-i18n="add_provider">添加提供商</h3></div>
         </div>
         <div class="pad divider row">
-          <input id="np-name" placeholder="名称，如 openai">
-          <input id="np-url" placeholder="Base URL，如 https://api.openai.com/v1" style="flex:1;min-width:280px">
+          <input id="np-name" data-i18n-ph="ph_np_name" placeholder="名称，如 openai">
+          <input id="np-url" data-i18n-ph="ph_np_url" placeholder="Base URL，如 https://api.openai.com/v1" style="flex:1;min-width:280px">
           <select id="np-protocol" style="width:130px">
-            <option value="openai" selected>OpenAI 协议</option>
-            <option value="anthropic">Anthropic 协议</option>
+            <option value="openai" selected data-i18n="proto_openai">OpenAI 协议</option>
+            <option value="anthropic" data-i18n="proto_anthropic">Anthropic 协议</option>
           </select>
-          <button class="primary" onclick="addProvider()">添加</button>
+          <button class="primary" onclick="addProvider()" data-i18n="btn_add">添加</button>
         </div>
       </div>
     </section>
@@ -452,12 +453,142 @@ const $ = id => document.getElementById(id);
 let STATUS = null;   // /api/status (config + pool state)
 let STATS = null;    // /api/stats (request statistics)
 
+// ---------- i18n ----------
+const LANG_KEY = 'sakura-lang';
+const I18N = {
+  zh: {
+    tab_status: 'Status / 统计', tab_config: 'Config / 配置',
+    overview: '总览', overview_note: '每 5 秒自动刷新 · 统计数据已持久化，重启不丢失',
+    stat_ok: '成功请求', stat_fail: '失败请求', stat_rot: '换 Key 次数', stat_rate: '成功率',
+    hist_title: '过去 24 小时请求', hist_note: '每小时一柱 · 粉=成功 红=失败',
+    sec_providers: '供应商', sec_keys: 'API Key', sec_models: '模型',
+    cfg_file: '配置文件', cfg_file_note: 'gateway.json · 导出用于迁移，导入即时热生效，无需重启',
+    btn_export: '导出配置', btn_import: '导入配置',
+    import_warn: '导入会整体替换当前配置（含端口与鉴权），文件无效则整体拒绝',
+    global_settings: '全局设置', settings_note: '端口修改后重启生效',
+    set_cooldown: '默认冷却时间（秒）', set_attempts: '每请求最大尝试次数',
+    set_apiport: 'API 端口', set_uiport: 'UI 端口', set_auth: '启用本地 API 鉴权',
+    ph_authkeys: '鉴权 Key，逗号分隔', btn_save: '保存设置',
+    sec_providers2: '提供商', add_provider: '添加提供商',
+    ph_np_name: '名称，如 openai', ph_np_url: 'Base URL，如 https://api.openai.com/v1',
+    proto_openai: 'OpenAI 协议', proto_anthropic: 'Anthropic 协议', btn_add: '添加',
+    // JS-rendered
+    api_openai: 'OpenAI 兼容接口', api_anthropic: 'Anthropic Messages',
+    api_models_hint: '模型用', api_models_hint2: '或别名', copied: '已复制', copy: '复制',
+    th_provider: '供应商', th_ok: '成功', th_fail: '失败', th_rot: '换Key', th_rate: '成功率',
+    th_key: 'API Key', th_model: '模型', th_model_id: '模型 ID', th_status: '状态',
+    no_data: '暂无数据', no_keys: '还没有 Key，添加第一把后这个提供商才能服务请求',
+    st_ok: '可用', st_cool: '冷却 · 剩余 ', st_invalid: '无效 · 剩余 ',
+    st_enabled: '启用', st_disabled: '已禁用',
+    btn_show: '显示', btn_hide: '隐藏', btn_edit: '编辑', btn_del: '删除',
+    btn_addkey: '添加 Key', btn_fetch: '从上游拉取', btn_fetching: '拉取中…',
+    btn_clear_invalid: '解除无效', btn_clear_cool: '解除冷却',
+    lbl_cooldown_cfg: '冷却配置', lbl_learned: '学习冷却', lbl_requests: '请求数', lbl_last_err: '最近错误',
+    lbl_default: '默认', lbl_models: '模型', lbl_alias: '别名', lbl_none: '无',
+    ph_key: 'API Key', ph_label: '备注（可选）', ph_cooldown: '冷却秒（可选）',
+    ph_model_id: '模型 ID，如 gpt-4o', ph_alias: '别名', ph_upstream_model: '上游模型名',
+    btn_addmodel: '添加模型', btn_addalias: '添加别名',
+    allowlist_pill: '白名单', allowlist_toggle: ' 仅允许列表内模型',
+    models_managed: ' 个', models_unmanaged: '未托管 · 放行所有模型',
+    modal_title: '导入模型', modal_all: '全选 / 全不选', modal_cancel: '取消', modal_import: '导入所选',
+    modal_exists: '已存在', modal_selected: n => '已选 ' + n + ' 个',
+    // toasts & dialogs
+    t_saved: '已保存', t_fail: '失败: ', t_download: '已触发下载',
+    t_import_ok: '导入成功，已热生效', t_import_fail: '导入失败: ',
+    c_import: n => '导入 ' + n + ' 将整体替换当前配置（含端口与鉴权设置），确定继续？',
+    t_key_notfound: '未找到该 Key', t_show_fail: '显示失败: ', t_copy_fail: '复制失败: ',
+    p_new_name: '新名称', p_new_url: '新 Base URL', p_protocol: '协议（openai / anthropic）',
+    c_del_provider: '删除该提供商及其所有 Key？', c_del_key: '删除该 Key？',
+    c_del_model: m => '删除模型 ' + m + '？指向它的别名将无法使用。',
+    t_allowlist_on: '白名单模式已开启', t_allowlist_off: '白名单模式已关闭',
+    t_fetch_fail: '拉取失败: ', t_fetch_none: '上游未返回任何模型',
+    t_no_model_sel: '未选择任何模型', t_imported: n => '已导入 ' + n + ' 个模型',
+    hist_tip: (d, s, f) => d + '时 · 成功 ' + s + ' / 失败 ' + f,
+    theme_dark: '🌙 深色', theme_light: '☀️ 浅色',
+    lang_toggle: 'EN', learned_tip: '由 429 探测自动学习',
+    clear_cd: iv => iv ? '解除无效' : '解除冷却',
+    click_copy: '点击复制',
+  },
+  en: {
+    tab_status: 'Status / Stats', tab_config: 'Config',
+    overview: 'Overview', overview_note: 'Auto-refresh every 5s · stats persist across restarts',
+    stat_ok: 'Successful requests', stat_fail: 'Failed requests', stat_rot: 'Key rotations', stat_rate: 'Success rate',
+    hist_title: 'Requests · last 24h', hist_note: 'one bar per hour · pink=ok red=fail',
+    sec_providers: 'Providers', sec_keys: 'API Keys', sec_models: 'Models',
+    cfg_file: 'Config file', cfg_file_note: 'gateway.json · export to migrate, import hot-reloads, no restart needed',
+    btn_export: 'Export config', btn_import: 'Import config',
+    import_warn: 'Import fully replaces the current config (ports & auth included); invalid files are rejected',
+    global_settings: 'Global settings', settings_note: 'Port changes need a restart',
+    set_cooldown: 'Default cooldown (sec)', set_attempts: 'Max attempts per request',
+    set_apiport: 'API port', set_uiport: 'UI port', set_auth: 'Enable local API auth',
+    ph_authkeys: 'Auth keys, comma-separated', btn_save: 'Save settings',
+    sec_providers2: 'Providers', add_provider: 'Add provider',
+    ph_np_name: 'Name, e.g. openai', ph_np_url: 'Base URL, e.g. https://api.openai.com/v1',
+    proto_openai: 'OpenAI protocol', proto_anthropic: 'Anthropic protocol', btn_add: 'Add',
+    // JS-rendered
+    api_openai: 'OpenAI-compatible', api_anthropic: 'Anthropic Messages',
+    api_models_hint: 'models:', api_models_hint2: 'or alias', copied: 'Copied', copy: 'Copy',
+    th_provider: 'Provider', th_ok: 'OK', th_fail: 'Fail', th_rot: 'Rot', th_rate: 'Rate',
+    th_key: 'API Key', th_model: 'Model', th_model_id: 'Model ID', th_status: 'Status',
+    no_data: 'No data yet', no_keys: 'No keys yet — add one so this provider can serve requests',
+    st_ok: 'OK', st_cool: 'Cooling · ', st_invalid: 'Invalid · ',
+    st_enabled: 'Enabled', st_disabled: 'Disabled',
+    btn_show: 'Show', btn_hide: 'Hide', btn_edit: 'Edit', btn_del: 'Delete',
+    btn_addkey: 'Add key', btn_fetch: 'Fetch from upstream', btn_fetching: 'Fetching…',
+    btn_clear_invalid: 'Unblock', btn_clear_cool: 'Clear cooldown',
+    lbl_cooldown_cfg: 'Cooldown', lbl_learned: 'Learned', lbl_requests: 'Requests', lbl_last_err: 'Last error',
+    lbl_default: 'default', lbl_models: 'Models', lbl_alias: 'Aliases', lbl_none: 'none',
+    ph_key: 'API Key', ph_label: 'Label (optional)', ph_cooldown: 'Cooldown sec (optional)',
+    ph_model_id: 'Model ID, e.g. gpt-4o', ph_alias: 'Alias', ph_upstream_model: 'Upstream model name',
+    btn_addmodel: 'Add model', btn_addalias: 'Add alias',
+    allowlist_pill: 'allowlist', allowlist_toggle: ' Only allow listed models',
+    models_managed: ' managed', models_unmanaged: 'Not managed · all models allowed',
+    modal_title: 'Import models', modal_all: 'All / none', modal_cancel: 'Cancel', modal_import: 'Import selected',
+    modal_exists: 'exists', modal_selected: n => n + ' selected',
+    // toasts & dialogs
+    t_saved: 'Saved', t_fail: 'Failed: ', t_download: 'Download started',
+    t_import_ok: 'Imported, hot-reloaded', t_import_fail: 'Import failed: ',
+    c_import: n => 'Importing ' + n + ' will fully replace the current config (ports & auth included). Continue?',
+    t_key_notfound: 'Key not found', t_show_fail: 'Show failed: ', t_copy_fail: 'Copy failed: ',
+    p_new_name: 'New name', p_new_url: 'New Base URL', p_protocol: 'Protocol (openai / anthropic)',
+    c_del_provider: 'Delete this provider and all its keys?', c_del_key: 'Delete this key?',
+    c_del_model: m => 'Delete model ' + m + '? Aliases pointing to it will stop working.',
+    t_allowlist_on: 'Allowlist mode enabled', t_allowlist_off: 'Allowlist mode disabled',
+    t_fetch_fail: 'Fetch failed: ', t_fetch_none: 'Upstream returned no models',
+    t_no_model_sel: 'No models selected', t_imported: n => 'Imported ' + n + ' models',
+    hist_tip: (d, s, f) => d + ':00 · ok ' + s + ' / fail ' + f,
+    theme_dark: '🌙 Dark', theme_light: '☀️ Light',
+    lang_toggle: '中', learned_tip: 'learned automatically from 429 probes',
+    clear_cd: iv => iv ? 'Unblock' : 'Clear cooldown',
+    click_copy: 'Click to copy',
+  }
+};
+let LANG = 'zh';
+function t(key) { const v = I18N[LANG][key]; return v === undefined ? I18N.zh[key] : v; }
+function applyLang(lang) {
+  LANG = I18N[lang] ? lang : 'zh';
+  document.documentElement.lang = LANG === 'zh' ? 'zh-CN' : 'en';
+  document.querySelectorAll('[data-i18n]').forEach(el => { const v = I18N[LANG][el.dataset.i18n]; if (typeof v === 'string') el.textContent = v; });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => { const v = I18N[LANG][el.dataset.i18nPh]; if (typeof v === 'string') el.placeholder = v; });
+  $('lang-toggle').textContent = t('lang_toggle');
+  $('theme-toggle').textContent = document.documentElement.dataset.theme === 'light' ? t('theme_light') : t('theme_dark');
+  try { localStorage.setItem(LANG_KEY, LANG); } catch (e) {}
+  if (STATUS) renderConfig();
+  if (STATS) renderStats();
+}
+(function initLang() {
+  let saved = null;
+  try { saved = localStorage.getItem(LANG_KEY); } catch (e) {}
+  applyLang(saved || (navigator.language && navigator.language.startsWith('zh') ? 'zh' : 'en'));
+})();
+$('lang-toggle').addEventListener('click', () => applyLang(LANG === 'zh' ? 'en' : 'zh'));
+
 // ---------- theme ----------
 const THEME_KEY = 'sakura-theme';
-function applyTheme(t) {
-  document.documentElement.dataset.theme = t;
-  $('theme-toggle').textContent = t === 'light' ? '🌙 深色' : '☀️ 浅色';
-  try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
+function applyTheme(t2) {
+  document.documentElement.dataset.theme = t2;
+  $('theme-toggle').textContent = t2 === 'light' ? t('theme_light') : t('theme_dark');
+  try { localStorage.setItem(THEME_KEY, t2); } catch (e) {}
 }
 (function initTheme() {
   let saved = null;
@@ -466,6 +597,14 @@ function applyTheme(t) {
 })();
 $('theme-toggle').addEventListener('click', () =>
   applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'));
+
+// clickable API URLs: copy to clipboard
+for (const id of ['api-url', 'api-url-anthropic']) {
+  const el = $(id);
+  el.style.cursor = 'pointer';
+  el.title = t('click_copy');
+  el.addEventListener('click', () => copyText(el.textContent, null));
+}
 
 // ---------- tabs ----------
 function switchPage(name) {
@@ -485,10 +624,17 @@ function toast(t) { const m = $('msg'); m.textContent = t; m.style.display='bloc
 function esc(s) { return String(s).replace(/[&<>\\\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\\\"':'&quot;'}[c])); }
 
 // ---------- data loading ----------
+function copyText(s, btn) {
+  const done = () => { if (!btn) { toast(t('copied')); return; } const old = btn.textContent; btn.textContent = t('copied'); setTimeout(() => btn.textContent = old, 1200); };
+  if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(s).then(done).catch(() => {}); }
+  else { const ta = document.createElement('textarea'); ta.value = s; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch (e) {} ta.remove(); }
+}
 async function refresh() {
   try {
     STATUS = await api('GET', '/api/status');
-    $('api-url').textContent = `http://127.0.0.1:${STATUS.api_port}/v1`;
+    const base = `http://127.0.0.1:${STATUS.api_port}`;
+    $('api-url').textContent = base + '/v1';
+    $('api-url-anthropic').textContent = base + '/v1/messages';
     $('s-cooldown').value = STATUS.default_cooldown_secs;
     $('s-attempts').value = STATUS.max_attempts;
     $('s-apiport').value = STATUS.api_port;
@@ -524,7 +670,7 @@ function renderStats() {
     const okH = (h.success / peak * 100).toFixed(2);
     const failH = (h.fail / peak * 100).toFixed(2);
     const totalH = h.success + h.fail;
-    return `<div class="bar-wrap" title="${new Date(h.hour_ms).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit'})}时 · 成功 ${h.success} / 失败 ${h.fail}">
+    return `<div class="bar-wrap" title="${t('hist_tip')(new Date(h.hour_ms).getHours(), h.success, h.fail)}">
       ${h.fail ? `<div class="bar fail" style="height:${failH}%"></div>` : ''}
       ${h.success ? `<div class="bar ok" style="height:${okH}%"></div>` : (totalH ? '' : '')}
     </div>`;
@@ -534,27 +680,27 @@ function renderStats() {
 
   // provider table
   const provs = Object.entries(STATS.providers || {});
-  $('tbl-providers').innerHTML = `<tr><th>供应商</th><th>成功</th><th>失败</th><th>换Key</th><th>成功率</th></tr>` +
+  $('tbl-providers').innerHTML = `<tr><th>${t('th_provider')}</th><th>${t('th_ok')}</th><th>${t('th_fail')}</th><th>${t('th_rot')}</th><th>${t('th_rate')}</th></tr>` +
     (provs.length ? provs.map(([id, p]) => {
       const all = p.success + p.fail;
       return `<tr><td>${esc(p.name)}</td><td class="num">${p.success}</td><td class="num">${p.fail}</td><td class="num">${p.rotations || 0}</td><td class="num">${all ? (p.success/all*100).toFixed(1)+'%' : '—'}</td></tr>`;
-    }).join('') : `<tr><td colspan="5" class="faint">暂无数据</td></tr>`);
+    }).join('') : `<tr><td colspan="5" class="faint">${t('no_data')}</td></tr>`);
 
   // key table
   const keys = Object.entries(STATS.keys || {});
-  $('tbl-keys').innerHTML = `<tr><th>API Key</th><th>成功</th><th>失败</th><th>成功率</th></tr>` +
+  $('tbl-keys').innerHTML = `<tr><th>${t('th_key')}</th><th>${t('th_ok')}</th><th>${t('th_fail')}</th><th>${t('th_rate')}</th></tr>` +
     (keys.length ? keys.map(([id, k]) => {
       const all = k.success + k.fail;
       return `<tr><td>${esc(k.name)}</td><td class="num">${k.success}</td><td class="num">${k.fail}</td><td class="num">${all ? (k.success/all*100).toFixed(1)+'%' : '—'}</td></tr>`;
-    }).join('') : `<tr><td colspan="4" class="faint">暂无数据</td></tr>`);
+    }).join('') : `<tr><td colspan="4" class="faint">${t('no_data')}</td></tr>`);
 
   // model table
   const models = Object.entries(STATS.models || {});
-  $('tbl-models').innerHTML = `<tr><th>模型</th><th>成功</th><th>失败</th><th>成功率</th></tr>` +
+  $('tbl-models').innerHTML = `<tr><th>${t('th_model')}</th><th>${t('th_ok')}</th><th>${t('th_fail')}</th><th>${t('th_rate')}</th></tr>` +
     (models.length ? models.map(([m, s]) => {
       const all = s.success + s.fail;
       return `<tr><td><span class="keytag">${esc(m)}</span></td><td class="num">${s.success}</td><td class="num">${s.fail}</td><td class="num">${all ? (s.success/all*100).toFixed(1)+'%' : '—'}</td></tr>`;
-    }).join('') : `<tr><td colspan="4" class="faint">暂无数据</td></tr>`);
+    }).join('') : `<tr><td colspan="4" class="faint">${t('no_data')}</td></tr>`);
 }
 
 // ---------- CONFIG page ----------
@@ -568,78 +714,78 @@ function renderConfig() {
         <div class="base-url">${esc(p.base_url)}</div>
       </div>
       <div class="row">
-        ${p.model_allowlist_only ? '<span class="pill">白名单</span>' : ''}
-        <button class="small" onclick="renameProvider('${p.id}')">编辑</button>
-        <button class="small danger" onclick="delProvider('${p.id}')">删除</button>
+        ${p.model_allowlist_only ? `<span class="pill">${t('allowlist_pill')}</span>` : ''}
+        <button class="small" onclick="renameProvider('${p.id}')">${t('btn_edit')}</button>
+        <button class="small danger" onclick="delProvider('${p.id}')">${t('btn_del')}</button>
       </div>
     </div>
 
     <table class="divider">
-      <tr><th>API Key</th><th>状态</th><th>冷却配置</th><th>学习冷却</th><th>请求数</th><th>最近错误</th><th></th></tr>
+      <tr><th>${t('th_key')}</th><th>${t('th_status')}</th><th>${t('lbl_cooldown_cfg')}</th><th>${t('lbl_learned')}</th><th>${t('lbl_requests')}</th><th>${t('lbl_last_err')}</th><th></th></tr>
       ${p.keys.length ? p.keys.map(k => {
         const c = k.cooling, iv = k.invalid;
         const st = iv
-          ? `<span class="st off" data-until="${iv.until_ms}" data-kind="invalid">无效 · 剩余 ${Math.max(0, Math.ceil((iv.until_ms - STATUS.now_ms)/1000))}s</span>`
+          ? `<span class="st off" data-until="${iv.until_ms}" data-kind="invalid">${t('st_invalid')}${Math.max(0, Math.ceil((iv.until_ms - STATUS.now_ms)/1000))}s</span>`
           : c
-          ? `<span class="st cool" data-until="${c.until_ms}">冷却 · 剩余 ${Math.max(0, Math.ceil((c.until_ms - STATUS.now_ms)/1000))}s</span>`
-          : `<span class="st ok">可用</span>`;
+          ? `<span class="st cool" data-until="${c.until_ms}">${t('st_cool')}${Math.max(0, Math.ceil((c.until_ms - STATUS.now_ms)/1000))}s</span>`
+          : `<span class="st ok">${t('st_ok')}</span>`;
         return `<tr>
           <td><span class="keytag" data-key-id="${k.id}" data-revealed="0">${esc(k.key)}</span></td>
           <td>${st}</td>
-          <td class="num">${k.cooldown_secs ?? '默认'}</td>
-          <td class="num">${k.learned_cooldown != null ? `<span class="pill" title="由 429 探测自动学习">${k.learned_cooldown}s</span>` : '—'}</td>
+          <td class="num">${k.cooldown_secs ?? t('lbl_default')}</td>
+          <td class="num">${k.learned_cooldown != null ? `<span class="pill" title="${t('learned_tip')}">${k.learned_cooldown}s</span>` : '—'}</td>
           <td class="num">${k.requests}</td>
           <td class="err-cell" title="${esc(k.last_error||'')}">${esc(k.last_error||'—')}</td>
           <td class="row">
-            <button class="small" onclick="toggleKey('${k.id}', this)">显示</button>
-            <button class="small" onclick="copyKey('${k.id}', this)">复制</button>
-            ${(c || iv) ? `<button class="small" onclick="clearCooldown('${k.id}')">解除${iv ? '无效' : '冷却'}</button>` : ''}
-            <button class="small danger" onclick="delKey('${p.id}','${k.id}')">删除</button>
+            <button class="small" onclick="toggleKey('${k.id}', this)">${t('btn_show')}</button>
+            <button class="small" onclick="copyKey('${k.id}', this)">${t('copy')}</button>
+            ${(c || iv) ? `<button class="small" onclick="clearCooldown('${k.id}')">${t('clear_cd')(!!iv)}</button>` : ''}
+            <button class="small danger" onclick="delKey('${p.id}','${k.id}')">${t('btn_del')}</button>
           </td></tr>`;
-      }).join('') : `<tr><td colspan="7" class="faint">还没有 Key，添加第一把后这个提供商才能服务请求</td></tr>`}
+      }).join('') : `<tr><td colspan="7" class="faint">${t('no_keys')}</td></tr>`}
     </table>
     <div class="pad divider row">
-      <input placeholder="API Key" id="nk-${p.id}" style="flex:1;min-width:200px">
-      <input placeholder="备注（可选）" id="nl-${p.id}" style="width:130px">
-      <input placeholder="冷却秒（可选）" id="nc-${p.id}" type="number" style="width:120px">
-      <button onclick="addKey('${p.id}')">添加 Key</button>
+      <input placeholder="${t('ph_key')}" id="nk-${p.id}" style="flex:1;min-width:200px">
+      <input placeholder="${t('ph_label')}" id="nl-${p.id}" style="width:130px">
+      <input placeholder="${t('ph_cooldown')}" id="nc-${p.id}" type="number" style="width:120px">
+      <button onclick="addKey('${p.id}')">${t('btn_addkey')}</button>
     </div>
 
     <div class="pad divider">
       <div class="row" style="justify-content:space-between">
         <div class="row">
-          <span style="font-weight:600">模型</span>
-          <span class="faint" style="font-size:12px">${p.models.length ? p.models.length + ' 个' : '未托管 · 放行所有模型'}</span>
+          <span style="font-weight:600">${t('lbl_models')}</span>
+          <span class="faint" style="font-size:12px">${p.models.length ? p.models.length + t('models_managed') : t('models_unmanaged')}</span>
         </div>
         <div class="row">
-          <label class="row" style="gap:5px;font-size:12px;color:var(--muted)" title="开启后仅允许请求列表内的模型">
-            <input type="checkbox" ${p.model_allowlist_only ? 'checked' : ''} onchange="setAllowlist('${p.id}', this.checked)"> 仅允许列表内模型
+          <label class="row" style="gap:5px;font-size:12px;color:var(--muted)" title="${t('allowlist_toggle').trim()}">
+            <input type="checkbox" ${p.model_allowlist_only ? 'checked' : ''} onchange="setAllowlist('${p.id}', this.checked)">${t('allowlist_toggle')}
           </label>
-          <button class="small" onclick="fetchUpstreamModels('${p.id}')">从上游拉取</button>
+          <button class="small" onclick="fetchUpstreamModels('${p.id}')">${t('btn_fetch')}</button>
         </div>
       </div>
       ${p.models.length ? `<table style="margin-top:8px">
-        <tr><th>模型 ID</th><th>状态</th><th></th></tr>
+        <tr><th>${t('th_model_id')}</th><th>${t('th_status')}</th><th></th></tr>
         ${p.models.map(m => `<tr>
           <td><span class="keytag">${esc(m.id)}</span></td>
-          <td>${m.enabled ? '<span class="st ok">启用</span>' : '<span class="st off">已禁用</span>'}</td>
+          <td>${m.enabled ? `<span class="st ok">${t('st_enabled')}</span>` : `<span class="st off">${t('st_disabled')}</span>`}</td>
           <td class="row">
-            <button class="small" onclick="toggleModel('${p.id}','${esc(m.id)}')">${m.enabled ? '禁用' : '启用'}</button>
-            <button class="small danger" onclick="delModel('${p.id}','${esc(m.id)}')">删除</button>
+            <button class="small" onclick="toggleModel('${p.id}','${esc(m.id)}')">${m.enabled ? t('st_disabled') : t('st_enabled')}</button>
+            <button class="small danger" onclick="delModel('${p.id}','${esc(m.id)}')">${t('btn_del')}</button>
           </td></tr>`).join('')}
       </table>` : ''}
       <div class="row" style="margin-top:10px">
-        <input placeholder="模型 ID，如 gpt-4o" id="nm-${p.id}" style="flex:1;min-width:200px">
-        <button onclick="addModel('${p.id}')">添加模型</button>
+        <input placeholder="${t('ph_model_id')}" id="nm-${p.id}" style="flex:1;min-width:200px">
+        <button onclick="addModel('${p.id}')">${t('btn_addmodel')}</button>
       </div>
     </div>
 
     <div class="pad divider row">
-      <span class="faint" style="font-size:12px">别名</span>
-      ${Object.entries(p.aliases).map(([a,m]) => `<span class="keytag">${esc(a)} → ${esc(m)} <a href="#" style="color:var(--err);text-decoration:none" onclick="delAlias('${p.id}','${esc(a)}');return false"> ✕</a></span>`).join('') || '<span class="faint" style="font-size:12px">无</span>'}
-      <input placeholder="别名" id="al-${p.id}" style="width:110px">
-      <input placeholder="上游模型名" id="am-${p.id}" style="width:150px">
-      <button class="small" onclick="addAlias('${p.id}')">添加别名</button>
+      <span class="faint" style="font-size:12px">${t('lbl_alias')}</span>
+      ${Object.entries(p.aliases).map(([a,m]) => `<span class="keytag">${esc(a)} → ${esc(m)} <a href="#" style="color:var(--err);text-decoration:none" onclick="delAlias('${p.id}','${esc(a)}');return false"> ✕</a></span>`).join('') || `<span class="faint" style="font-size:12px">${t('lbl_none')}</span>`}
+      <input placeholder="${t('ph_alias')}" id="al-${p.id}" style="width:110px">
+      <input placeholder="${t('ph_upstream_model')}" id="am-${p.id}" style="width:150px">
+      <button class="small" onclick="addAlias('${p.id}')">${t('btn_addalias')}</button>
     </div>
   </div>`).join('');
 }
@@ -653,28 +799,28 @@ async function saveSettings() {
       ui_port: +$('s-uiport').value || 8001,
       auth: { enabled: $('s-auth').checked, keys: $('s-authkeys').value.split(',').map(s=>s.trim()).filter(Boolean) }
     });
-    toast('已保存'); refresh();
-  } catch (e) { toast('失败: ' + e.message); }
+    toast(t('t_saved')); refresh();
+  } catch (e) { toast(t('t_fail') + e.message); }
 }
 
 // ---------- config import / export ----------
 function exportConfig() {
   window.open('/api/config/export', '_blank');
-  toast('已触发下载');
+  toast(t('t_download'));
 }
 async function importConfig(ev) {
   const file = ev.target.files[0];
   ev.target.value = '';
   if (!file) return;
-  if (!confirm(`导入 ${file.name} 将整体替换当前配置（含端口与鉴权设置），确定继续？`)) return;
+  if (!confirm(t('c_import')(file.name))) return;
   try {
     const content = await file.text();
     // client-side sanity check for fast feedback; the server re-validates fully
     JSON.parse(content);
     await api('POST', '/api/config/import', { content });
-    toast('导入成功，已热生效');
+    toast(t('t_import_ok'));
     refresh();
-  } catch (e) { toast('导入失败: ' + e.message); }
+  } catch (e) { toast(t('t_import_fail') + e.message); }
 }
 
 // ---------- key show / copy ----------
@@ -697,26 +843,26 @@ async function toggleKey(keyId, btn) {
     const k = (STATUS?.providers || []).flatMap(p => p.keys).find(k => k.id === keyId);
     tag.textContent = k ? k.key : '••••';
     tag.dataset.revealed = '0';
-    btn.textContent = '显示';
+    btn.textContent = t('btn_show');
     return;
   }
   try {
     const real = await findRealKey(keyId);
-    if (!real) { toast('未找到该 Key'); return; }
+    if (!real) { toast(t('t_key_notfound')); return; }
     tag.textContent = real;
     tag.dataset.revealed = '1';
-    btn.textContent = '隐藏';
-  } catch (e) { toast('显示失败: ' + e.message); }
+    btn.textContent = t('btn_hide');
+  } catch (e) { toast(t('t_show_fail') + e.message); }
 }
 async function copyKey(keyId, btn) {
   try {
     const real = await findRealKey(keyId);
-    if (!real) { toast('未找到该 Key'); return; }
+    if (!real) { toast(t('t_key_notfound')); return; }
     await navigator.clipboard.writeText(real);
     const old = btn.textContent;
-    btn.textContent = '已复制';
+    btn.textContent = t('copied');
     setTimeout(() => btn.textContent = old, 1200);
-  } catch (e) { toast('复制失败: ' + e.message); }
+  } catch (e) { toast(t('t_copy_fail') + e.message); }
 }
 
 // ---------- provider / key / model actions ----------
@@ -729,13 +875,13 @@ async function addProvider() {
 }
 async function renameProvider(id) {
   const p = STATUS.providers.find(x=>x.id===id);
-  const name = prompt('新名称', p.name); if (name===null) return;
-  const url = prompt('新 Base URL', p.base_url); if (url===null) return;
-  const proto = prompt('协议（openai / anthropic）', p.protocol || 'openai'); if (proto===null) return;
+  const name = prompt(t('p_new_name'), p.name); if (name===null) return;
+  const url = prompt(t('p_new_url'), p.base_url); if (url===null) return;
+  const proto = prompt(t('p_protocol'), p.protocol || 'openai'); if (proto===null) return;
   try { await api('PUT', '/api/providers/'+id, { name, base_url: url, protocol: proto }); refresh(); } catch(e){ toast(e.message); }
 }
 async function delProvider(id) {
-  if (!confirm('删除该提供商及其所有 Key？')) return;
+  if (!confirm(t('c_del_provider'))) return;
   try { await api('DELETE', '/api/providers/'+id); refresh(); } catch(e){ toast(e.message); }
 }
 async function addKey(id) {
@@ -744,7 +890,7 @@ async function addKey(id) {
   catch(e){ toast(e.message); }
 }
 async function delKey(pid, kid) {
-  if (!confirm('删除该 Key？')) return;
+  if (!confirm(t('c_del_key'))) return;
   try { await api('DELETE', `/api/providers/${pid}/keys/${kid}`); refresh(); } catch(e){ toast(e.message); }
 }
 async function clearCooldown(kid) {
@@ -763,7 +909,7 @@ async function addModel(id) {
   catch(e){ toast(e.message); }
 }
 async function delModel(id, mid) {
-  if (!confirm(`删除模型 ${mid}？指向它的别名将无法使用。`)) return;
+  if (!confirm(t('c_del_model')(mid))) return;
   try { await api('DELETE', `/api/providers/${id}/models/${encodeURIComponent(mid)}`); refresh(); } catch(e){ toast(e.message); }
 }
 async function toggleModel(id, mid) {
@@ -771,20 +917,20 @@ async function toggleModel(id, mid) {
 }
 async function setAllowlist(id, on) {
   const p = STATUS.providers.find(x=>x.id===id);
-  try { await api('PUT', '/api/providers/'+id, { name: p.name, base_url: p.base_url, model_allowlist_only: on }); toast(on ? '白名单模式已开启' : '白名单模式已关闭'); }
+  try { await api('PUT', '/api/providers/'+id, { name: p.name, base_url: p.base_url, model_allowlist_only: on }); toast(on ? t('t_allowlist_on') : t('t_allowlist_off')); }
   catch(e){ toast(e.message); refresh(); }
 }
 
 async function fetchUpstreamModels(id) {
   const btn = event.target;
-  btn.disabled = true; btn.textContent = '拉取中…';
+  btn.disabled = true; btn.textContent = t('btn_fetching');
   let models;
   try {
     const r = await api('GET', `/api/providers/${id}/upstream-models`);
     models = r.models || [];
-  } catch(e) { toast('拉取失败: ' + e.message); btn.disabled=false; btn.textContent='从上游拉取'; return; }
-  btn.disabled = false; btn.textContent = '从上游拉取';
-  if (!models.length) { toast('上游未返回任何模型'); return; }
+  } catch(e) { toast(t('t_fetch_fail') + e.message); btn.disabled=false; btn.textContent=t('btn_fetch'); return; }
+  btn.disabled = false; btn.textContent = t('btn_fetch');
+  if (!models.length) { toast(t('t_fetch_none')); return; }
 
   const existing = new Set((STATUS.providers.find(x=>x.id===id).models||[]).map(m=>m.id));
   openModal(id, models, existing);
@@ -797,15 +943,15 @@ function openModal(pid, models, existing) {
     overlay.id = 'modal-overlay';
     overlay.className = 'overlay';
     overlay.innerHTML = `<div class="box">
-      <h3>导入模型</h3>
+      <h3>${t('modal_title')}</h3>
       <div class="row" style="margin:8px 0">
-        <button class="small" onclick="modalToggleAll()">全选 / 全不选</button>
+        <button class="small" onclick="modalToggleAll()">${t('modal_all')}</button>
         <span class="faint" style="font-size:12px" id="modal-count"></span>
       </div>
       <div id="modal-list"></div>
       <div class="row" style="margin-top:14px;justify-content:flex-end">
-        <button onclick="document.getElementById('modal-overlay').remove()">取消</button>
-        <button class="primary" onclick="modalImport()">导入所选</button>
+        <button onclick="document.getElementById('modal-overlay').remove()">${t('modal_cancel')}</button>
+        <button class="primary" onclick="modalImport()">${t('modal_import')}</button>
       </div>
     </div>`;
     document.body.appendChild(overlay);
@@ -816,13 +962,13 @@ function openModal(pid, models, existing) {
     <label class="row" style="gap:8px;padding:5px 0;font-size:13px">
       <input type="checkbox" class="modal-cb" value="${esc(m)}" ${existing.has(m) ? '' : 'checked'}>
       <span class="keytag">${esc(m)}</span>
-      ${existing.has(m) ? '<span class="faint" style="font-size:11px">已存在</span>' : ''}
+      ${existing.has(m) ? `<span class="faint" style="font-size:11px">${t('modal_exists')}</span>` : ''}
     </label>`).join('');
   updateModalCount();
 }
 function updateModalCount() {
   const cbs = [...document.querySelectorAll('.modal-cb:checked')];
-  $('modal-count').textContent = `已选 ${cbs.length} 个`;
+  $('modal-count').textContent = t('modal_selected')(cbs.length);
 }
 function modalToggleAll() {
   const cbs = [...document.querySelectorAll('.modal-cb')];
@@ -834,10 +980,10 @@ async function modalImport() {
   const overlay = document.getElementById('modal-overlay');
   const pid = overlay.dataset.pid;
   const models = [...document.querySelectorAll('.modal-cb:checked')].map(c => c.value);
-  if (!models.length) { toast('未选择任何模型'); return; }
+  if (!models.length) { toast(t('t_no_model_sel')); return; }
   try {
     const r = await api('POST', `/api/providers/${pid}/models/import`, { models });
-    toast(`已导入 ${r.imported} 个模型`);
+    toast(t('t_imported')(r.imported));
     overlay.remove();
     refresh();
   } catch(e){ toast(e.message); }
@@ -857,7 +1003,7 @@ setInterval(() => {
   document.querySelectorAll('.st.cool[data-until], .st.off[data-until]').forEach(el => {
     const remain = Math.ceil((+el.dataset.until - now) / 1000);
     if (remain <= 0) { refresh(); return; }
-    el.textContent = (el.dataset.kind === 'invalid' ? '无效 · 剩余 ' : '冷却 · 剩余 ') + remain + 's';
+    el.textContent = (el.dataset.kind === 'invalid' ? t('st_invalid') : t('st_cool')) + remain + 's';
   });
 }, 1000);
 </script>
