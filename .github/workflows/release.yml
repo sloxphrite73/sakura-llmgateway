@@ -100,11 +100,14 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-
       - name: Install NDK
-        run: sdkmanager --install "ndk;26.3.11579264" > /dev/null && echo "ANDROID_NDK_LATEST_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
+        run: |
+          # The runner image ships a full Android SDK; the setup-android action is
+          # skipped because its current releases fail on images whose cmdline-tools
+          # dropped the legacy 'tools' package. Just accept licenses and install NDK.
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.3.11579264" > /dev/null
+          echo "ANDROID_NDK_LATEST_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
