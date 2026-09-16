@@ -49,6 +49,12 @@ T ──── 429 ──▶ [T, 2T]          success ──▶ [T/2, T]
 - 📦 **Managed models** - per-provider model catalog (`{ id, enabled }`), one-click
   import from the provider's `/v1/models` (with checkboxes), and an optional allowlist
   mode that rejects models not in the list
+- 🆓 **Free provider catalog** - the console's "Provider catalog" panel ships 9
+  OpenAI-compatible upstreams with free tiers (SiliconFlow, Z.AI GLM, OpenRouter
+  `:free`, Pollinations (keyless), Cerebras, NVIDIA NIM, Groq, Mistral, Cloudflare
+  Workers AI): each card carries a **setup-guide link** and preset free models —
+  **paste key → confirm** adds everything in one step (provider + models + keys).
+  The catalog is embedded in the binary and can also be refreshed from GitHub
 - 🎯 **Model routing** - request models as `provider/model` (e.g. `openai/gpt-4o`), or
   set up short **aliases** in the UI (e.g. `fast` → `gpt-4o-mini`)
 - 📊 **Status & statistics** - persistent request stats (`stats.json`): totals, a 24h

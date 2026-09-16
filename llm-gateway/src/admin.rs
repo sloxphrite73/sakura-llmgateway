@@ -5,11 +5,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
-fn ok<T: serde::Serialize>(v: T) -> Response {
+pub(crate) fn ok<T: serde::Serialize>(v: T) -> Response {
     (StatusCode::OK, Json(v)).into_response()
 }
 
-fn err(status: StatusCode, msg: &str) -> Response {
+pub(crate) fn err(status: StatusCode, msg: &str) -> Response {
     (status, Json(serde_json::json!({ "error": msg }))).into_response()
 }
 

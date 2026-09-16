@@ -111,6 +111,25 @@ Open `http://127.0.0.1:8001/`. From top to bottom:
 - **Local API auth** — off by default. When enabled, agents must present one of
   the configured keys as a Bearer token on `/v1/*`.
 
+### Provider catalog (free tiers)
+
+The "Provider catalog" panel at the top of the Config page ships a curated set of
+**free / free-tier OpenAI-compatible upstreams** (SiliconFlow, Z.AI GLM, OpenRouter
+`:free`, Pollinations (keyless), Cerebras, NVIDIA NIM, Groq, Mistral, Cloudflare
+Workers AI):
+
+- Each card shows free-tier notes, the preset free model list (expandable), a
+  **setup guide** link (pointing at step-by-step docs in this repo under
+  `doc/free-providers/`), and a **sign up / get key** link.
+- To add: claim your key via the guide → paste it into the card's input box (one
+  key per line) → click **Add**. The gateway creates the provider, imports the
+  preset free models, and stores the keys in one step.
+- **Pollinations is keyless** — add it with an empty key box (anonymous use has
+  rate limits).
+- Already-added cards show "✓ Added · N key"; you can always append more keys.
+- "Update from GitHub" pulls the latest catalog (added in v0.3.3; the catalog is
+  also embedded in the binary, so it works offline).
+
 ### Providers
 
 Each provider card manages one upstream:

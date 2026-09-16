@@ -250,6 +250,23 @@
   .divider { border-top: 1px solid var(--border); }
   .pad { padding: 12px 18px; }
 
+  /* ---------- free-provider catalog ---------- */
+  .catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  .catalog-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .catalog-card h3 { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .catalog-card .keyless-badge { font-size: 10px; padding: 1px 7px; border-radius: 99px; background: var(--ok); color: #fff; font-weight: 600; }
+  .catalog-card .c-notes { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .catalog-card .c-models { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--faint); line-height: 1.6; }
+  .catalog-card .c-models summary { cursor: pointer; font-family: inherit; }
+  .catalog-card .c-links { display: flex; gap: 12px; font-size: 12px; }
+  .catalog-card .c-links a { color: var(--sakura); text-decoration: none; }
+  .catalog-card .c-links a:hover { text-decoration: underline; }
+  .catalog-card textarea { width: 100%; min-height: 54px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg); color: var(--text); }
+  .catalog-card .c-actions { display: flex; align-items: center; gap: 10px; margin-top: auto; }
+  .catalog-card .added-tag { font-size: 12px; color: var(--ok); }
+  .mini { font-size: 12px; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; }
+  .mini:hover { color: var(--sakura); border-color: var(--sakura); }
+
   .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
   label.f { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
 
@@ -364,7 +381,7 @@
     </section>
 
     <section class="section">
-      <h2 class="section-title"><span data-i18n="hist_title">过去 24 小时请求</span> <span class="note" data-i18n="hist_note">每小时一柱 · 粉=成功 红=失败</span></h2>
+      <h2 class="section-title"><span data-i18n="hist_title">过去 24 小时请求</span> <span class="note" data-i18n="hist_note">每小时一柱 · 绿=成功 红=失败</span></h2>
       <div class="card card-pad">
         <div class="hist" id="hist"></div>
         <div class="hist-x" id="hist-x"></div>
@@ -423,6 +440,11 @@
     </section>
 
     <section class="section">
+      <h2 class="section-title"><span data-i18n="sec_catalog">现有提供商</span> <span class="note" data-i18n="catalog_note">免费供应商目录：领额度 → 粘贴 Key → 一键添加</span><button class="mini" id="catalog-refresh" onclick="refreshCatalog()" style="margin-left:10px" data-i18n="catalog_refresh">从 GitHub 更新目录</button></h2>
+      <div class="catalog-grid" id="catalog"></div>
+    </section>
+
+    <section class="section">
       <h2 class="section-title" data-i18n="sec_providers2">提供商</h2>
       <div id="providers"></div>
 
@@ -460,7 +482,7 @@ const I18N = {
     tab_status: 'Status / 统计', tab_config: 'Config / 配置',
     overview: '总览', overview_note: '每 5 秒自动刷新 · 统计数据已持久化，重启不丢失',
     stat_ok: '成功请求', stat_fail: '失败请求', stat_rot: '换 Key 次数', stat_rate: '成功率',
-    hist_title: '过去 24 小时请求', hist_note: '每小时一柱 · 粉=成功 红=失败',
+    hist_title: '过去 24 小时请求', hist_note: '每小时一柱 · 绿=成功 红=失败',
     sec_providers: '供应商', sec_keys: 'API Key', sec_models: '模型',
     cfg_file: '配置文件', cfg_file_note: 'gateway.json · 导出用于迁移，导入即时热生效，无需重启',
     btn_export: '导出配置', btn_import: '导入配置',
@@ -472,6 +494,11 @@ const I18N = {
     sec_providers2: '提供商', add_provider: '添加提供商',
     ph_np_name: '名称，如 openai', ph_np_url: 'Base URL，如 https://api.openai.com/v1',
     proto_openai: 'OpenAI 协议', proto_anthropic: 'Anthropic 协议', btn_add: '添加',
+    sec_catalog: '现有提供商', catalog_note: '免费供应商目录：领额度 → 粘贴 Key → 一键添加', catalog_refresh: '从 GitHub 更新目录', catalog_refreshing: '更新中…',
+    catalog_updated: '目录已更新', catalog_refresh_fail: '更新失败：', cat_keyless: '免 Key', cat_added: '已添加',
+    cat_models: '预置免费模型', cat_guide: '领额度教程', cat_signup: '注册 / 取 Key', cat_confirm: '确认添加',
+    ph_cat_keys: '粘贴 API Key，多个每行一个', cat_need_key: '此供应商需要 API Key', cat_key_fail: '部分 Key 添加失败：',
+    cat_added_ok: '添加成功', cat_add_fail: '添加失败：',
     // JS-rendered
     api_openai: 'OpenAI 兼容接口', api_anthropic: 'Anthropic Messages',
     api_models_hint: '模型用', api_models_hint2: '或别名', copied: '已复制', copy: '复制',
@@ -513,7 +540,7 @@ const I18N = {
     tab_status: 'Status / Stats', tab_config: 'Config',
     overview: 'Overview', overview_note: 'Auto-refresh every 5s · stats persist across restarts',
     stat_ok: 'Successful requests', stat_fail: 'Failed requests', stat_rot: 'Key rotations', stat_rate: 'Success rate',
-    hist_title: 'Requests · last 24h', hist_note: 'one bar per hour · pink=ok red=fail',
+    hist_title: 'Requests · last 24h', hist_note: 'one bar per hour · green=ok red=fail',
     sec_providers: 'Providers', sec_keys: 'API Keys', sec_models: 'Models',
     cfg_file: 'Config file', cfg_file_note: 'gateway.json · export to migrate, import hot-reloads, no restart needed',
     btn_export: 'Export config', btn_import: 'Import config',
@@ -525,6 +552,11 @@ const I18N = {
     sec_providers2: 'Providers', add_provider: 'Add provider',
     ph_np_name: 'Name, e.g. openai', ph_np_url: 'Base URL, e.g. https://api.openai.com/v1',
     proto_openai: 'OpenAI protocol', proto_anthropic: 'Anthropic protocol', btn_add: 'Add',
+    sec_catalog: 'Provider catalog', catalog_note: 'free providers: claim credits → paste key → one-click add', catalog_refresh: 'Update from GitHub', catalog_refreshing: 'Updating…',
+    catalog_updated: 'Catalog updated', catalog_refresh_fail: 'Refresh failed: ', cat_keyless: 'keyless', cat_added: 'Added',
+    cat_models: 'Included free models', cat_guide: 'Setup guide', cat_signup: 'Sign up / get key', cat_confirm: 'Add',
+    ph_cat_keys: 'Paste API keys, one per line', cat_need_key: 'This provider needs an API key', cat_key_fail: 'Some keys failed: ',
+    cat_added_ok: 'Provider added', cat_add_fail: 'Add failed: ',
     // JS-rendered
     api_openai: 'OpenAI-compatible', api_anthropic: 'Anthropic Messages',
     api_models_hint: 'models:', api_models_hint2: 'or alias', copied: 'Copied', copy: 'Copy',
@@ -564,6 +596,7 @@ const I18N = {
   }
 };
 let LANG = 'zh';
+let CATALOG = null;   // /api/free-catalog payload (filled by loadCatalog below)
 function t(key) { const v = I18N[LANG][key]; return v === undefined ? I18N.zh[key] : v; }
 function applyLang(lang) {
   LANG = I18N[lang] ? lang : 'zh';
@@ -575,6 +608,7 @@ function applyLang(lang) {
   try { localStorage.setItem(LANG_KEY, LANG); } catch (e) {}
   if (STATUS) renderConfig();
   if (STATS) renderStats();
+  if (CATALOG) renderCatalog();
 }
 (function initLang() {
   let saved = null;
@@ -643,6 +677,7 @@ async function refresh() {
     $('s-authkeys').value = (STATUS.auth.keys || []).join(',');
     renderConfig();
     renderStatus();
+    renderCatalog();
   } catch (e) { console.error('refresh failed', e); }
 }
 
@@ -651,6 +686,78 @@ async function refreshStats() {
     STATS = await api('GET', '/api/stats');
     renderStats();
   } catch (e) { console.error('stats failed', e); }
+}
+
+// ---------- free-provider catalog ----------
+
+async function loadCatalog() {
+  try { CATALOG = await api('GET', '/api/free-catalog'); renderCatalog(); }
+  catch (e) { console.error('catalog load failed', e); }
+}
+
+async function refreshCatalog() {
+  const btn = $('catalog-refresh');
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = t('catalog_refreshing');
+  try {
+    CATALOG = await api('POST', '/api/free-catalog/refresh');
+    renderCatalog();
+    toast(t('catalog_updated'));
+  } catch (e) { toast(t('catalog_refresh_fail') + e.message); }
+  btn.disabled = false; btn.textContent = old;
+}
+
+function renderCatalog() {
+  if (!CATALOG) return;
+  const added = {};
+  (STATUS.providers || []).forEach(p => { added[p.name] = p; });
+  const html = (CATALOG.providers || []).map(p => {
+    const cur = added[p.name];
+    const keyCnt = cur ? (cur.keys || []).length : 0;
+    const models = p.free_models.map(m => '<div>' + esc(m) + '</div>').join('');
+    return '<div class="catalog-card" data-cat="' + esc(p.id) + '">' +
+      '<h3>' + esc(p.name) + (p.keyless ? ' <span class="keyless-badge">' + esc(t('cat_keyless')) + '</span>' : '') + (cur ? '<span class="added-tag">✓ ' + esc(t('cat_added')) + ' · ' + keyCnt + ' key</span>' : '') + '</h3>' +
+      '<div class="c-notes">' + esc(LANG === 'zh' ? p.notes_zh : p.notes_en) + '</div>' +
+      '<details class="c-models"><summary>' + esc(t('cat_models')) + ' (' + p.free_models.length + ')</summary>' + models + '</details>' +
+      '<div class="c-links">' +
+        '<a href="' + esc(p.guide_link) + '" target="_blank" rel="noopener">' + esc(t('cat_guide')) + '</a>' +
+        '<a href="' + esc(p.signup_url) + '" target="_blank" rel="noopener">' + esc(t('cat_signup')) + '</a>' +
+      '</div>' +
+      '<div class="c-actions">' +
+        '<textarea id="cat-keys-' + esc(p.id) + '" data-i18n-ph="ph_cat_keys" placeholder="' + esc(t('ph_cat_keys')) + '"></textarea>' +
+        '<button class="primary" onclick="addFromCatalog(\'' + esc(p.id) + '\')">' + esc(t('cat_confirm')) + '</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  $('catalog').innerHTML = html;
+  document.querySelectorAll('#catalog [data-i18n-ph]').forEach(el => { const v = I18N[LANG][el.dataset.i18nPh]; if (typeof v === 'string') el.placeholder = v; });
+}
+
+async function addFromCatalog(catalogId) {
+  const p = (CATALOG.providers || []).find(x => x.id === catalogId);
+  if (!p) return;
+  const keysRaw = ($('cat-keys-' + catalogId).value || '').split(/\n+/).map(s => s.trim()).filter(Boolean);
+  if (!p.keyless && keysRaw.length === 0) { toast(t('cat_need_key')); return; }
+  try {
+    // 1. create provider (skip if already exists by exact name match)
+    let prov = (STATUS.providers || []).find(x => x.name === p.name);
+    if (!prov) {
+      await api('POST', '/api/providers', { name: p.name, base_url: p.base_url, protocol: p.protocol });
+      await refresh();
+      prov = (STATUS.providers || []).find(x => x.name === p.name);
+    }
+    if (!prov) throw new Error('provider create failed');
+    // 2. import free models (bulk; per-model conflicts ignored by the import endpoint)
+    await api('POST', '/api/providers/' + prov.id + '/models/import', { models: p.free_models });
+    // 3. add keys (one by one; duplicates surface as visible errors per key)
+    for (const k of keysRaw) {
+      try { await api('POST', '/api/providers/' + prov.id + '/keys', { key: k }); }
+      catch (e) { toast(t('cat_key_fail') + e.message); }
+    }
+    $('cat-keys-' + catalogId).value = '';
+    await refresh();
+    toast(t('cat_added_ok'));
+  } catch (e) { toast(t('cat_add_fail') + e.message); }
 }
 
 // ---------- STATUS page ----------
@@ -992,6 +1099,7 @@ async function modalImport() {
 // ---------- polling loops ----------
 refresh();
 refreshStats();
+loadCatalog();
 setInterval(refresh, 5000);     // config + pool state
 setInterval(refreshStats, 5000); // request statistics
 

@@ -1,5 +1,6 @@
 mod admin;
 mod config;
+mod free_catalog;
 mod protocol;
 mod proxy;
 mod state;
@@ -86,6 +87,8 @@ async fn main() {
         .route("/api/stats", get(admin::get_stats))
         .route("/api/config/export", get(admin::export_config))
         .route("/api/config/import", post(admin::import_config))
+        .route("/api/free-catalog", get(free_catalog::get_catalog))
+        .route("/api/free-catalog/refresh", post(free_catalog::refresh_catalog))
         .with_state(app.clone());
 
     // Background flushers: stats.json every 5s; gateway.json debounced 10s after the

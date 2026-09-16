@@ -613,3 +613,23 @@ Android 在主线程做 socket I/O 会抛 NetworkOnMainThreadException，被 `ca
 - 包含：WebUI 双语 i18n + Anthropic 地址展示（d8b53c1）、Issue #2 小屏修复（3898a75）。
 - 发布前处理过一次 push 被拒：远端多了用户加的 README 反馈链接提交（318d5f7/43e0d43），rebase 后推送，无冲突。
 - 文档同步（2026-09-16）：使用说明.md / USAGE.md 已补上——启动服务表加 Anthropic Messages 地址行；安卓「日常使用」表加通知权限说明（Android 13+ 运行时请求）并更新看门狗描述（首次 2 秒、之后每 10 秒）；模拟器提示改为升级 v0.3.2+（涵盖启动竞态、通知权限、小屏按钮三修）；Web 控制台「主题」小节扩为「主题与语言」（EN/中 切换 + localStorage + 跟随浏览器 + 顶部双地址点击复制）；配置参考示例加 `"protocol": "openai"`，字段表加 `providers[].protocol`。中英两份同步修改，结构一致。
+
+## 18. 免费供应商目录（现有提供商面板）+ 统计图例修复
+
+**背景**：用户要求对齐 OmniRoute 的「白嫖免费」能力。经 grill-me 两轮定界：本次只做**目录层**（降低免费上游接入成本），跨供应商回退/路由策略明确推迟（等路由策略需求定稿再做）；目录仅收录 OpenAI 兼容上游；更新机制 = 二进制内嵌 + GitHub raw 按需拉取（不静默自动更新）。
+
+**实现**：
+
+- `llm-gateway/free-catalog.json`：9 家供应商（SiliconFlow、Z.AI、OpenRouter :free、Pollinations(keyless)、Cerebras、NVIDIA NIM、Groq、Mistral、Cloudflare Workers AI），字段含 base_url/protocol/keyless/signup_url/guide_url/notes_zh/notes_en/free_models。`include_str!` 编译期内嵌。
+- `src/free_catalog.rs`：`GET /api/free-catalog`（内嵌或本会话已拉取的远程缓存）、`POST /api/free-catalog/refresh`（GitHub raw 拉取 → 结构校验（空列表/非法 protocol 拒绝）→ 内存缓存，仅会话级）。guide_url 重写为 GitHub blob 链接。`CatalogCache` 挂在 App 上。
+- 教程文档 `doc/free-providers/*.md` ×9（中文，注册→取 Key→领额度→回网关添加的分步说明）。
+- WebUI 配置页新增「现有提供商」卡片面板：免费说明 + 可展开模型列表 + 教程/注册双链接 + 多 Key 输入框（每行一个）+ 确认添加。添加动作 = 现有 admin API 组合（create_provider → models/import → 逐个 add_key），不引入新供应商类型。已添加卡片显示「✓ 已添加 · N key」。i18n 中英双语全覆盖。
+- 顺手修复统计面板图例文案：「粉=成功」→「绿=成功」（hist bars 用的是 --ok 绿色，文案写错色；zh 静态 HTML + zh 字典 + en 字典三处）。
+
+**坑与教训**：
+
+1. `let CATALOG` 声明放在了 initLang() 之后——`applyLang` 在初始化时同步调用 `renderCatalog`（通过 `if (CATALOG) renderCatalog()`）会触发 TDZ "Cannot access before initialization"。教训：**给 applyLang 增加新依赖状态时，声明必须提到 applyLang 定义之前**（和 LANG 本身一样）。
+2. cargo build 报 os error 5（拒绝访问）＝旧 exe 进程还活着锁着文件；先 Stop-Process 再 build。
+3. /api/free-catalog/refresh 在目录 JSON 推上 GitHub 之前会 404——这是预期行为，优雅失败（toast 报错、目录保持内嵌版）；**推完代码再验证 refresh**。
+
+**验证反馈回路**：cargo check/test（13 通过）→ release 构建 → 真实进程 + preview：9 张卡片渲染、Pollinations 免 Key 添加成功（provider + 3 模型）、OpenRouter 双 Key 添加成功（6 模型 + 2 key 掩码入库）、刷新后「已添加」标签持久、图例文案正确。refresh 的 GitHub 路径待推送后可通（404 → 200）。

@@ -40,6 +40,9 @@ pub struct App {
     /// key id -> Instant when its learned_cooldown was last written (in-process only;
     /// used to rate-limit re-learning probes, not persisted).
     learned_at: Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    /// Free-provider catalog: session cache for a remote refresh (embedded catalog
+    /// is compile-time and needs no state).
+    pub catalog: crate::free_catalog::CatalogCache,
 }
 
 pub fn now_ms() -> u64 {
@@ -66,6 +69,7 @@ impl App {
             stats_path,
             config_dirty: Mutex::new(false),
             learned_at: Mutex::new(std::collections::HashMap::new()),
+            catalog: crate::free_catalog::CatalogCache::new(),
         }
     }
 

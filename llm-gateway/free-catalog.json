@@ -1,0 +1,159 @@
+{
+  "version": 1,
+  "updated": "2026-09-16",
+  "providers": [
+    {
+      "id": "siliconflow",
+      "name": "SiliconFlow 硅基流动",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://cloud.siliconflow.cn/account/ak",
+      "guide_url": "doc/free-providers/siliconflow.md",
+      "notes_zh": "注册即送额度；DeepSeek / Qwen 等多款小模型永久免费",
+      "notes_en": "Free credits on signup; several small models (DeepSeek/Qwen) free forever",
+      "free_models": [
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        "deepseek-ai/DeepSeek-V3",
+        "Qwen/Qwen2.5-7B-Instruct",
+        "Qwen/Qwen2.5-Coder-7B-Instruct",
+        "THUDM/glm-4-9b-chat"
+      ]
+    },
+    {
+      "id": "zai",
+      "name": "Z.AI (智谱 GLM)",
+      "base_url": "https://api.z.ai/api/paas/v4",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://z.ai/manage-apikey/apikey-list",
+      "guide_url": "doc/free-providers/zai.md",
+      "notes_zh": "GLM-4-Flash 系列免费；新用户赠翻译/体验额度",
+      "notes_en": "GLM-4-Flash series is free; new users get trial credits",
+      "free_models": [
+        "glm-4-flash",
+        "glm-4-flashx",
+        "glm-4.5-flash"
+      ]
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter :free",
+      "base_url": "https://openrouter.ai/api/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://openrouter.ai/keys",
+      "guide_url": "doc/free-providers/openrouter.md",
+      "notes_zh": "带 :free 后缀的模型免费（有每日请求数限制）；充 $10 可提升限额",
+      "notes_en": "Models with a :free suffix are free (daily request caps); $10 top-up raises limits",
+      "free_models": [
+        "deepseek/deepseek-chat-v3.1:free",
+        "deepseek/deepseek-r1:free",
+        "qwen/qwen3-coder:free",
+        "moonshotai/kimi-k2:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "google/gemini-2.0-flash-exp:free"
+      ]
+    },
+    {
+      "id": "pollinations",
+      "name": "Pollinations",
+      "base_url": "https://text.pollinations.ai/openai",
+      "protocol": "openai",
+      "keyless": true,
+      "signup_url": "https://auth.pollinations.ai",
+      "guide_url": "doc/free-providers/pollinations.md",
+      "notes_zh": "无需 Key 即可用（匿名有频率限制）；注册 token 可提升限额",
+      "notes_en": "Works without a key (anonymous rate limits); a free token raises the caps",
+      "free_models": [
+        "openai",
+        "openai-fast",
+        "openai-large"
+      ]
+    },
+    {
+      "id": "cerebras",
+      "name": "Cerebras",
+      "base_url": "https://api.cerebras.ai/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://cloud.cerebras.ai",
+      "guide_url": "doc/free-providers/cerebras.md",
+      "notes_zh": "免费层每天约 100 万 tokens，速度极快（专用推理芯片）",
+      "notes_en": "Free tier ~1M tokens/day, extremely fast (dedicated inference silicon)",
+      "free_models": [
+        "llama3.1-8b",
+        "llama-3.3-70b",
+        "qwen-3-32b",
+        "gpt-oss-120b"
+      ]
+    },
+    {
+      "id": "nvidia",
+      "name": "NVIDIA NIM",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://build.nvidia.com",
+      "guide_url": "doc/free-providers/nvidia.md",
+      "notes_zh": "注册送 1000 credits（1 credit=1 请求），几十款模型随便试",
+      "notes_en": "1000 free credits on signup (1 credit = 1 request) across dozens of models",
+      "free_models": [
+        "deepseek-ai/deepseek-r1",
+        "qwen/qwen3-coder-480b-a35b-instruct",
+        "meta/llama-3.3-70b-instruct",
+        "mistralai/mixtral-8x22b-instruct-v0.1"
+      ]
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "base_url": "https://api.groq.com/openai/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://console.groq.com/keys",
+      "guide_url": "doc/free-providers/groq.md",
+      "notes_zh": "免费层有每日/每分钟限额，Llama 系列速度业界最快之一",
+      "notes_en": "Free tier with daily/per-minute caps; fastest Llama hosting around",
+      "free_models": [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "openai/gpt-oss-120b",
+        "qwen/qwen3-32b",
+        "moonshotai/kimi-k2-instruct"
+      ]
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral La Plateforme",
+      "base_url": "https://api.mistral.ai/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://console.mistral.ai/api-keys",
+      "guide_url": "doc/free-providers/mistral.md",
+      "notes_zh": "免费实验层（需在后台开启 Experiment plan），含 Codestral 代码模型",
+      "notes_en": "Free 'Experiment' tier (opt-in in console), includes Codestral coding model",
+      "free_models": [
+        "mistral-small-latest",
+        "open-mistral-nemo",
+        "codestral-latest"
+      ]
+    },
+    {
+      "id": "cloudflare",
+      "name": "Cloudflare Workers AI",
+      "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://dash.cloudflare.com/profile/api-tokens",
+      "guide_url": "doc/free-providers/cloudflare.md",
+      "notes_zh": "每天 10000 neurons 免费额度；base_url 里的 {account_id} 要替换成你自己的",
+      "notes_en": "10,000 free neurons/day; replace {account_id} in the base_url with your own",
+      "free_models": [
+        "@cf/meta/llama-3.1-8b-instruct",
+        "@cf/qwen/qwen1.5-14b-chat-awq",
+        "@cf/mistralai/mistral-7b-instruct-v0.1"
+      ]
+    }
+  ]
+}
