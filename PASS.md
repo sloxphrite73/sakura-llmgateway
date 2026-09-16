@@ -577,7 +577,7 @@ Android 在主线程做 socket I/O 会抛 NetworkOnMainThreadException，被 `ca
 - **GitHub Actions 的 runner 镜像会漂移**：android-actions/setup-android 在新镜像上 v3/v4 都会挂（'tools' 包被 cmdline-tools 移除）。镜像自带 SDK 足够时，直接用 sdkmanager 反而更稳。CI 挂了先看是不是镜像漂移，再怀疑自己的代码。
 - Release: v0.3.1（commits 6703dce / eb443a8 / bc356d4），APK 11.6 MB + exe 4.7 MB。
 
-## 16. WebUI i18n + Anthropic 地址展示（未发版）
+## 16. WebUI i18n + Anthropic 地址展示（v0.3.2 发布，commit d8b53c1）
 
 **需求**（grill-me 两轮敲定）：顶部 api-line 在 OpenAI 地址旁并列展示 Anthropic Messages 地址；顶栏加中/英语言切换；全量翻译（含 confirm/prompt 弹窗、placeholder、动态表格/toast）；默认语言跟随浏览器（`navigator.language`），手动切换后 localStorage 记住；切换控件用与主题按钮一致的小按钮（EN/中）；两个地址点击复制。
 
@@ -595,7 +595,7 @@ Android 在主线程做 socket I/O 会抛 NetworkOnMainThreadException，被 `ca
 1. 写 node 转换脚本改 markdown/HTML 时，模板字符串里的反引号会被 bash 吃掉——上次的教训仍然适用；这次直接用 str_replace 分批改，避开脚本（本条目本身也是用数组拼接 + `String.fromCharCode(96)` 绕开的）。
 2. 验证脚本里 `t('textarea')` 误匹配（`document.createElement('textarea')`），排查 missing-keys 假阳性时要排除这类非 i18n 调用。
 
-**遗留**：Issue #2（小屏设备滚动跳过后底部按钮不可点）待修，与本特性无关。
+**遗留**：~~Issue #2（小屏设备滚动跳过后底部按钮不可点）待修~~ → 已在下节修复并随 v0.3.2 发布。
 
 ## 17. Issue #2 修复：小屏设备引导页按钮过小/不可点（v0.3.2）
 
@@ -606,3 +606,10 @@ Android 在主线程做 socket I/O 会抛 NetworkOnMainThreadException，被 `ca
 **修复**：两个全屏 Compose Column 都改为 `verticalScroll(rememberScrollState())` 可滚动 + `heightIn(min = 48.dp)` 强制按钮最小高度 + `navigationBarsPadding()` 避开手势条；内容能放下时仍然垂直居中（Center 在可滚动容器内对超出内容自动退化为顶部对齐，不再挤压）。
 
 **验证**：无本地 Android 构建环境，反馈回路是 CI（历次 6 个 release 全绿）；修复本身是布局约束调整，无逻辑分支。
+
+### v0.3.2 发布记录
+
+- Release: https://github.com/sloxphrite73/sakura-llmgateway/releases/tag/v0.3.2（universal APK 11.6 MB + Windows exe 4.7 MB，CI 一次通过）。
+- 包含：WebUI 双语 i18n + Anthropic 地址展示（d8b53c1）、Issue #2 小屏修复（3898a75）。
+- 发布前处理过一次 push 被拒：远端多了用户加的 README 反馈链接提交（318d5f7/43e0d43），rebase 后推送，无冲突。
+- 文档同步（2026-09-16）：使用说明.md / USAGE.md 已补上——启动服务表加 Anthropic Messages 地址行；安卓「日常使用」表加通知权限说明（Android 13+ 运行时请求）并更新看门狗描述（首次 2 秒、之后每 10 秒）；模拟器提示改为升级 v0.3.2+（涵盖启动竞态、通知权限、小屏按钮三修）；Web 控制台「主题」小节扩为「主题与语言」（EN/中 切换 + localStorage + 跟随浏览器 + 顶部双地址点击复制）；配置参考示例加 `"protocol": "openai"`，字段表加 `providers[].protocol`。中英两份同步修改，结构一致。

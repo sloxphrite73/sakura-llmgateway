@@ -39,6 +39,7 @@ After startup:
 | Service | URL |
 |---|---|
 | OpenAI-compatible API | `http://127.0.0.1:8000/v1` |
+| Anthropic Messages API | `http://127.0.0.1:8000/v1/messages` (Claude Code etc., see section 5) |
 | Web console | `http://127.0.0.1:8001/` |
 
 
@@ -70,9 +71,10 @@ ABIs into a universal APK, and a foreground service runs and supervises it.
 | Topic | Details |
 |---|---|
 | Foreground service | The gateway runs behind an ongoing notification ("Sakura LLM Gateway"); tapping it returns to the console, and it carries a Stop action |
+| Notification permission | On Android 13+ the first launch asks for the notification permission; if denied the service still runs — only the notification is hidden, and it can be granted later in system settings (added in v0.3.1) |
 | Console | A fullscreen WebView inside the app — the same page as `http://127.0.0.1:8001/`; in-page import/export and confirm dialogs work |
 | Endpoint | On-device agents/tools point at `http://127.0.0.1:8000/v1` |
-| Lifecycle | The service keeps running in the background; START_STICKY restarts it if the system kills it; a 10s health watchdog restarts the gateway on hang or death |
+| Lifecycle | The service keeps running in the background; START_STICKY restarts it if the system kills it; a health watchdog (first check at 2s, then every 10s) restarts the gateway on hang or death |
 | In-app import | The console's import button opens the system file picker; imports hot-reload |
 | System-level import | "Open with → Sakura LLM Gateway" on a `gateway.json` in any file manager; hot-reloads while the gateway runs |
 | Export | The console's export button opens the system "Save as" dialog |
@@ -90,8 +92,7 @@ ABIs into a universal APK, and a foreground service runs and supervises it.
    make one `http://127.0.0.1:8000/v1/chat/completions` call from the phone's
    browser or an on-device agent.
 
-> Tip: emulators (MuMu / LDPlayer / Nox) work too. If you hit "webpage not
-> available / ERR_CONNECTION_REFUSED", upgrade to v0.2.2+ (startup race fixed),
+> Tip: emulators (MuMu / LDPlayer / Nox) work too. If anything misbehaves, upgrade to **v0.3.2+** first (fixes the startup race, the notification permission prompt, and undersized onboarding buttons on small screens),
 > or tap Stop in the notification and reopen the app.
 
 ---
@@ -128,10 +129,10 @@ Each provider card manages one upstream:
 | 🟡 冷却 · 剩余 Xs / Cooling | Temporarily benched (429 or 5xx); auto-recovers at 0s |
 | 🔴 无效 · 剩余 Xs / Invalid | Auth was rejected (401/403) — quarantined for 30 min because retrying cannot succeed. Click **解除无效 / Clear** after fixing the key to restore it immediately. |
 
-### Theme
+### Theme & language
 
-The ☀️/🌙 button in the masthead switches between light and dark mode. The
-choice is remembered per browser (localStorage); dark is the default.
+- The ☀️/🌙 button in the masthead switches between light and dark mode; the adjacent 「EN / 中」 button switches the whole interface between English and Chinese — every string, including tables, buttons, dialogs and input placeholders. Both choices are remembered per browser (localStorage); the language defaults to the browser's setting (added in v0.3.2).
+- The masthead also shows both endpoints side by side: `OpenAI-compatible …/v1` and `Anthropic Messages …/v1/messages` — **click either one to copy it** (added in v0.3.2).
 
 ---
 
@@ -283,6 +284,7 @@ through byte-for-byte.
       "id": "p-xxx",
       "name": "openai",
       "base_url": "https://api.openai.com/v1",
+      "protocol": "openai",
       "keys": [
         { "id": "k-xxx", "key": "sk-...", "label": "main", "cooldown_secs": null }
       ],
@@ -304,6 +306,7 @@ through byte-for-byte.
 | `models` | Managed catalog; empty = unmanaged |
 | `model_allowlist_only` | Reject models not in the (non-empty) list |
 | `aliases` | Client-visible name → upstream model |
+| `providers[].protocol` | Upstream protocol: `openai` (default) or `anthropic`, see section 5 (added in v0.3.0) |
 
 The file is rewritten atomically on every console change. Editing it by hand
 while the gateway runs is fine — but console changes overwrite manual ones.
