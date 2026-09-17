@@ -633,3 +633,12 @@ Android 在主线程做 socket I/O 会抛 NetworkOnMainThreadException，被 `ca
 3. /api/free-catalog/refresh 在目录 JSON 推上 GitHub 之前会 404——这是预期行为，优雅失败（toast 报错、目录保持内嵌版）；**推完代码再验证 refresh**。
 
 **验证反馈回路**：cargo check/test（13 通过）→ release 构建 → 真实进程 + preview：9 张卡片渲染、Pollinations 免 Key 添加成功（provider + 3 模型）、OpenRouter 双 Key 添加成功（6 模型 + 2 key 掩码入库）、刷新后「已添加」标签持久、图例文案正确。refresh 的 GitHub 路径待推送后可通（404 → 200）。
+
+### v0.3.3 发布记录（2026-09-17）
+
+- Tag v0.3.3 打在 commit 5ec0e0f，Release workflow 一次通过。
+- Release: https://github.com/sloxphrite73/sakura-llmgateway/releases/tag/v0.3.3
+- 产物：sakura-llmgateway-v0.3.3-universal.apk（11.6 MB）+ sakura-llmgateway-v0.3.3-x86_64-pc-windows-msvc.exe（4.8 MB）。
+- 内容：免费供应商目录面板（现有提供商，9 家）、统计图例文案修复（绿=成功 红=失败）、目录双通道（内嵌 + GitHub raw refresh，推送后实测 200）。
+- 版本号说明：Cargo.toml / Android versionName 均由 CI 从 tag 注入，本地无需改版本常量（与历次发版一致）。
+
