@@ -44,9 +44,11 @@ T ──── 429 ──▶ [T, 2T]          成功 ──▶ [T/2, T]
   `data: [DONE]` 干净收尾，客户端不会看到重复或截断的文本
 - 📦 **托管模型** - 每个提供商维护模型目录（`{ id, enabled }`），支持从上游
   `/v1/models` 一键导入（带勾选），可选白名单模式拒绝列表外的模型
-- 🆓 **免费供应商目录** - 控制台「现有提供商」面板内置 9 家免费/有免费额度的
+- 🆓 **免费供应商目录** - 控制台「现有提供商」面板内置 19 家免费/有免费额度的
   OpenAI 兼容上游（SiliconFlow、Z.AI GLM、OpenRouter `:free`、Pollinations（免 Key）、
-  Cerebras、NVIDIA NIM、Groq、Mistral、Cloudflare Workers AI）：每张卡片带**领额度
+  Cerebras、NVIDIA NIM、Groq、Mistral、Cloudflare Workers AI、Google Gemini、SambaNova、
+  Hugging Face、Fireworks、Novita、Requesty、Cohere、阿里百炼 DashScope、火山方舟 Doubao、
+  Moonshot Kimi）：每张卡片带**领额度
   教程链接**与预置免费模型，**粘贴 Key → 确认添加**一步完成（供应商 + 模型 + Key）。
   目录随二进制内嵌发布，也支持从 GitHub 一键更新
 - 🎯 **模型路由** - 以 `provider/model` 形式请求（如 `openai/gpt-4o`），或在控制台

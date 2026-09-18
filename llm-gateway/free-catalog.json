@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-09-16",
+  "updated": "2026-09-17",
   "providers": [
     {
       "id": "siliconflow",
@@ -153,6 +153,166 @@
         "@cf/meta/llama-3.1-8b-instruct",
         "@cf/qwen/qwen1.5-14b-chat-awq",
         "@cf/mistralai/mistral-7b-instruct-v0.1"
+      ]
+    },
+    {
+      "id": "google-ai-studio",
+      "name": "Google AI Studio (Gemini)",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://aistudio.google.com/apikey",
+      "guide_url": "doc/free-providers/google-ai-studio.md",
+      "notes_zh": "免费层无需绑卡；gemini-3.x-flash 系列为 $0，按 RPM/RPD 限额每日重置（需在 AI Studio 申请 API key）",
+      "notes_en": "Free tier needs no card; gemini-3.x-flash models are $0, RPM/RPD quotas reset daily (get an API key in AI Studio)",
+      "free_models": [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash"
+      ]
+    },
+    {
+      "id": "sambanova",
+      "name": "SambaNova (SambaCloud)",
+      "base_url": "https://api.sambanova.ai/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://cloud.sambanova.ai/",
+      "guide_url": "doc/free-providers/sambanova.md",
+      "notes_zh": "免费层无需绑卡：每模型 20 RPM / 20 RPD / 20 万 TPD，每日重置；专用推理芯片，速度极快",
+      "notes_en": "Free tier needs no card: 20 RPM / 20 RPD / 200K TPD per model, resets daily; dedicated inference silicon, very fast",
+      "free_models": [
+        "Meta-Llama-3.3-70B-Instruct",
+        "DeepSeek-V3.1",
+        "gpt-oss-120b"
+      ]
+    },
+    {
+      "id": "huggingface-router",
+      "name": "Hugging Face Router",
+      "base_url": "https://router.huggingface.co/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://huggingface.co/settings/tokens",
+      "guide_url": "doc/free-providers/huggingface-router.md",
+      "notes_zh": "每月循环免费额度（无需支付方式），可用于所有 Inference Providers 聊天模型；额度较小，适合试用",
+      "notes_en": "Recurring monthly free credit (no card) usable on all Inference Providers chat models; small quota, good for trying",
+      "free_models": [
+        "openai/gpt-oss-120b",
+        "deepseek-ai/DeepSeek-R1"
+      ]
+    },
+    {
+      "id": "fireworks-ai",
+      "name": "Fireworks AI",
+      "base_url": "https://api.fireworks.ai/inference/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://fireworks.ai/signup",
+      "guide_url": "doc/free-providers/fireworks-ai.md",
+      "notes_zh": "新账户注册即获一次性 $1 免费额度（邮箱/社交自助注册、无需绑卡即可开始）；用尽后需付费购买更多额度",
+      "notes_en": "New accounts get a one-time $1 free credit via self-serve signup (no card to start); buy more credits once it runs out",
+      "free_models": [
+        "accounts/fireworks/models/glm-5p2",
+        "accounts/fireworks/models/gpt-oss-120b",
+        "accounts/fireworks/models/deepseek-v4-flash-0731"
+      ]
+    },
+    {
+      "id": "novita-ai",
+      "name": "Novita AI",
+      "base_url": "https://api.novita.ai/openai",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://novita.ai/console",
+      "guide_url": "doc/free-providers/novita-ai.md",
+      "notes_zh": "注册即赠 $1 信用额度且无需绑卡；另有 $0 限时免费模型（ling-3.0-flash-fin 等），限时促销可能随时结束",
+      "notes_en": "$1 signup credit (no card); plus $0 time-limited free models (ling-3.0-flash-fin etc.) — promos may end anytime",
+      "free_models": [
+        "inclusionai/ling-3.0-flash-fin",
+        "inclusionai/ling-3.0-flash-sante"
+      ]
+    },
+    {
+      "id": "requesty",
+      "name": "Requesty (LLM Router)",
+      "base_url": "https://router.requesty.ai/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://app.requesty.ai/sign-up",
+      "guide_url": "doc/free-providers/requesty.md",
+      "notes_zh": "免费层每日 200 次请求、无需信用卡、无试用到期；仅限免费模型（目录会变动，以 requesty.ai/models/free 为准）",
+      "notes_en": "Free tier: 200 requests/day, no card, no trial expiry; free models only (catalog changes — see requesty.ai/models/free)",
+      "free_models": [
+        "nvidia/nemotron-3-super-120b-a12b",
+        "google/gemma-4-31b-it",
+        "meta/muse-glimmer-30b",
+        "mistral/leanstral-1-5",
+        "inclusionai/ling-3.0-tiny",
+        "nvidia/nemotron-3-ultra-550b-a55b"
+      ]
+    },
+    {
+      "id": "cohere",
+      "name": "Cohere",
+      "base_url": "https://api.cohere.ai/compatibility/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://dashboard.cohere.com/api-keys",
+      "guide_url": "doc/free-providers/cohere.md",
+      "notes_zh": "免费试用 API key（无需信用卡），每月 1,000 次调用、每模型 20 req/min；通过 OpenAI 兼容端点使用",
+      "notes_en": "Free trial API key (no card), 1,000 calls/month + 20 req/min per model; via the OpenAI-compatible endpoint",
+      "free_models": [
+        "command-a-plus-05-2026",
+        "command-a-03-2025",
+        "command-r-08-2024",
+        "command-r-plus-08-2024"
+      ]
+    },
+    {
+      "id": "alibaba-dashscope",
+      "name": "Alibaba Cloud Bailian (DashScope)",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://help.aliyun.com/zh/model-studio/get-api-key",
+      "guide_url": "doc/free-providers/alibaba-dashscope.md",
+      "notes_zh": "首次开通百炼即发 90 天新人免费额度（如 qwen-plus/qwen-max，约 100 万 token/模型），无需绑卡；仅北京区域",
+      "notes_en": "Free quota auto-granted on Model Studio activation (~1M tokens/model, 90 days, e.g. qwen-plus/qwen-max), no card; Beijing region only",
+      "free_models": [
+        "qwen-plus",
+        "qwen-max"
+      ]
+    },
+    {
+      "id": "volcengine-ark",
+      "name": "Volcengine Ark (Doubao)",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://console.volcengine.com/ark",
+      "guide_url": "doc/free-providers/volcengine-ark.md",
+      "notes_zh": "新用户实名认证后享安心体验模式免费额度（无需绑卡）；doubao-seed 模型 id 带日期后缀且频繁轮换，请在控制台模型列表确认当前可用 id",
+      "notes_en": "New users get free quota via safe-experience mode after real-name auth (no card); doubao-seed model IDs are date-suffixed and rotate — confirm current IDs in the console model list",
+      "free_models": [
+        "doubao-seed-2-1-pro-260628",
+        "doubao-seed-2-0-lite-260428"
+      ]
+    },
+    {
+      "id": "moonshot",
+      "name": "Moonshot Kimi (Kimi API 开放平台)",
+      "base_url": "https://api.moonshot.cn/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://platform.kimi.com",
+      "guide_url": "doc/free-providers/moonshot.md",
+      "notes_zh": "注册并完成实名认证后赠 15 元代金券（无需支付方式），可用于 kimi-k2.6 / kimi-k2.7-code（旗舰 kimi-k3 不支持）；用尽后按量付费",
+      "notes_en": "15 CNY free voucher on signup after real-name auth (no payment method); usable on kimi-k2.6 / kimi-k2.7-code (flagship kimi-k3 not supported); pay-as-you-go after",
+      "free_models": [
+        "kimi-k2.6",
+        "kimi-k2.7-code"
       ]
     }
   ]

@@ -114,9 +114,10 @@ Open `http://127.0.0.1:8001/`. From top to bottom:
 ### Provider catalog (free tiers)
 
 The "Provider catalog" panel at the top of the Config page ships a curated set of
-**free / free-tier OpenAI-compatible upstreams** (SiliconFlow, Z.AI GLM, OpenRouter
+**free / free-tier OpenAI-compatible upstreams** — SiliconFlow, Z.AI GLM, OpenRouter
 `:free`, Pollinations (keyless), Cerebras, NVIDIA NIM, Groq, Mistral, Cloudflare
-Workers AI):
+Workers AI, Google Gemini, SambaNova, Hugging Face, Fireworks, Novita, Requesty,
+Cohere, Alibaba DashScope, Volcengine Doubao, Moonshot Kimi:
 
 - Each card shows free-tier notes, the preset free model list (expandable), a
   **setup guide** link (pointing at step-by-step docs in this repo under

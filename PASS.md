@@ -642,3 +642,39 @@ Android 在主线程做 socket I/O 会抛 NetworkOnMainThreadException，被 `ca
 - 内容：免费供应商目录面板（现有提供商，9 家）、统计图例文案修复（绿=成功 红=失败）、目录双通道（内嵌 + GitHub raw refresh，推送后实测 200）。
 - 版本号说明：Cargo.toml / Android versionName 均由 CI 从 tag 注入，本地无需改版本常量（与历次发版一致）。
 
+---
+
+## 19. 免费供应商目录扩充（+10 家，2026-09-17）
+
+**背景**：用户要求扩充网关「现有提供商」目录，多收录免费 OpenAI 兼容上游。
+
+**方法（research 技能 + 双重核实）**：
+- 派后台研究子代理核实 19 个候选，对照各提供商**官方文档**（API reference / pricing / 模型目录 / 代码示例），写入 `doc/research/free-providers-research.md`（19 候选逐条 + 主源 URL）。
+- 父代理对高风险项（base_url 路径怪异、模型 id 易轮换）做**独立二次抓取核实**，逐条对照官方 curl / 代码示例。
+
+**结果：目录从 9 家扩充到 19 家**，新增 10 家（均经一手文档确认 OpenAI 兼容 base_url + 真实免费层 + ≥2 个免费模型 id）：
+
+| id | 提供商 | base_url | 免费层 |
+|---|---|---|---|
+| google-ai-studio | Google AI Studio (Gemini) | `…/v1beta/openai/` | flash $0，RPM/RPD 每日重置，无卡 |
+| sambanova | SambaNova (SambaCloud) | `…/v1` | 20 RPM/RPD/TPD，每日重置，无卡 |
+| huggingface-router | Hugging Face Router | `…/v1` | 每月循环免费额度，无卡 |
+| fireworks-ai | Fireworks AI | `…/inference/v1` | $1 注册额度，无卡起步 |
+| novita-ai | Novita AI | `…/openai`（见下修正） | $1 额度 + $0 限时免费模型，无卡 |
+| requesty | Requesty (LLM Router) | `…/v1` | 200 req/day，无卡，无试用到期 |
+| cohere | Cohere | `…/compatibility/v1` | trial key 1000 次/月，无卡 |
+| alibaba-dashscope | 阿里百炼 DashScope | `…/compatible-mode/v1` | 90 天新人额度，无卡（仅北京区域） |
+| volcengine-ark | 火山方舟 Doubao | `…/api/v3` | 安心体验模式免费额度，实名无卡 |
+| moonshot | Moonshot Kimi | `…/v1` | 15 元代金券，实名无卡 |
+
+**核实纠错（重要）**：
+1. **Novita base_url 修正**：子代理写 `https://api.novita.ai/openai/v1`（假设），但官方代码示例是 `base_url="https://api.novita.ai/openai"`（无 `/v1`）。网关 `upstream_chat_url`（proxy.rs L86/92，`trim_end_matches('/') + "/chat/completions"`）据此拼出官方 SDK 实际命中的 `/openai/chat/completions`。目录已改为 `https://api.novita.ai/openai`。
+2. **Volcengine 模型 id**：官方 Base URL 文档自带 curl 用的是 `doubao-seed-2-1-pro-260628`（比子代理从 GitHub 指南找的 `2-0-lite-260428` 更新）。最终用官方文档 id `doubao-seed-2-1-pro-260628` + 子代理从价格页确认的 `doubao-seed-2-0-lite-260428`，并在 notes 强提示「日期后缀易轮换、控制台核实」。OpenAI 兼容文档页（1330626）Firecrawl 抓不到正文，未能拿第二个权威 id。
+3. **网关 base_url→endpoint 拼接已确认**（proxy.rs `upstream_chat_url` = `trim_end_matches('/') + "/chat/completions"`），19 条 base_url 全部对得上各自官方 curl（Google `/v1beta/openai/`、Cohere `/compatibility/v1`、Volcengine `/api/v3`、Fireworks `/inference/v1`、Novita `/openai` 均 verbatim 核对）。
+
+**剔除 Hyperbolic**：子代理标为最弱 accept（推理文档已归档、模型目录登录墙、产品转 GPU）。无法确认当前模型 id 仍被托管，按「确认不到就宁可不放」原则剔除，留作后续登录控制台核实后再补。
+
+**仅改数据，零代码/UI 改动**：目录卡片由 index.html 动态遍历 `CATALOG.providers` 渲染，`addFromCatalog` 流程（create_provider → models/import → add_key）对任意数量通用，无需改 Rust/UI。新增 10 份 `doc/free-providers/*.md` 教程。README/USAGE/使用说明 的「9 家」计数与名单已同步更新为 19。
+
+**待办**：推送后 `/api/free-catalog/refresh` 才能拉到新目录（GitHub raw 双通道，v0.3.3 起）。`cargo test` 的 `embedded_catalog_parses_and_is_valid` 阈值是 `>=5`，19 条仍通过，无需改测试。纯数据改动，未发版（待用户决定是否随下一 tag 发版）。
+
