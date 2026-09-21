@@ -1,4 +1,5 @@
 mod admin;
+mod balance;
 mod config;
 mod free_catalog;
 mod protocol;
@@ -109,6 +110,17 @@ async fn main() {
         }
     });
     // Flush stats on shutdown is best-effort: the 5s loop bounds the loss.
+
+    // Background bill-balance poller (strategy §2.2 `bill_balance`, decisions
+    // ③A/④A): every 60s, poll Tier-A providers flagged has_bill_balance_api,
+    // normalize to USD, cache via set_bill_balance. Off the request hot path.
+    let balance_app = app.clone();
+    tokio::spawn(async move {
+        loop {
+            balance::poll_all(&balance_app).await;
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        }
+    });
 
     // Bind with a short retry window: a stale twin process (e.g. the Android app's
     // service racing a restart) may still hold the ports for a few seconds. Panicking

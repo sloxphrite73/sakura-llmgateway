@@ -113,6 +113,12 @@ pub struct Config {
     pub max_attempts: u32,
     pub auth: AuthSettings,
     pub providers: Vec<Provider>,
+    /// Currency -> USD rate (e.g. `{"CNY": 0.14}`), for normalizing `bill_balance`
+    /// to USD so the G/H sorts are comparable cross-currency (decision ④A). USD
+    /// values need no entry; unknown currency -> +inf (not comparable). See
+    /// doc/research/provider-balance-apis.md.
+    #[serde(default)]
+    pub currency_rates: std::collections::BTreeMap<String, f64>,
 }
 
 impl Default for Config {
@@ -124,6 +130,7 @@ impl Default for Config {
             max_attempts: 3,
             auth: AuthSettings::default(),
             providers: Vec::new(),
+            currency_rates: std::collections::BTreeMap::new(),
         }
     }
 }
