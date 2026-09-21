@@ -52,6 +52,24 @@ pub struct Provider {
     /// Auth header, request path and body format all follow from this.
     #[serde(default)]
     pub protocol: String,
+    /// Whether this upstream exposes a token-balance/quota API the gateway can poll
+    /// (fills the `token_balance` strategy sort attribute, spec §2.2). `false` (default)
+    /// = treat as unlimited (+∞ per spec); the gateway skips polling. Of the free
+    /// catalog only Mistral could (indirectly, via admin rate-limit) — low value, so
+    /// effectively always +∞. See doc/research/provider-balance-apis.md.
+    #[serde(default)]
+    pub has_token_balance_api: bool,
+    /// Whether this upstream exposes a bill/credit balance API (fills the
+    /// `bill_balance` sort attribute, spec §2.2). `false` (default) = +∞, skip polling.
+    /// Tier A (same key as inference): Moonshot / SiliconFlow / Novita / Requesty /
+    /// OpenRouter. Tier B (cloud AK/SK, skip unless creds exist): Fireworks /
+    /// Volcengine / Alibaba.
+    #[serde(default)]
+    pub has_bill_balance_api: bool,
+    /// Per-model price in CNY per 1M tokens (logical model id -> price). Missing entry
+    /// = 0 (free). Feeds the `price` strategy sort attribute (I, spec §2.2).
+    #[serde(default)]
+    pub price_table: std::collections::BTreeMap<String, f64>,
 }
 
 impl Provider {

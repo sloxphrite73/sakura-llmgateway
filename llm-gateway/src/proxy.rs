@@ -49,6 +49,25 @@ fn error_response_for(status: StatusCode, message: String, inbound: Protocol) ->
     }
 }
 
+/// Like `error_response_for`, but attaches a `Retry-After` header (delta-seconds)
+/// when given — used for the spec §6 "all-cooling" 429 so the client learns the
+/// soonest a valid key recovers (learned_cooldown-driven; the OmniRoute
+/// differentiator: precise seconds, not a fixed dead value).
+fn error_response_with_retry(
+    status: StatusCode,
+    message: String,
+    inbound: Protocol,
+    retry_after: Option<u64>,
+) -> Response {
+    let mut resp = error_response_for(status, message, inbound);
+    if let Some(secs) = retry_after {
+        if let Ok(val) = axum::http::HeaderValue::from_str(&secs.to_string()) {
+            resp.headers_mut().insert(axum::http::header::RETRY_AFTER, val);
+        }
+    }
+    resp
+}
+
 /// Gateway-level auth. Accepts the token from `Authorization: Bearer <t>` or —
 /// for Anthropic clients (Claude Code etc.) — from `x-api-key: <t>`.
 fn extract_auth_token(headers: &HeaderMap) -> String {
@@ -343,10 +362,14 @@ where
         let key = match app.pick_key(&provider) {
             Some(k) => k,
             None => {
-                // All keys cooling down -> fail fast with 429 (per spec).
+                // All keys cooling down -> fail fast with 429 (per spec §6).
+                // Attach Retry-After = soonest any valid key recovers (learned_cooldown-
+                // driven); absent when every key is dead (401/403) — invalid doesn't
+                // recover by waiting, per spec §6 "无 valid 行 → 429 无 Retry-After".
                 app.record_stat(false, None, &provider_id, &client_model);
+                let retry = app.min_retry_after_secs(&provider);
                 let cooling: Vec<String> = provider.keys.iter().map(|k| k.label.clone()).collect();
-                return error_response_for(
+                return error_response_with_retry(
                     StatusCode::TOO_MANY_REQUESTS,
                     format!(
                         "all {} key(s) for provider `{}` are rate-limited (cooling down). Keys: {}",
@@ -355,6 +378,7 @@ where
                         cooling.join(", ")
                     ),
                     inbound,
+                    retry,
                 );
             }
         };
@@ -446,11 +470,14 @@ where
 
     // Only reachable if a short cooldown expires mid-loop and keys keep failing until the
     // budget runs out. Never panic on the request path — fail fast with 429 instead.
+    // Same §6 Retry-After semantics: soonest valid key recovers, if any is merely cooling.
     app.record_stat(false, None, &provider_id, &client_model);
-    error_response_for(
+    let retry = app.min_retry_after_secs(&provider);
+    error_response_with_retry(
         StatusCode::TOO_MANY_REQUESTS,
         format!("retry budget exhausted for provider `{}` (all keys failing)", provider.name),
         inbound,
+        retry,
     )
 }
 
@@ -546,6 +573,18 @@ fn finish_generic(
                             inbound,
                         ),
                     };
+                    // Strategy §2.2 `tpm` source: count tokens from the upstream's
+                    // reported `usage` (actual), falling back to a rough body estimate
+                    // when absent (decision ①A). Non-stream contributes to tpm only;
+                    // tftt/tps are streaming-only (0 here, wired next chunk).
+                    {
+                        let up = upstream_proto_of(&app, &provider_id);
+                        let total = match protocol::extract_usage_tokens(&body, up) {
+                            Some((i, o)) => i + o,
+                            None => protocol::estimate_response_tokens(&body),
+                        };
+                        app.record_token_count(&key_id, total);
+                    }
                     // Translate only when the upstream protocol differs from the client's.
                     // The upstream response is in the *upstream's* format; the client
                     // needs it in *its* format.

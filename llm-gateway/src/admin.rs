@@ -45,6 +45,9 @@ pub async fn create_provider(
             model_allowlist_only: input.model_allowlist_only.unwrap_or(false),
             aliases: Default::default(),
             protocol: input.protocol.unwrap_or_default(),
+            has_token_balance_api: false,
+            has_bill_balance_api: false,
+            price_table: Default::default(),
         });
     });
     ok(cfg)

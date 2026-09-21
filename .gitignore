@@ -30,3 +30,7 @@ sakura-keystore-b64.txt
 Thumbs.db
 .vscode/
 .idea/
+
+# Research scratch / batch artifacts (final reports live in doc/research/)
+.research/
+docs/

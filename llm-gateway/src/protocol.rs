@@ -923,6 +923,44 @@ pub fn estimate_tokens_anthropic_request(a: &serde_json::Value) -> u64 {
     (chars as u64 / 4) + msg_count * 4 + 8
 }
 
+/// Extract real (input, output) token counts from an upstream chat-completion
+/// *response* by its wire protocol. Returns `None` when the upstream did not
+/// report `usage` (caller falls back to `estimate_response_tokens`, spec §2.2 /
+/// decision ①A). Feeds the strategy `tpm` attribute.
+pub fn extract_usage_tokens(body: &serde_json::Value, proto: Protocol) -> Option<(u64, u64)> {
+    let u = body.get("usage")?;
+    match proto {
+        Protocol::OpenAi => {
+            let p = u.get("prompt_tokens").and_then(|v| v.as_u64())?;
+            let c = u.get("completion_tokens").and_then(|v| v.as_u64())?;
+            Some((p, c))
+        }
+        Protocol::Anthropic => {
+            let i = u.get("input_tokens").and_then(|v| v.as_u64())?;
+            let o = u.get("output_tokens").and_then(|v| v.as_u64())?;
+            Some((i, o))
+        }
+    }
+}
+
+/// Rough token estimate for an upstream *response* body when `usage` is absent
+/// (spec §2.2 fallback, decision ①A): ~4 chars per token over all string leaves.
+/// A conservative lower bound (output-dominated; prompt-side unknown without the
+/// request) — keeps the `tpm` window non-zero until real usage arrives.
+pub fn estimate_response_tokens(body: &serde_json::Value) -> u64 {
+    fn walk(v: &serde_json::Value, chars: &mut u64) {
+        match v {
+            serde_json::Value::String(s) => *chars += s.len() as u64,
+            serde_json::Value::Array(a) => a.iter().for_each(|e| walk(e, chars)),
+            serde_json::Value::Object(o) => o.values().for_each(|e| walk(e, chars)),
+            _ => {}
+        }
+    }
+    let mut chars: u64 = 0;
+    walk(body, &mut chars);
+    chars / 4
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
