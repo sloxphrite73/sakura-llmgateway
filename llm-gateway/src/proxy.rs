@@ -629,10 +629,12 @@ fn finish_generic(
         // client's protocol and end the stream cleanly.
         app.record_stat(true, Some(&key_id), &provider_id, "");
 
-        let needs_translation = client_is_anthropic != (upstream_proto_of(&app, &provider_id) == Protocol::Anthropic);
+        let up_proto = upstream_proto_of(&app, &provider_id);
+        let needs_translation = client_is_anthropic != (up_proto == Protocol::Anthropic);
         if !needs_translation {
-            // Same protocol both sides: raw byte passthrough (the old fast path).
-            let upstream = resp.bytes_stream();
+            // Same protocol both sides: raw byte passthrough (the old fast path),
+            // wrapped in MetricsStream so tftt / usage / tps are still measured.
+            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), up_proto);
             let stream = upstream.map(move |r| match r {
                 Ok(chunk) => Ok::<_, std::io::Error>(chunk),
                 Err(e) => Ok(openai_stream_error_chunk(&e).into_bytes().into()),
@@ -650,7 +652,7 @@ fn finish_generic(
                 .map(|_| "gateway".to_string())
                 .unwrap_or_else(|| "gateway".to_string());
             let mut state = OpenAiToAnthropicStream::new(model);
-            let upstream = resp.bytes_stream();
+            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), up_proto);
             let stream = upstream
                 .map(move |r| -> Result<axum::body::Bytes, std::io::Error> {
                     match r {
@@ -671,7 +673,7 @@ fn finish_generic(
         // Anthropic upstream -> OpenAI client: parse Anthropic SSE events, emit chunks.
         let mut state = AnthropicToOpenAiStream::new();
         let mut buffer: Vec<u8> = Vec::new();
-        let upstream = resp.bytes_stream();
+        let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), up_proto);
         let stream = upstream.map(move |r| -> Result<axum::body::Bytes, std::io::Error> {
             match r {
                 Ok(chunk) => Ok(translate_anthropic_chunk(&mut state, &mut buffer, &chunk).into_bytes().into()),
@@ -686,6 +688,115 @@ fn finish_generic(
         *response.headers_mut() = headers;
         *response.status_mut() = StatusCode::OK;
         response
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming metrics: a transparent wrapper over the upstream bytes stream.
+// Records time-to-first-token (spec §2.2 `avg_tftt`, decision ②A), scans for the
+// upstream's `usage` chunk (decision ①A), and at stream end records token count
+// (`tpm`) + generation rate (`tps`). Wraps the raw upstream so the translation
+// state machines need no changes.
+// ---------------------------------------------------------------------------
+
+/// Best-effort SSE usage scanner: returns (input, output) when a `data:` line in
+/// this chunk carries a JSON object with `usage` (OpenAI final chunk with
+// `stream_options.include_usage`, or Anthropic `message_delta`). An event split
+/// across chunk boundaries may be missed (then tpm/tps undercount for that one
+/// request; non-stream is always exact). Cheap `contains` pre-filter on every chunk.
+fn scan_usage(chunk: &axum::body::Bytes, proto: Protocol) -> Option<(u64, u64)> {
+    let text = std::str::from_utf8(chunk).ok()?;
+    if !text.contains("\"usage\"") {
+        return None; // pre-filter: most chunks carry no usage
+    }
+    for line in text.split_inclusive('\n') {
+        let payload = match line.trim().strip_prefix("data:") {
+            Some(p) => p.trim(),
+            None => continue,
+        };
+        if payload == "[DONE]" || payload.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
+            if let Some(u) = protocol::extract_usage_tokens(&v, proto) {
+                return Some(u);
+            }
+        }
+    }
+    None
+}
+
+/// Transparent wrapper over an upstream `bytes_stream()`: yields each item
+/// unchanged while recording tftt (first chunk), scanning for usage, and on
+/// stream end recording token count + tps. The downstream `.map()` (translation
+/// or passthrough error-map) runs unchanged on the wrapper's output.
+struct MetricsStream<S> {
+    inner: S,
+    app: std::sync::Arc<App>,
+    key_id: String,
+    start: std::time::Instant,
+    first: bool,
+    usage: Option<(u64, u64)>,
+    proto: Protocol,
+}
+
+impl<S> MetricsStream<S>
+where
+    S: futures_util::Stream<Item = Result<axum::body::Bytes, reqwest::Error>> + Unpin,
+{
+    fn new(inner: S, app: std::sync::Arc<App>, key_id: String, proto: Protocol) -> Self {
+        Self {
+            inner,
+            app,
+            key_id,
+            start: std::time::Instant::now(),
+            first: true,
+            usage: None,
+            proto,
+        }
+    }
+}
+
+impl<S> futures_util::Stream for MetricsStream<S>
+where
+    S: futures_util::Stream<Item = Result<axum::body::Bytes, reqwest::Error>> + Unpin + Send,
+    Self: Unpin,
+{
+    type Item = Result<axum::body::Bytes, reqwest::Error>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        let this = self.get_mut(); // safe: Self: Unpin
+        match this.inner.poll_next_unpin(cx) {
+            Poll::Ready(Some(Ok(chunk))) => {
+                if this.first {
+                    this.first = false;
+                    let ms = this.start.elapsed().as_millis() as u32;
+                    this.app.record_tftt(&this.key_id, ms);
+                }
+                if let Some(u) = scan_usage(&chunk, this.proto) {
+                    this.usage = Some(u);
+                }
+                Poll::Ready(Some(Ok(chunk)))
+            }
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
+            Poll::Ready(None) => {
+                // Stream ended: record token count (tpm) + generation rate (tps).
+                if let Some((i, o)) = this.usage.take() {
+                    let total = i + o;
+                    this.app.record_token_count(&this.key_id, total);
+                    let dur = this.start.elapsed().as_secs_f32();
+                    if dur > 0.0 && o > 0 {
+                        this.app.record_tps(&this.key_id, o as f32 / dur);
+                    }
+                }
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
