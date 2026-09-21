@@ -87,54 +87,215 @@ pub enum SelectResult {
 }
 
 // ---------------------------------------------------------------------------
-// build_candidates — §3 ①② (resolve + filter); both-ON for now (impl-spec §11.3)
+// build_candidates — §3 ①② (resolve + filter); all four filter modes (§4)
 // ---------------------------------------------------------------------------
+
+/// A resolved request route (spec §3 ①): the logical model + the provider the
+/// request pinned (if any). A bare model name with no `provider/` prefix and no
+/// alias leaves `provider` `None`, which auto-degrades `lock_provider` to OFF
+/// (spec §3 ① / §10 #2): you can't lock a provider the request didn't name.
+struct Route {
+    /// `Some` when the request named a provider (`provider/model` or an alias,
+    /// which is intrinsically provider-scoped); `None` for a bare model name.
+    provider: Option<String>,
+    /// The logical model id — the group id to look up in `model_groups`, and
+    /// the price-table key for group-derived rows.
+    logical_model: String,
+}
+
+/// Resolve a client `model` string into `(provider, logical_model)` (spec §3 ①,
+/// §2.3). Mirrors `Config::resolve_model`'s alias + `provider/model` rules but
+/// returns `Ok((None, model))` (rather than an error) for a bare model name, so
+/// the strategy layer can still try a model group or degrade `lock_provider`.
+fn resolve_request(cfg: &Config, client_model: &str) -> Result<Route, String> {
+    // 1. alias (unique across providers) — intrinsically provider-scoped.
+    for p in &cfg.providers {
+        if let Some(target) = p.aliases.get(client_model) {
+            if !p.model_allowed(target) {
+                return Err(format!(
+                    "alias `{client_model}` points to model `{target}` which does not exist or is disabled on provider `{}`",
+                    p.name
+                ));
+            }
+            return Ok(Route { provider: Some(p.id.clone()), logical_model: target.clone() });
+        }
+    }
+    // 2. composite `provider/model` — match on id or name.
+    if let Some((head, tail)) = client_model.split_once('/') {
+        if let Some(p) = cfg.providers.iter().find(|p| p.id == head || p.name == head) {
+            if !p.model_allowed(tail) {
+                return Err(format!(
+                    "model `{tail}` is not in the managed model list of provider `{}` (allowlist mode is on)",
+                    p.name
+                ));
+            }
+            return Ok(Route { provider: Some(p.id.clone()), logical_model: tail.to_string() });
+        }
+    }
+    // 3. bare model — no provider resolved; `lock_provider` degrades OFF.
+    Ok(Route { provider: None, logical_model: client_model.to_string() })
+}
+
+/// `(provider_id, upstream_model, price_key)` — one filtered candidate entry
+/// before it is expanded into per-key rows. `price_key` is the price-table
+/// lookup key: the logical model for group-derived rows (price is per logical
+/// model, spec §2.2), the upstream model id for provider/available-first rows
+/// (which span models without a group).
+type Entry = (String, String, String);
+
+/// All `(provider, upstream_model)` entries the given provider serves (its
+/// enabled managed-model catalog). Used by provider-first (§4 row 3).
+fn entries_for_provider(cfg: &Config, pid: &str) -> Vec<Entry> {
+    let p = match cfg.provider_by_id(pid) {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    p.models
+        .iter()
+        .filter(|m| m.enabled)
+        .map(|m| (pid.to_string(), m.id.clone(), m.id.clone()))
+        .collect()
+}
+
+/// The whole table: every provider × every enabled managed model (§4 row 4,
+/// available-first). Unmanaged providers (empty `models`) contribute nothing —
+/// they have no concrete model rows to enumerate.
+fn all_entries(cfg: &Config) -> Vec<Entry> {
+    let mut out = Vec::new();
+    for p in &cfg.providers {
+        for m in &p.models {
+            if m.enabled {
+                out.push((p.id.clone(), m.id.clone(), m.id.clone()));
+            }
+        }
+    }
+    out
+}
 
 /// Build the candidate row skeletons for a request (spec §3 ①②). Reads only
 /// config — no pool state — so it is built once per request and re-walked each
 /// attempt by `select_strategy` as keys cool.
 ///
-/// **Step 3 (north-compat):** only the both-ON path is exercised — `resolve_model`
-/// pins a single `(provider, model)`, and every row is one of that provider's
-/// keys with the same `upstream_model`. This is exactly `pick_key`'s key set.
-/// Cross-provider modes (model-first / provider-first / available-first) land
-/// in Step 4 (impl-spec §11.4).
+/// All four filter modes (spec §4) are supported:
+/// - **both ON** (default, north-compat): exact `(provider, model)` → that
+///   provider's keys. Identical to the old `pick_key` key set.
+/// - **model-first** (lock_model_group ON, lock_provider OFF): the model's
+///   group across all providers — cross-provider same-model fallback.
+/// - **provider-first** (lock_model_group OFF, lock_provider ON): every model
+///   of the resolved provider — try other models, sorted.
+/// - **available-first** (both OFF): the whole table.
+///
+/// `lock_provider` auto-degrades OFF when the request named no provider (§3 ①),
+/// so a bare model + both-ON effectively becomes model-first.
 pub fn build_candidates(cfg: &Config, client_model: &str) -> Result<CandidateSet, String> {
-    let (provider_id, upstream_model) = cfg.resolve_model(client_model)?;
-    let provider = cfg
-        .provider_by_id(&provider_id)
-        .ok_or_else(|| format!("provider `{provider_id}` not found in config"))?;
-    // group_id = the logical model. With no model_groups configured, the model
-    // is a single-member group (impl-spec §9) and group_id = upstream_model.
-    let group_id = upstream_model.clone();
-    let price = provider.price_table.get(&group_id).copied().unwrap_or(0.0);
-    let rows: Vec<Row> = provider
-        .keys
-        .iter()
-        .map(|k| Row {
-            provider_id: provider_id.clone(),
-            upstream_model: upstream_model.clone(),
-            api_key_id: k.id.clone(),
-            key_secret: k.key.clone(),
-            group_id: group_id.clone(),
-            // runtime fields — filled by select_strategy; zeroed here.
-            valid: true,
-            non_cooled: true,
-            remaining_secs: 0,
-            success_rate: 1.0,
-            rpm: 0,
-            tpm: 0,
-            avg_tftt_ms: 0,
-            tps: 0.0,
-            token_balance: None,
-            bill_balance: None,
-            price,
-            idx: 0,
-        })
-        .collect();
-    // D3 cursor key = (group_id, resolved_provider_id). both-ON locks the
-    // provider, so the second component is the provider id.
-    let cursor_key = format!("{group_id}\x1f{provider_id}");
+    let filter = &cfg.strategy.filter;
+    let route = resolve_request(cfg, client_model)?;
+    let logical_model = &route.logical_model;
+
+    // lock_provider can't hold when no provider was resolved (spec §3 ①).
+    let lock_provider = filter.lock_provider && route.provider.is_some();
+
+    // The model group, if the logical model is a declared group id (spec §2.3).
+    let group = cfg.model_groups.iter().find(|g| &g.id == logical_model);
+
+    // Build the filtered entry list (§4 four modes). `price_key` = logical
+    // model for group-derived rows, the upstream model id otherwise.
+    let entries: Vec<Entry> = match (filter.lock_model_group, lock_provider) {
+        (true, true) => {
+            // both ON: exact (resolved_provider, this model).
+            let pid = route.provider.as_ref().unwrap();
+            match group {
+                Some(g) => g
+                    .entries
+                    .iter()
+                    .filter(|(p, _)| p == pid)
+                    .map(|(p, um)| (p.clone(), um.clone(), logical_model.clone()))
+                    .collect(),
+                None => vec![(pid.clone(), logical_model.clone(), logical_model.clone())],
+            }
+        }
+        (true, false) => {
+            // model-first: the whole group (all providers offering this model).
+            match group {
+                Some(g) => g
+                    .entries
+                    .iter()
+                    .map(|(p, um)| (p.clone(), um.clone(), logical_model.clone()))
+                    .collect(),
+                None => {
+                    // No group: degrade to a single entry — the resolved provider
+                    // if any, else fall back to resolve_model for a usable route.
+                    match &route.provider {
+                        Some(pid) => vec![(pid.clone(), logical_model.clone(), logical_model.clone())],
+                        None => match cfg.resolve_model(client_model) {
+                            Ok((pid, um)) => vec![(pid, um.clone(), um)],
+                            Err(_) => Vec::new(),
+                        },
+                    }
+                }
+            }
+        }
+        (false, true) => {
+            // provider-first: every model of the resolved provider (across groups).
+            entries_for_provider(cfg, route.provider.as_ref().unwrap())
+        }
+        (false, false) => {
+            // available-first: the whole table.
+            all_entries(cfg)
+        }
+    };
+
+    // Expand entries → per-key rows. A row = (provider, upstream_model, key).
+    // `group_id` carries the request's logical model (the candidate set's
+    // identity); selection never reads it, but the future dry-run/UI will.
+    let mut rows: Vec<Row> = Vec::new();
+    for (pid, upstream_model, price_key) in &entries {
+        let provider = match cfg.provider_by_id(pid) {
+            Some(p) => p,
+            None => continue, // provider vanished from config since route resolved
+        };
+        let price = provider.price_table.get(price_key).copied().unwrap_or(0.0);
+        for k in &provider.keys {
+            rows.push(Row {
+                provider_id: pid.clone(),
+                upstream_model: upstream_model.clone(),
+                api_key_id: k.id.clone(),
+                key_secret: k.key.clone(),
+                group_id: logical_model.clone(),
+                valid: true,
+                non_cooled: true,
+                remaining_secs: 0,
+                success_rate: 1.0,
+                rpm: 0,
+                tpm: 0,
+                avg_tftt_ms: 0,
+                tps: 0.0,
+                token_balance: None,
+                bill_balance: None,
+                price,
+                idx: 0,
+            });
+        }
+    }
+
+    // D3 cursor key = (group_id, resolved_provider_id_or_"any"). both-ON /
+    // provider-first lock the provider; model-first / available-first share an
+    // "any" cursor so equivalent keys load-balance across providers.
+    let provider_or_any = match (lock_provider, &route.provider) {
+        (true, Some(pid)) => pid.clone(),
+        _ => "any".to_string(),
+    };
+    let cursor_key = format!("{}\x1f{}", logical_model, provider_or_any);
+
+    if rows.is_empty() {
+        // Surface a clear "unknown model" error when nothing resolved (a bare
+        // model with no group and no alias). Otherwise an empty candidate set
+        // would silently 429 instead of the familiar 404.
+        return match cfg.resolve_model(client_model) {
+            Ok(_) => Ok(CandidateSet { rows, cursor_key }), // provider has no keys
+            Err(e) => Err(e),
+        };
+    }
     Ok(CandidateSet { rows, cursor_key })
 }
 
@@ -441,5 +602,149 @@ mod tests {
         let (res, _c) = select_pure(&mut rows, &[SortKey::I], 0);
         let routed = match res { SelectResult::Routed(r) => r, other => panic!("{other:?}") };
         assert_eq!(routed.api_key_id, "b", "valid leading key outranks cheaper-but-dead");
+    }
+
+    // --- build_candidates: the four filter modes (spec §4) ---
+
+    use crate::config::{ApiKey, Config, Filter, ManagedModel, ModelGroup, Provider, Strategy};
+    use std::collections::BTreeMap;
+
+    /// Two providers + one cross-provider model group, for filter-mode tests.
+    /// `pa`: keys a1/a2, models gpt-4o & gpt-4o-mini, gpt-4o priced at 5.0.
+    /// `pb`: key b1, model gpt-4o (no price entry → free/0).
+    /// group `gpt-4o`: [(pa, gpt-4o), (pb, gpt-4o)].
+    fn cfg_two_providers() -> Config {
+        let key = |id: &str| ApiKey {
+            id: id.into(),
+            key: format!("sk-{id}"),
+            label: id.into(),
+            cooldown_secs: None,
+            learned_cooldown: None,
+        };
+        let model = |id: &str| ManagedModel { id: id.into(), enabled: true };
+        let mut pa_price = BTreeMap::new();
+        pa_price.insert("gpt-4o".to_string(), 5.0);
+        let pa = Provider {
+            id: "pa".into(),
+            name: "PA".into(),
+            base_url: "http://pa/v1".into(),
+            keys: vec![key("a1"), key("a2")],
+            models: vec![model("gpt-4o"), model("gpt-4o-mini")],
+            model_allowlist_only: false,
+            aliases: BTreeMap::new(),
+            protocol: String::new(),
+            has_token_balance_api: false,
+            has_bill_balance_api: false,
+            price_table: pa_price,
+        };
+        let pb = Provider {
+            id: "pb".into(),
+            name: "PB".into(),
+            base_url: "http://pb/v1".into(),
+            keys: vec![key("b1")],
+            models: vec![model("gpt-4o")],
+            model_allowlist_only: false,
+            aliases: BTreeMap::new(),
+            protocol: String::new(),
+            has_token_balance_api: false,
+            has_bill_balance_api: false,
+            price_table: BTreeMap::new(),
+        };
+        let groups = vec![ModelGroup {
+            id: "gpt-4o".into(),
+            entries: vec![("pa".into(), "gpt-4o".into()), ("pb".into(), "gpt-4o".into())],
+        }];
+        Config {
+            providers: vec![pa, pb],
+            model_groups: groups,
+            ..Default::default()
+        }
+    }
+
+    /// Sorted `(provider_id, api_key_id)` pairs from a candidate set — order
+    /// independent so assertions aren't sensitive to config iteration.
+    fn key_pairs(set: &CandidateSet) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = set
+            .rows
+            .iter()
+            .map(|r| (r.provider_id.clone(), r.api_key_id.clone()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn build_both_on_single_provider_keys() {
+        // both ON (default) + "pa/gpt-4o" → pa's 2 keys, all upstream gpt-4o.
+        let cfg = cfg_two_providers();
+        let set = build_candidates(&cfg, "pa/gpt-4o").unwrap();
+        assert_eq!(key_pairs(&set), vec![("pa".into(), "a1".into()), ("pa".into(), "a2".into())]);
+        assert!(set.rows.iter().all(|r| r.upstream_model == "gpt-4o"));
+        assert!(set.rows.iter().all(|r| r.price == 5.0), "price from pa's table");
+        assert_eq!(set.cursor_key, "gpt-4o\x1fpa", "D3: (group, provider)");
+    }
+
+    #[test]
+    fn build_model_first_spans_group() {
+        // lock_provider OFF + bare "gpt-4o" → the whole group (pa + pb).
+        let mut cfg = cfg_two_providers();
+        cfg.strategy.filter = Filter { lock_model_group: true, lock_provider: false };
+        let set = build_candidates(&cfg, "gpt-4o").unwrap();
+        assert_eq!(
+            key_pairs(&set),
+            vec![("pa".into(), "a1".into()), ("pa".into(), "a2".into()), ("pb".into(), "b1".into())],
+        );
+        assert_eq!(set.cursor_key, "gpt-4o\x1fany", "model-first shares an 'any' cursor");
+    }
+
+    #[test]
+    fn build_provider_first_all_models() {
+        // lock_model_group OFF + lock_provider ON + "pa/gpt-4o" → every model
+        // of pa (gpt-4o, gpt-4o-mini) × each key = 2 models × 2 keys = 4 rows.
+        let mut cfg = cfg_two_providers();
+        cfg.strategy.filter = Filter { lock_model_group: false, lock_provider: true };
+        let set = build_candidates(&cfg, "pa/gpt-4o").unwrap();
+        assert_eq!(set.rows.len(), 4);
+        assert!(set.rows.iter().all(|r| r.provider_id == "pa"));
+        let models: Vec<String> = {
+            let mut m: Vec<String> = set.rows.iter().map(|r| r.upstream_model.clone()).collect();
+            m.sort();
+            m.dedup();
+            m
+        };
+        assert_eq!(models, vec!["gpt-4o".to_string(), "gpt-4o-mini".to_string()]);
+        assert_eq!(set.cursor_key, "gpt-4o\x1fpa");
+    }
+
+    #[test]
+    fn build_available_first_whole_table() {
+        // both OFF → every provider × every enabled model.
+        let mut cfg = cfg_two_providers();
+        cfg.strategy.filter = Filter { lock_model_group: false, lock_provider: false };
+        let set = build_candidates(&cfg, "pa/gpt-4o").unwrap();
+        // pa: 2 models × 2 keys = 4; pb: 1 model × 1 key = 1 → 5 rows.
+        assert_eq!(set.rows.len(), 5);
+        assert_eq!(set.cursor_key, "gpt-4o\x1fany");
+        assert!(set.rows.iter().any(|r| r.provider_id == "pb"), "table spans providers");
+    }
+
+    #[test]
+    fn build_bare_model_degrades_lock_provider_off() {
+        // both-ON default + bare "gpt-4o" (no provider named) → lock_provider
+        // auto-degrades OFF (spec §3 ①) → behaves like model-first.
+        let cfg = cfg_two_providers(); // default both ON
+        let set = build_candidates(&cfg, "gpt-4o").unwrap();
+        assert_eq!(
+            key_pairs(&set),
+            vec![("pa".into(), "a1".into()), ("pa".into(), "a2".into()), ("pb".into(), "b1".into())],
+        );
+        assert_eq!(set.cursor_key, "gpt-4o\x1fany", "degraded to model-first cursor");
+    }
+
+    #[test]
+    fn build_unknown_bare_model_errors() {
+        // bare model with no group, no alias, no provider → resolve_model Err.
+        let cfg = cfg_two_providers();
+        assert!(build_candidates(&cfg, "no-such-model").is_err());
     }
 }
