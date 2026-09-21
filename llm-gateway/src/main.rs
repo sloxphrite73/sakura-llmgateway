@@ -6,6 +6,7 @@ mod protocol;
 mod proxy;
 mod state;
 mod stats;
+mod strategy;
 mod ui;
 
 use axum::routing::{delete, get, post, put};

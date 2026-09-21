@@ -285,8 +285,40 @@ pub async fn anthropic_count_tokens(
 // Core forwarder: protocol-agnostic key-pool loop
 // ---------------------------------------------------------------------------
 
-/// Translate + dispatch + retry-loop shared by both inbound endpoints.
-/// `finish` renders the final success response in the client's protocol.
+/// Build the request payload in the *upstream's* protocol, with the upstream
+/// model name substituted in. Extracted from the old inline block so the
+/// strategy layer can rebuild it per attempt when the selected candidate's
+/// provider/model differs (impl-spec §5.2: "按 attempt 调用").
+fn build_upstream_payload(
+    inbound_body: &serde_json::Value,
+    inbound: Protocol,
+    provider: &crate::config::Provider,
+    upstream_model: &str,
+) -> serde_json::Value {
+    match (inbound, provider.protocol()) {
+        (Protocol::OpenAi, Protocol::OpenAi) | (Protocol::Anthropic, Protocol::Anthropic) => {
+            let mut b = inbound_body.clone();
+            b["model"] = serde_json::Value::String(upstream_model.to_string());
+            b
+        }
+        (Protocol::Anthropic, Protocol::OpenAi) => {
+            let mut b = protocol::anthropic_to_openai_request(inbound_body);
+            b["model"] = serde_json::Value::String(upstream_model.to_string());
+            b
+        }
+        (Protocol::OpenAi, Protocol::Anthropic) => {
+            let mut b = protocol::openai_to_anthropic_request(inbound_body);
+            b["model"] = serde_json::Value::String(upstream_model.to_string());
+            b
+        }
+    }
+}
+
+/// Translate + dispatch + retry-loop shared by both inbound endpoints. Drives
+/// the strategy layer (spec §3-§6): candidates are built once, then each
+/// attempt `select_strategy` re-walks the (cooling/invalid-updated) candidate
+/// set and returns either a routed row or a §6 terminal (AllCooling / NoValid /
+/// Empty). `finish` renders the final success response in the client's protocol.
 async fn forward<F, Fut>(
     app: Arc<App>,
     inbound_body: serde_json::Value,
@@ -297,93 +329,122 @@ where
     F: FnOnce(Arc<App>, reqwest::Response, String, String, bool) -> Fut,
     Fut: std::future::Future<Output = Response>,
 {
+    use crate::strategy::{build_candidates, SelectResult};
+
     let client_model = inbound_body
         .get("model")
         .and_then(|m| m.as_str())
         .unwrap_or("")
         .to_string();
-    let (provider_id, upstream_model) = match app.read_config().resolve_model(&client_model) {
-        Ok(r) => r,
+
+    let cfg = app.read_config();
+    let set = match build_candidates(&cfg, &client_model) {
+        Ok(s) => s,
         Err(reason) => {
             // Unresolvable model = no key touched it; still count it as a failed request.
             app.record_stat(false, None, "unknown", &client_model);
             return error_response_for(StatusCode::NOT_FOUND, reason, inbound);
         }
     };
-
-    let cfg = app.read_config();
-    let provider = match cfg.provider_by_id(&provider_id) {
-        Some(p) => p.clone(),
-        None => return error_response_for(StatusCode::NOT_FOUND, "provider disappeared".into(), inbound),
-    };
-    if provider.keys.is_empty() {
-        app.record_stat(false, None, &provider_id, &client_model);
+    if set.rows.is_empty() {
+        // Resolved provider has no keys (both-ON), or the filter shrank the table
+        // to nothing. Preserve the old 503 "no keys configured" semantics.
+        let pid = cfg
+            .resolve_model(&client_model)
+            .ok()
+            .map(|(p, _)| p)
+            .unwrap_or_default();
+        let pname = cfg
+            .provider_by_id(&pid)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| pid.clone());
+        app.record_stat(false, None, &pid, &client_model);
         return error_response_for(
             StatusCode::SERVICE_UNAVAILABLE,
-            format!("provider `{}` has no API keys configured", provider.name),
+            format!("provider `{pname}` has no API keys configured"),
             inbound,
         );
     }
 
-    // Payload in the *upstream's* protocol, regardless of what the client spoke.
-    let upstream_payload = match (inbound, provider.protocol()) {
-        (Protocol::OpenAi, Protocol::OpenAi) | (Protocol::Anthropic, Protocol::Anthropic) => {
-            let mut b = inbound_body.clone();
-            b["model"] = serde_json::Value::String(upstream_model.clone());
-            b
-        }
-        (Protocol::Anthropic, Protocol::OpenAi) => {
-            let mut b = protocol::anthropic_to_openai_request(&inbound_body);
-            b["model"] = serde_json::Value::String(upstream_model.clone());
-            b
-        }
-        (Protocol::OpenAi, Protocol::Anthropic) => {
-            let mut b = protocol::openai_to_anthropic_request(&inbound_body);
-            b["model"] = serde_json::Value::String(upstream_model.clone());
-            b
-        }
-    };
-    let is_stream = upstream_payload
+    // Stream flag is protocol-stable through translation; read it once.
+    let is_stream = inbound_body
         .get("stream")
         .and_then(|s| s.as_bool())
         .unwrap_or(false);
 
-    // Retry budget: every key that fails is marked cooling, so pick_key() never hands out
-    // the same key again until its cooldown expires. The budget is therefore bounded by
-    // (one attempt per key) x max_attempts, and the request only fails to the client once
-    // the whole pool is exhausted (pick_key -> None). Usable keys are never left untried.
+    // Retry budget: every key that fails is marked cooling/invalid, so
+    // select_strategy never hands the same key again until it recovers. The
+    // budget is bounded by (one attempt per candidate) × max_attempts (D4:
+    // candidate-set size replaces the old `provider.keys.len()`).
     let max_attempts = (cfg.max_attempts.clamp(1, 10) as usize)
-        .saturating_mul(provider.keys.len())
+        .saturating_mul(set.rows.len())
         .max(1);
-    let url = upstream_chat_url(&provider.base_url, provider.protocol());
-    let upstream_proto = provider.protocol();
+    // Sort stack snapshot once (editing strategy mid-request is an edge case).
+    let sorts = cfg.strategy.sort.clone();
+    let primary_provider = set.rows[0].provider_id.clone();
+    drop(cfg); // re-read per attempt for the live provider (protocol may change)
 
     for _attempt in 1..=max_attempts {
-        let key = match app.pick_key(&provider) {
-            Some(k) => k,
-            None => {
-                // All keys cooling down -> fail fast with 429 (per spec §6).
-                // Attach Retry-After = soonest any valid key recovers (learned_cooldown-
-                // driven); absent when every key is dead (401/403) — invalid doesn't
-                // recover by waiting, per spec §6 "无 valid 行 → 429 无 Retry-After".
-                app.record_stat(false, None, &provider_id, &client_model);
-                let retry = app.min_retry_after_secs(&provider);
-                let cooling: Vec<String> = provider.keys.iter().map(|k| k.label.clone()).collect();
+        let row = match app.select_strategy(&set, &sorts) {
+            SelectResult::Routed(r) => r,
+            SelectResult::AllCooling { retry_after } => {
+                // §6: all valid keys are cooling → 429 + Retry-After (the soonest
+                // recovery, learned_cooldown-driven). Absent when none is merely
+                // cooling (invalid doesn't recover by waiting).
+                app.record_stat(false, None, &primary_provider, &client_model);
                 return error_response_with_retry(
                     StatusCode::TOO_MANY_REQUESTS,
-                    format!(
-                        "all {} key(s) for provider `{}` are rate-limited (cooling down). Keys: {}",
-                        provider.keys.len(),
-                        provider.name,
-                        cooling.join(", ")
-                    ),
+                    "all candidate keys are rate-limited (cooling down)".into(),
                     inbound,
-                    retry,
+                    retry_after,
+                );
+            }
+            SelectResult::NoValid => {
+                // §6: no valid row → 429 with no Retry-After (invalid keys
+                // don't recover by waiting, per spec §6 "无 valid 行").
+                app.record_stat(false, None, &primary_provider, &client_model);
+                return error_response_with_retry(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "all candidate keys are invalid (auth-failed)".into(),
+                    inbound,
+                    None,
+                );
+            }
+            SelectResult::Empty => {
+                // Shouldn't happen (no-keys checked before the loop), but handle.
+                app.record_stat(false, None, "unknown", &client_model);
+                return error_response_with_retry(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "no candidate keys available".into(),
+                    inbound,
+                    None,
                 );
             }
         };
 
-        let resp = call_upstream(&app, &provider, &key.key, &url, &upstream_payload).await;
+        // Re-read config per attempt: the provider may have been edited
+        // (protocol/base_url) since the candidate set was built.
+        let cfg = app.read_config();
+        let provider = match cfg.provider_by_id(&row.provider_id) {
+            Some(p) => p.clone(),
+            None => {
+                // Provider vanished mid-request (edited out): fail fast.
+                app.record_stat(false, Some(&row.api_key_id), &row.provider_id, &client_model);
+                return error_response_for(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "provider disappeared".into(),
+                    inbound,
+                );
+            }
+        };
+        let upstream_proto = provider.protocol();
+        // Rebuild the payload per attempt: the selected candidate may carry a
+        // different upstream_model (cross-provider) or provider protocol.
+        let upstream_payload =
+            build_upstream_payload(&inbound_body, inbound, &provider, &row.upstream_model);
+        let url = upstream_chat_url(&provider.base_url, upstream_proto);
+
+        let resp = call_upstream(&app, &provider, &row.key_secret, &url, &upstream_payload).await;
 
         let resp = match resp {
             Ok(r) => r,
@@ -391,17 +452,17 @@ where
                 // Timeout / connection failure: rotate to the next key. The key gets a
                 // short cooldown (not a rate-limit cooldown) so it recovers quickly.
                 // Per-key tally: this key failed and is being rotated out.
-                app.record_key_stat(false, &key.id);
-                app.record_rotation(&provider_id);
-                app.mark_cooldown(&provider_id, &key.id, Some(5), &format!("network error: {e}"));
+                app.record_key_stat(false, &row.api_key_id);
+                app.record_rotation(&row.provider_id);
+                app.mark_cooldown(&row.provider_id, &row.api_key_id, Some(5), &format!("network error: {e}"));
                 continue;
             }
         };
 
         let status = resp.status();
         if status.is_success() {
-            app.clear_error(&key.id);
-            return finish(app, resp, provider_id, key.id, is_stream).await;
+            app.clear_error(&row.api_key_id);
+            return finish(app, resp, row.provider_id, row.api_key_id, is_stream).await;
         }
 
         // Error before first byte. Rotate to the next key for key-scoped failures
@@ -419,14 +480,14 @@ where
             let code = status.as_u16();
             // Per-key tally: this key failed and is being rotated out. The client-level
             // request is counted separately by whichever key ultimately serves it.
-            app.record_key_stat(false, &key.id);
-            app.record_rotation(&provider_id);
+            app.record_key_stat(false, &row.api_key_id);
+            app.record_rotation(&row.provider_id);
             if code == 429 {
                 // Rate limited: honor Retry-After (or the learned/global default), and
                 // back off briefly before hammering the next key — TPM limits are
                 // per-minute, so an instant retry with the same large payload burns the
                 // next key too. A background prober then measures the key's real window.
-                app.mark_cooldown(&provider_id, &key.id, retry_after, &reason);
+                app.mark_cooldown(&row.provider_id, &row.api_key_id, retry_after, &reason);
                 // Probe with the first enabled managed model (real upstreams reject
                 // unknown models with 400, which made the old "probe" model unlearnable).
                 let probe_model = provider
@@ -437,9 +498,9 @@ where
                     .unwrap_or_else(|| "probe".to_string());
                 spawn_prober(
                     app.clone(),
-                    provider_id.clone(),
-                    key.id.clone(),
-                    key.key.clone(),
+                    row.provider_id,
+                    row.api_key_id,
+                    row.key_secret,
                     url.clone(),
                     probe_body_for(upstream_proto, &probe_model),
                     upstream_proto,
@@ -449,18 +510,18 @@ where
                 // Auth failure = the key itself is dead (invalid/revoked/out of quota
                 // tier). A 5s cooldown just lets round-robin feed it again forever;
                 // quarantine it for 30 minutes and surface it as 无效 in the UI.
-                app.mark_invalid(&provider_id, &key.id, 30 * 60, &reason);
+                app.mark_invalid(&row.provider_id, &row.api_key_id, 30 * 60, &reason);
             } else {
                 // Other key-scoped errors (408/5xx): short rotate-out cooldown, long
                 // enough to not retry this round, short enough to recover quickly.
-                app.mark_cooldown(&provider_id, &key.id, Some(5), &reason);
+                app.mark_cooldown(&row.provider_id, &row.api_key_id, Some(5), &reason);
             }
-            // Loop continues: pick_key() skips cooling/invalid keys and serves a fresh one.
+            // Loop continues: select_strategy skips cooling/invalid keys and serves a fresh one.
             continue;
         }
 
         // Request-scoped client error: same result on every key — don't burn the pool.
-        app.record_stat(false, Some(&key.id), &provider_id, &client_model);
+        app.record_stat(false, Some(&row.api_key_id), &row.provider_id, &client_model);
         return error_response_for(
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
             format!("upstream error: {snippet}"),
@@ -470,12 +531,12 @@ where
 
     // Only reachable if a short cooldown expires mid-loop and keys keep failing until the
     // budget runs out. Never panic on the request path — fail fast with 429 instead.
-    // Same §6 Retry-After semantics: soonest valid key recovers, if any is merely cooling.
-    app.record_stat(false, None, &provider_id, &client_model);
-    let retry = app.min_retry_after_secs(&provider);
+    // Same §6 Retry-After semantics, generalized to the candidate set (impl-spec §6, D6).
+    app.record_stat(false, None, &primary_provider, &client_model);
+    let retry = app.min_retry_after_candidates(&set);
     error_response_with_retry(
         StatusCode::TOO_MANY_REQUESTS,
-        format!("retry budget exhausted for provider `{}` (all keys failing)", provider.name),
+        "retry budget exhausted (all candidate keys failing)".into(),
         inbound,
         retry,
     )

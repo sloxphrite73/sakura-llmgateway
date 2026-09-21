@@ -102,6 +102,105 @@ impl Default for AuthSettings {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Routing strategy layer (spec §2.1, §2.3, §4.2; impl-spec §2.1, §4.2)
+// ---------------------------------------------------------------------------
+
+/// One user-selectable sort key (spec §5.2: A–J). Serializes as the single
+/// uppercase letter `"A"`..`"J"` so `gateway.json` reads `"sort": ["I","J"]`.
+/// The comparison direction + attribute live in `strategy.rs` (`impl SortKey`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SortKey {
+    A, // success_rate      desc
+    B, // rpm               desc
+    C, // tpm               desc
+    D, // avg_tftt          asc
+    E, // token_balance     desc
+    F, // token_balance     asc
+    G, // bill_balance      desc
+    H, // bill_balance      asc
+    I, // price             asc
+    J, // tps               desc
+}
+
+impl SortKey {
+    /// Parse a single letter (case-insensitive) into a `SortKey`. Used by the
+    /// `PUT /api/strategy` write path (impl-spec §8); serde handles the
+    /// deserialize side for config files.
+    #[allow(dead_code)]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_uppercase().as_str() {
+            "A" => Some(Self::A),
+            "B" => Some(Self::B),
+            "C" => Some(Self::C),
+            "D" => Some(Self::D),
+            "E" => Some(Self::E),
+            "F" => Some(Self::F),
+            "G" => Some(Self::G),
+            "H" => Some(Self::H),
+            "I" => Some(Self::I),
+            "J" => Some(Self::J),
+            _ => None,
+        }
+    }
+}
+
+/// Two filter toggles (spec §4) that shrink the full `(provider, model, key)`
+/// table to a candidate subset. Defaults are both `true` = the north-compat
+/// "exact (provider, model), only round keys" = current gateway behavior.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Filter {
+    /// ON = restrict to the requested model's group (same logical model across
+    /// providers). ON + `lock_provider` = exact (provider, model).
+    #[serde(default = "bool_true")]
+    pub lock_model_group: bool,
+    /// ON = restrict to the provider resolved from the request. When the request
+    /// carries no provider, this auto-degrades to OFF (spec §3 ①).
+    #[serde(default = "bool_true")]
+    pub lock_provider: bool,
+}
+
+impl Default for Filter {
+    fn default() -> Self {
+        Self { lock_model_group: true, lock_provider: true }
+    }
+}
+
+/// User strategy: 2 filter toggles + an ordered, de-duplicated sort stack of
+/// 0..=3 keys (spec §5.2). `Strategy::default()` = both ON + empty sort, which
+/// under D1 cursor rotation reproduces the current round-robin-skip-cooldown
+/// behavior (impl-spec §0 north-compat rule, §9).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Strategy {
+    #[serde(default)]
+    pub filter: Filter,
+    /// Ordered user sort keys (3rd/4th/5th in the comparator). 0..=3, no dups.
+    /// Validated/deduped/capped on load (impl-spec §4.2).
+    #[serde(default)]
+    pub sort: Vec<SortKey>,
+}
+
+impl Default for Strategy {
+    fn default() -> Self {
+        Self { filter: Filter::default(), sort: Vec::new() }
+    }
+}
+
+/// A logical model group (spec §1, §2.3): the same logical model offered by one
+/// or more providers, each possibly under a different upstream model id. An
+/// empty `model_groups` = no cross-provider routing; the request model becomes
+/// a single-member group and behavior is unchanged (impl-spec §9).
+///
+/// `entries` are `(provider_id, upstream_model)` pairs (impl-spec §2.3, §7) so
+/// cross-provider same-model-different-upstream-name cases (e.g. OpenAI
+/// `gpt-4o` vs a mirror's `gpt-4o-2024-08`) carry the real upstream name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelGroup {
+    pub id: String,
+    #[serde(default)]
+    pub entries: Vec<(String, String)>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -119,6 +218,14 @@ pub struct Config {
     /// doc/research/provider-balance-apis.md.
     #[serde(default)]
     pub currency_rates: std::collections::BTreeMap<String, f64>,
+    /// Routing strategy (spec §5). Default = both filter toggles ON + empty
+    /// sort = current round-robin-skip-cooldown behavior (impl-spec §0).
+    #[serde(default)]
+    pub strategy: Strategy,
+    /// Logical model groups enabling cross-provider fallback (spec §1, §2.3).
+    /// Empty = every model is a single-member group; behavior unchanged.
+    #[serde(default)]
+    pub model_groups: Vec<ModelGroup>,
 }
 
 impl Default for Config {
@@ -131,6 +238,8 @@ impl Default for Config {
             auth: AuthSettings::default(),
             providers: Vec::new(),
             currency_rates: std::collections::BTreeMap::new(),
+            strategy: Strategy::default(),
+            model_groups: Vec::new(),
         }
     }
 }
@@ -139,8 +248,9 @@ impl Config {
     /// Parse a config from a raw JSON string without touching disk. Used by the import
     /// endpoint's validate-then-swap: the whole file is rejected on any error.
     pub fn parse_str(raw: &str) -> ConfigResult<Self> {
-        let cfg: Config = serde_json::from_str(raw)
+        let mut cfg: Config = serde_json::from_str(raw)
             .map_err(|e| format!("invalid config: {e}"))?;
+        cfg.normalize_strategy();
         Ok(cfg)
     }
 
@@ -151,9 +261,35 @@ impl Config {
             return Ok(cfg);
         }
         let raw = std::fs::read_to_string(path)?;
-        let cfg: Config = serde_json::from_str(&raw)
+        let mut cfg: Config = serde_json::from_str(&raw)
             .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+        cfg.normalize_strategy();
         Ok(cfg)
+    }
+
+    /// Enforce the strategy sort invariants (impl-spec §4.2): ordered, no
+    /// duplicates, at most 3 keys. Logs a warning when a loaded config needed
+    /// fixing. Idempotent and safe to call on an already-valid config.
+    pub fn normalize_strategy(&mut self) {
+        let orig = self.strategy.sort.clone();
+        let mut seen = std::collections::HashSet::new();
+        let mut deduped: Vec<SortKey> = Vec::with_capacity(orig.len());
+        for k in &orig {
+            if seen.insert(*k) {
+                deduped.push(*k);
+            }
+        }
+        if deduped.len() > 3 {
+            deduped.truncate(3);
+        }
+        if deduped != orig {
+            eprintln!(
+                "[gateway] strategy.sort had duplicates or exceeded 3 keys; \
+                 normalized to {:?}",
+                deduped
+            );
+        }
+        self.strategy.sort = deduped;
     }
 
     /// Atomic-ish save: write temp file then rename over the target.

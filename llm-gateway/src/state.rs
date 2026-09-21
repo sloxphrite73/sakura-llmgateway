@@ -1,4 +1,4 @@
-use crate::config::{Config, Provider};
+use crate::config::Config;
 use crate::stats::Stats;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -51,8 +51,6 @@ struct KeyMetrics {
 
 #[derive(Debug, Default)]
 pub(crate) struct PoolRuntime {
-    /// round-robin cursor per provider id
-    counters: HashMap<String, usize>,
     /// key id -> cooldown expiry
     cooling: HashMap<String, Instant>,
     /// key id -> "invalid" (auth-failed) cooldown expiry. Auth failures (401/403) mean
@@ -67,6 +65,12 @@ pub(crate) struct PoolRuntime {
     probing: std::collections::HashSet<String>,
     /// Per-key rolling metrics (success_rate / rpm now; tpm/tps/tftt/balance later).
     metrics: HashMap<String, KeyMetrics>,
+    /// Strategy-layer D1 cursor map (impl-spec §1, §4.1). Keyed by the
+    /// candidate-set identifier (D3: `"{group_id}\x1f{provider_or_any}"`); the
+    /// value is the round-robin cursor. Replaces the old per-provider
+    /// `counters` map (the both-ON special case is now cursor-keyed by
+    /// `(group_id, provider_id)`).
+    strategy_cursors: HashMap<String, usize>,
 }
 
 pub struct App {
@@ -267,64 +271,6 @@ impl App {
         pool.last_error.insert(key_id.to_string(), reason.to_string());
     }
 
-    /// Pick the next healthy key for a provider (round-robin, skipping keys in cooldown
-    /// and quarantined-invalid keys).
-    pub fn pick_key(&self, provider: &Provider) -> Option<crate::config::ApiKey> {
-        let now = Instant::now();
-        let mut pool = self.pool.lock().unwrap();
-        let n = provider.keys.len();
-        if n == 0 {
-            return None;
-        }
-        let start = *pool.counters.entry(provider.id.clone()).or_insert(0) % n;
-        // prune expired cooldowns so status stays accurate
-        pool.cooling.retain(|_, until| *until > now);
-        pool.invalid.retain(|_, until| *until > now);
-        for i in 0..n {
-            let idx = (start + i) % n;
-            let key = &provider.keys[idx];
-            if pool.cooling.contains_key(&key.id) || pool.invalid.contains_key(&key.id) {
-                continue;
-            }
-            pool.counters.insert(provider.id.clone(), idx + 1);
-            *pool.requests.entry(key.id.clone()).or_insert(0) += 1;
-            // Rolling RPM window (strategy §2.2 `rpm` attribute source).
-            {
-                let now = Instant::now();
-                let m = pool.metrics.entry(key.id.clone()).or_default();
-                m.req_times.push_back(now);
-                let win = Duration::from_secs(METRIC_RPM_WINDOW_SECS);
-                m.req_times.retain(|t| now.duration_since(*t) <= win);
-            }
-            return Some(key.clone());
-        }
-        None
-    }
-
-    /// For the client-facing 429 (spec §6): the soonest any *valid* (non-dead)
-    /// key of this provider recovers from rate-limit cooldown, or `None` when no
-    /// key is merely cooling (all dead/invalid → no Retry-After, per spec §6
-    /// "无 valid 行 → 429 无 Retry-After"). Called after `pick_key` returned
-    /// `None`; prunes defensively so a just-expired cooldown is not reported.
-    pub fn min_retry_after_secs(&self, provider: &Provider) -> Option<u64> {
-        let now = Instant::now();
-        let mut pool = self.pool.lock().unwrap();
-        pool.cooling.retain(|_, until| *until > now);
-        pool.invalid.retain(|_, until| *until > now);
-        let mut min: Option<u64> = None;
-        for k in &provider.keys {
-            // dead (401/403-quarantined) keys are not valid — skip, per spec §6.
-            if pool.invalid.contains_key(&k.id) {
-                continue;
-            }
-            if let Some(until) = pool.cooling.get(&k.id) {
-                let secs = until.saturating_duration_since(now).as_secs();
-                min = Some(min.map_or(secs, |m| m.min(secs)));
-            }
-        }
-        min
-    }
-
     /// Push a per-key outcome into the rolling success window (feeds the
     /// `success_rate` strategy sort attribute, spec §2.2). Folded into
     /// record_stat / record_key_stat so every key attempt's outcome is captured
@@ -439,6 +385,128 @@ impl App {
             .provider_by_id(provider_id)
             .and_then(|p| p.price_table.get(model).copied())
             .unwrap_or(0.0)
+    }
+
+    /// Strategy-layer select (spec §3 ③④⑤ + §6; impl-spec §4): fill the
+    /// candidate rows' cooldown + metrics state from the pool, then call
+    /// `strategy::select_pure` (D1 rotate → stable sort → walk → terminal)
+    /// under one lock so the cursor stays consistent with the selection.
+    ///
+    /// Built once per request (`build_candidates`), re-walked each attempt as
+    /// keys cool down — `pick_key`'s replacement on the request hot path.
+    /// North-compat: both-ON + empty sort reproduces `pick_key`'s
+    /// round-robin-skip-cooldown (impl-spec §0, verified by `select_pure` tests).
+    pub fn select_strategy(
+        &self,
+        set: &crate::strategy::CandidateSet,
+        sorts: &[crate::config::SortKey],
+    ) -> crate::strategy::SelectResult {
+        // Clone the skeletons so the caller's set stays reusable across attempts;
+        // the sort reorders the local copy only.
+        let mut rows = set.rows.clone();
+        let now = Instant::now();
+        let mut pool = self.pool.lock().unwrap();
+        // Prune expired cooldowns so status + remaining_secs stay accurate.
+        pool.cooling.retain(|_, until| *until > now);
+        pool.invalid.retain(|_, until| *until > now);
+
+        // Fill each row's runtime fields from the pool (cooldown + metrics).
+        for r in &mut rows {
+            let invalid = pool.invalid.contains_key(&r.api_key_id);
+            r.valid = !invalid;
+            if let Some(until) = pool.cooling.get(&r.api_key_id) {
+                r.non_cooled = false;
+                r.remaining_secs = until.saturating_duration_since(now).as_secs();
+            } else {
+                r.non_cooled = true;
+                r.remaining_secs = 0;
+            }
+            // Metrics snapshot (spec §2.2): success_rate/rpm/tpm/avg_tftt/tps
+            // are live; token_balance is always None (no provider exposes it);
+            // bill_balance is set by the balance fetcher (None = +∞).
+            match pool.metrics.get(&r.api_key_id) {
+                None => {
+                    r.success_rate = 1.0; // no history = don't penalize
+                    r.rpm = 0;
+                    r.tpm = 0;
+                    r.avg_tftt_ms = 0;
+                    r.tps = 0.0;
+                    r.token_balance = None;
+                    r.bill_balance = None;
+                }
+                Some(m) => {
+                    let total = m.success.len();
+                    r.success_rate = if total == 0 {
+                        1.0
+                    } else {
+                        let ok = m.success.iter().filter(|e| e.1).count() as f64;
+                        ok / total as f64
+                    };
+                    r.rpm = m.req_times.len() as u32;
+                    r.tpm = m.token_events.iter().map(|(_, n)| *n).sum::<u64>() as u32;
+                    r.avg_tftt_ms = if m.tftt_samples.is_empty() {
+                        0
+                    } else {
+                        (m.tftt_samples.iter().map(|&v| v as u64).sum::<u64>()
+                            / m.tftt_samples.len() as u64) as u32
+                    };
+                    r.tps = if m.tps_samples.is_empty() {
+                        0.0
+                    } else {
+                        m.tps_samples.iter().map(|&v| v).sum::<f32>() / m.tps_samples.len() as f32
+                    };
+                    r.token_balance = None; // no catalog provider exposes a clean
+                                            // remaining-token-quota field (see
+                                            // doc/research/provider-balance-apis.md)
+                    r.bill_balance = m.bill_balance;
+                }
+            }
+        }
+
+        // D1 cursor: read under the same lock, advance inside select_pure, persist.
+        let cursor = *pool.strategy_cursors.entry(set.cursor_key.clone()).or_insert(0);
+        drop(pool); // release before select_pure (pure; no pool access)
+        let (result, new_cursor) = crate::strategy::select_pure(&mut rows, sorts, cursor);
+        let mut pool = self.pool.lock().unwrap();
+        pool.strategy_cursors.insert(set.cursor_key.clone(), new_cursor);
+        // A routed row bumps the rolling RPM window (matches pick_key's
+        // req_times push, so the `rpm` sort attribute tracks live load).
+        if let crate::strategy::SelectResult::Routed(ref row) = result {
+            let now = Instant::now();
+            let m = pool.metrics.entry(row.api_key_id.clone()).or_default();
+            m.req_times.push_back(now);
+            let win = Duration::from_secs(METRIC_RPM_WINDOW_SECS);
+            m.req_times.retain(|t| now.duration_since(*t) <= win);
+            // Count the routed attempt (pick_key bumped `requests` for the UI).
+            *pool.requests.entry(row.api_key_id.clone()).or_insert(0) += 1;
+        }
+        result
+    }
+
+    /// Soonest a *valid* (non-dead) key in the given candidate set recovers
+    /// from rate-limit cooldown (spec §6 "全冷却" Retry-After), or `None` when
+    /// no key is merely cooling (all dead/invalid → no Retry-After). The
+    /// generalization of `min_retry_after_secs` to a cross-provider candidate
+    /// set (impl-spec §6, decision D6): signature takes the candidate rows
+    /// rather than a single `&Provider`.
+    #[allow(dead_code)] // wired in forward() for the §6 terminal
+    pub fn min_retry_after_candidates(&self, set: &crate::strategy::CandidateSet) -> Option<u64> {
+        let now = Instant::now();
+        let mut pool = self.pool.lock().unwrap();
+        pool.cooling.retain(|_, until| *until > now);
+        pool.invalid.retain(|_, until| *until > now);
+        let mut min: Option<u64> = None;
+        for r in &set.rows {
+            // Dead (401/403-quarantined) keys are not valid — skip (spec §6).
+            if pool.invalid.contains_key(&r.api_key_id) {
+                continue;
+            }
+            if let Some(until) = pool.cooling.get(&r.api_key_id) {
+                let secs = until.saturating_duration_since(now).as_secs();
+                min = Some(min.map_or(secs, |m| m.min(secs)));
+            }
+        }
+        min
     }
 
     pub fn clear_error(&self, key_id: &str) {
