@@ -85,6 +85,12 @@ async fn main() {
             delete(admin::delete_alias),
         )
         .route("/api/settings", put(admin::update_settings))
+        .route("/api/strategy", put(admin::update_strategy))
+        .route("/api/strategy/dry-run", post(admin::strategy_dry_run))
+        .route(
+            "/api/model-groups",
+            get(admin::list_model_groups).put(admin::update_model_groups),
+        )
         .route("/api/status", get(admin::status))
         .route("/api/stats", get(admin::get_stats))
         .route("/api/config/export", get(admin::export_config))

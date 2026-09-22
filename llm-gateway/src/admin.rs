@@ -442,6 +442,107 @@ pub async fn import_config(
     ok(cfg)
 }
 
+// ---------- strategy ----------
+
+#[derive(serde::Deserialize)]
+pub struct StrategyInput {
+    pub filter: crate::config::Filter,
+    #[serde(default)]
+    pub sort: Vec<crate::config::SortKey>,
+}
+
+/// PUT /api/strategy — write the routing strategy (filter toggles + the ordered
+/// sort stack, spec §5). The sort is validated (≤3 keys; serde rejects letters
+/// outside A-J with a 400) and normalized (deduped) on write (impl-spec §4.2).
+pub async fn update_strategy(
+    State(app): State<std::sync::Arc<App>>,
+    Json(input): Json<StrategyInput>,
+) -> Response {
+    if input.sort.len() > 3 {
+        return err(StatusCode::BAD_REQUEST, "sort may have at most 3 keys");
+    }
+    let cfg = app.write_config(|c| {
+        c.strategy.filter = input.filter;
+        c.strategy.sort = input.sort;
+        c.normalize_strategy();
+    });
+    ok(cfg)
+}
+
+/// POST /api/strategy/dry-run — simulate the selector for a model without
+/// routing or advancing the cursor (impl-spec §8). `{model, provider?, sorts?}`
+/// → `{result, retry_after, routed, candidates, cursor}`. `provider` qualifies a
+/// bare model as `provider/model` (both-ON preview); `sorts` overrides the
+/// configured stack to explore "what if" orderings. Never exposes `key_secret`.
+pub async fn strategy_dry_run(
+    State(app): State<std::sync::Arc<App>>,
+    Json(input): Json<DryRunInput>,
+) -> Response {
+    let cfg = app.read_config();
+    // Compose the model string: a given `provider` + a bare model → "provider/model".
+    let model = match (&input.provider, input.model.split_once('/')) {
+        (Some(p), None) => format!("{p}/{}", input.model),
+        _ => input.model.clone(),
+    };
+    let set = match crate::strategy::build_candidates(&cfg, &model) {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::NOT_FOUND, &e),
+    };
+    let sorts = input.sorts.unwrap_or_else(|| cfg.strategy.sort.clone());
+    if sorts.len() > 3 {
+        return err(StatusCode::BAD_REQUEST, "sorts may have at most 3 keys");
+    }
+    ok(app.strategy_dry_run(&set, &sorts))
+}
+
+#[derive(serde::Deserialize)]
+pub struct DryRunInput {
+    pub model: String,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub sorts: Option<Vec<crate::config::SortKey>>,
+}
+
+// ---------- model groups ----------
+
+#[derive(serde::Deserialize)]
+pub struct ModelGroupsInput {
+    pub groups: Vec<crate::config::ModelGroup>,
+}
+
+/// GET /api/model-groups — the cross-provider model groups (spec §1, §2.3).
+pub async fn list_model_groups(State(app): State<std::sync::Arc<App>>) -> Response {
+    ok(app.read_config().model_groups)
+}
+
+/// PUT /api/model-groups — replace the whole group list. Each group id must be
+/// non-empty and every entry's provider must exist in config (impl-spec §2.3);
+/// an unknown provider is rejected with a 400 so the UI gets a clear error.
+pub async fn update_model_groups(
+    State(app): State<std::sync::Arc<App>>,
+    Json(input): Json<ModelGroupsInput>,
+) -> Response {
+    let cfg = app.read_config();
+    for g in &input.groups {
+        if g.id.trim().is_empty() {
+            return err(StatusCode::BAD_REQUEST, "group id is required");
+        }
+        for (pid, _um) in &g.entries {
+            if cfg.provider_by_id(pid).is_none() {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    &format!("group `{}` references unknown provider `{pid}`", g.id),
+                );
+            }
+        }
+    }
+    let cfg = app.write_config(|c| {
+        c.model_groups = input.groups;
+    });
+    ok(cfg)
+}
+
 // ---------- stats ----------
 
 /// GET /api/stats — aggregated success/fail stats for the Status page.

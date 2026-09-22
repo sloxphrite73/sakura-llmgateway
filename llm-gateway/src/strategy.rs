@@ -379,17 +379,21 @@ fn cmp_f64(a: f64, b: f64) -> Ordering {
 /// the returned `usize` is the new cursor to persist. The caller owns `rows`
 /// (a freshly-filled clone), so reordering it in place is safe.
 ///
-/// North-compat (impl-spec §4.1): under both-ON + empty sort the comparator is
-/// `(valid↓, non-cooled↓, idx↑)`. After rotating so the cursor row lands at
-/// `idx=0`, the first valid+non-cooled row is the cursor row itself — the
-/// round-robin next pick — and the cursor advances one, matching `pick_key`'s
-/// `counters = idx+1` for the all-healthy case.
-pub fn select_pure(rows: &mut Vec<Row>, sorts: &[SortKey], cursor: usize) -> (SelectResult, usize) {
-    if rows.is_empty() {
-        return (SelectResult::Empty, cursor);
-    }
+/// D1 rotate → assign `idx` → stable sort → walk to the first `valid +
+/// non-cooled` row (spec §3 ③④). Precondition: `rows` is non-empty (callers
+/// handle the empty case). Returns:
+/// - `routed_idx`: `Some(i)` where `rows[i]` is the routed row (it stays in the
+///   Vec — `select_pure` removes it; `select_preview` keeps it for display).
+/// - `cooling_min`: the soonest recovery among cooling valid rows (§6 Retry-After).
+/// - `any_valid`: whether any candidate is valid (distinguishes NoValid vs Empty).
+/// - `new_cursor`: `(cursor + 1) % n` only when a row was routed (cursor doesn't
+///   move when nothing is served — matches `pick_key` leaving `counters` alone).
+fn sort_and_walk(
+    rows: &mut Vec<Row>,
+    sorts: &[SortKey],
+    cursor: usize,
+) -> (Option<usize>, Option<u64>, bool, usize) {
     let n = rows.len();
-
     // D1: rotate so the cursor's row lands at idx=0. `cursor % n` guards a
     // cursor that drifted past n (e.g. after a provider's keys were edited).
     let rot = cursor % n;
@@ -400,41 +404,79 @@ pub fn select_pure(rows: &mut Vec<Row>, sorts: &[SortKey], cursor: usize) -> (Se
     for (i, r) in rows.iter_mut().enumerate() {
         r.idx = i;
     }
-
     // Stable sort by the comparator. `sort_by` is stable, so rows equal under
     // the comparator keep the rotation order — the D1 load-balancing effect.
     rows.sort_by(|a, b| compare(sorts, a, b));
-
     // Walk: first valid + non-cooled row (spec §3 ④).
     let mut cooling_valid_min: Option<u64> = None;
     let mut any_valid = false;
+    let mut routed_idx: Option<usize> = None;
     for (i, r) in rows.iter().enumerate() {
         if !r.valid {
             continue;
         }
         any_valid = true;
         if r.non_cooled {
-            // Route this row. Advance the cursor one past the *cursor* position
-            // (D1: `cursor = (cursor + 1) % n`), not past the selected row —
-            // under a user sort the selected row may be far from the cursor, and
-            // advancing one keeps equivalent keys load-balanced across requests.
-            let row = rows.remove(i);
-            let new_cursor = (cursor + 1) % n;
-            return (SelectResult::Routed(row), new_cursor);
+            routed_idx = Some(i);
+            break;
         }
-        // A valid-but-cooling row: track the soonest recovery for §6 Retry-After.
         cooling_valid_min = Some(cooling_valid_min.map_or(r.remaining_secs, |m| m.min(r.remaining_secs)));
     }
+    let new_cursor = if routed_idx.is_some() { (cursor + 1) % n } else { cursor };
+    (routed_idx, cooling_valid_min, any_valid, new_cursor)
+}
 
-    // No valid+non-cooled row was found.
-    let result = if any_valid {
-        // Valid rows exist but all are cooling → §6 AllCooling.
-        SelectResult::AllCooling { retry_after: cooling_valid_min }
-    } else {
-        // No valid row at all (every candidate is 401/403-quarantined).
-        SelectResult::NoValid
+/// Select for the request hot path (spec §3 ③④⑤ + §6). Moves the routed row
+/// out of `rows` (no clone) and advances the cursor — `select_strategy` calls
+/// this and persists the new cursor.
+///
+/// North-compat (impl-spec §4.1): under both-ON + empty sort the comparator is
+/// `(valid↓, non-cooled↓, idx↑)`. After rotating so the cursor row lands at
+/// `idx=0`, the first valid+non-cooled row is the cursor row itself — the
+/// round-robin next pick — and the cursor advances one, matching `pick_key`'s
+/// `counters = idx+1` for the all-healthy case.
+pub fn select_pure(rows: &mut Vec<Row>, sorts: &[SortKey], cursor: usize) -> (SelectResult, usize) {
+    if rows.is_empty() {
+        return (SelectResult::Empty, cursor);
+    }
+    let (routed_idx, cooling_min, any_valid, new_cursor) = sort_and_walk(rows, sorts, cursor);
+    let result = match routed_idx {
+        Some(i) => SelectResult::Routed(rows.remove(i)),
+        None => {
+            if any_valid {
+                SelectResult::AllCooling { retry_after: cooling_min }
+            } else {
+                SelectResult::NoValid
+            }
+        }
     };
-    (result, cursor)
+    (result, new_cursor)
+}
+
+/// Dry-run preview (impl-spec §8): sort + walk like `select_pure` but **without**
+/// removing the routed row or advancing the persisted cursor — returns the
+/// routed row's index so the caller can mark it in the candidate list it shows.
+/// The returned `SelectResult::Routed` carries a clone (the row stays in `rows`).
+pub fn select_preview(
+    rows: &mut Vec<Row>,
+    sorts: &[SortKey],
+    cursor: usize,
+) -> (SelectResult, Option<usize>, usize) {
+    if rows.is_empty() {
+        return (SelectResult::Empty, None, cursor);
+    }
+    let (routed_idx, cooling_min, any_valid, new_cursor) = sort_and_walk(rows, sorts, cursor);
+    let result = match routed_idx {
+        Some(i) => SelectResult::Routed(rows[i].clone()),
+        None => {
+            if any_valid {
+                SelectResult::AllCooling { retry_after: cooling_min }
+            } else {
+                SelectResult::NoValid
+            }
+        }
+    };
+    (result, routed_idx, new_cursor)
 }
 
 // ---------------------------------------------------------------------------

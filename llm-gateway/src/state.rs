@@ -99,6 +99,66 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Fill candidate rows' runtime fields — cooldown-derived state (`valid` /
+/// `non_cooled` / `remaining_secs`, spec §2.3) + the metrics snapshot
+/// (`success_rate`/`rpm`/`tpm`/`avg_tftt`/`tps`/`token_balance`/`bill_balance`,
+/// spec §2.2) — from the pool. Prunes expired cooldowns first. Called under the
+/// caller's held pool lock by `select_strategy` (hot path) and `strategy_dry_run`
+/// (preview), so the two never diverge on what "cooling" means.
+fn fill_rows(pool: &mut PoolRuntime, rows: &mut [crate::strategy::Row], now: Instant) {
+    pool.cooling.retain(|_, until| *until > now);
+    pool.invalid.retain(|_, until| *until > now);
+    for r in rows {
+        r.valid = !pool.invalid.contains_key(&r.api_key_id);
+        if let Some(until) = pool.cooling.get(&r.api_key_id) {
+            r.non_cooled = false;
+            r.remaining_secs = until.saturating_duration_since(now).as_secs();
+        } else {
+            r.non_cooled = true;
+            r.remaining_secs = 0;
+        }
+        // Metrics snapshot (spec §2.2): success_rate/rpm/tpm/avg_tftt/tps are
+        // live; token_balance is always None (no catalog provider exposes a
+        // clean remaining-token-quota field); bill_balance is set by the balance
+        // fetcher (None = +∞).
+        match pool.metrics.get(&r.api_key_id) {
+            None => {
+                r.success_rate = 1.0; // no history = don't penalize new keys
+                r.rpm = 0;
+                r.tpm = 0;
+                r.avg_tftt_ms = 0;
+                r.tps = 0.0;
+                r.token_balance = None;
+                r.bill_balance = None;
+            }
+            Some(m) => {
+                let total = m.success.len();
+                r.success_rate = if total == 0 {
+                    1.0
+                } else {
+                    let ok = m.success.iter().filter(|e| e.1).count() as f64;
+                    ok / total as f64
+                };
+                r.rpm = m.req_times.len() as u32;
+                r.tpm = m.token_events.iter().map(|(_, n)| *n).sum::<u64>() as u32;
+                r.avg_tftt_ms = if m.tftt_samples.is_empty() {
+                    0
+                } else {
+                    (m.tftt_samples.iter().map(|&v| v as u64).sum::<u64>()
+                        / m.tftt_samples.len() as u64) as u32
+                };
+                r.tps = if m.tps_samples.is_empty() {
+                    0.0
+                } else {
+                    m.tps_samples.iter().map(|&v| v).sum::<f32>() / m.tps_samples.len() as f32
+                };
+                r.token_balance = None;
+                r.bill_balance = m.bill_balance;
+            }
+        }
+    }
+}
+
 impl App {
     pub fn new(config: Config, config_path: std::path::PathBuf) -> Self {
         let http = reqwest::Client::builder()
@@ -406,63 +466,7 @@ impl App {
         let mut rows = set.rows.clone();
         let now = Instant::now();
         let mut pool = self.pool.lock().unwrap();
-        // Prune expired cooldowns so status + remaining_secs stay accurate.
-        pool.cooling.retain(|_, until| *until > now);
-        pool.invalid.retain(|_, until| *until > now);
-
-        // Fill each row's runtime fields from the pool (cooldown + metrics).
-        for r in &mut rows {
-            let invalid = pool.invalid.contains_key(&r.api_key_id);
-            r.valid = !invalid;
-            if let Some(until) = pool.cooling.get(&r.api_key_id) {
-                r.non_cooled = false;
-                r.remaining_secs = until.saturating_duration_since(now).as_secs();
-            } else {
-                r.non_cooled = true;
-                r.remaining_secs = 0;
-            }
-            // Metrics snapshot (spec §2.2): success_rate/rpm/tpm/avg_tftt/tps
-            // are live; token_balance is always None (no provider exposes it);
-            // bill_balance is set by the balance fetcher (None = +∞).
-            match pool.metrics.get(&r.api_key_id) {
-                None => {
-                    r.success_rate = 1.0; // no history = don't penalize
-                    r.rpm = 0;
-                    r.tpm = 0;
-                    r.avg_tftt_ms = 0;
-                    r.tps = 0.0;
-                    r.token_balance = None;
-                    r.bill_balance = None;
-                }
-                Some(m) => {
-                    let total = m.success.len();
-                    r.success_rate = if total == 0 {
-                        1.0
-                    } else {
-                        let ok = m.success.iter().filter(|e| e.1).count() as f64;
-                        ok / total as f64
-                    };
-                    r.rpm = m.req_times.len() as u32;
-                    r.tpm = m.token_events.iter().map(|(_, n)| *n).sum::<u64>() as u32;
-                    r.avg_tftt_ms = if m.tftt_samples.is_empty() {
-                        0
-                    } else {
-                        (m.tftt_samples.iter().map(|&v| v as u64).sum::<u64>()
-                            / m.tftt_samples.len() as u64) as u32
-                    };
-                    r.tps = if m.tps_samples.is_empty() {
-                        0.0
-                    } else {
-                        m.tps_samples.iter().map(|&v| v).sum::<f32>() / m.tps_samples.len() as f32
-                    };
-                    r.token_balance = None; // no catalog provider exposes a clean
-                                            // remaining-token-quota field (see
-                                            // doc/research/provider-balance-apis.md)
-                    r.bill_balance = m.bill_balance;
-                }
-            }
-        }
-
+        fill_rows(&mut pool, &mut rows, now);
         // D1 cursor: read under the same lock, advance inside select_pure, persist.
         let cursor = *pool.strategy_cursors.entry(set.cursor_key.clone()).or_insert(0);
         drop(pool); // release before select_pure (pure; no pool access)
@@ -481,6 +485,77 @@ impl App {
             *pool.requests.entry(row.api_key_id.clone()).or_insert(0) += 1;
         }
         result
+    }
+
+    /// Dry-run preview (impl-spec §8): the same fill + sort + walk as
+    /// `select_strategy`, but read-only — it does **not** advance the persisted
+    /// cursor or bump the RPM window. Returns the §6 terminal + the full sorted
+    /// candidate list (the would-be-routed row marked) so the UI strategy board
+    /// (prototype `computeRoute()` + `resultBanner`) can show what the selector
+    /// *would* route. Never exposes `key_secret` (the secret never leaves the
+    /// process; only `api_key_id` is reported).
+    pub fn strategy_dry_run(
+        &self,
+        set: &crate::strategy::CandidateSet,
+        sorts: &[crate::config::SortKey],
+    ) -> serde_json::Value {
+        let mut rows = set.rows.clone();
+        let now = Instant::now();
+        let mut pool = self.pool.lock().unwrap();
+        fill_rows(&mut pool, &mut rows, now);
+        let cursor = *pool.strategy_cursors.entry(set.cursor_key.clone()).or_insert(0);
+        drop(pool);
+        let (result, routed_idx, _new_cursor) =
+            crate::strategy::select_preview(&mut rows, sorts, cursor);
+        let (result_type, retry_after) = match &result {
+            crate::strategy::SelectResult::Routed(_) => ("routed", None),
+            crate::strategy::SelectResult::AllCooling { retry_after } => {
+                ("all_cooling", *retry_after)
+            }
+            crate::strategy::SelectResult::NoValid => ("no_valid", None),
+            crate::strategy::SelectResult::Empty => ("empty", None),
+        };
+        let routed_summary = match &result {
+            crate::strategy::SelectResult::Routed(r) => Some(serde_json::json!({
+                "provider_id": r.provider_id,
+                "upstream_model": r.upstream_model,
+                "api_key_id": r.api_key_id,
+                "group_id": r.group_id,
+            })),
+            _ => None,
+        };
+        let candidates: Vec<serde_json::Value> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                serde_json::json!({
+                    "provider_id": r.provider_id,
+                    "upstream_model": r.upstream_model,
+                    "api_key_id": r.api_key_id,
+                    "group_id": r.group_id,
+                    "valid": r.valid,
+                    "non_cooled": r.non_cooled,
+                    "remaining_secs": r.remaining_secs,
+                    "success_rate": r.success_rate,
+                    "rpm": r.rpm,
+                    "tpm": r.tpm,
+                    "avg_tftt_ms": r.avg_tftt_ms,
+                    "tps": r.tps,
+                    "token_balance": r.token_balance,
+                    "bill_balance": r.bill_balance,
+                    "price": r.price,
+                    "idx": r.idx,
+                    "routed": routed_idx == Some(i),
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "result": result_type,
+            "retry_after": retry_after,
+            "routed": routed_summary,
+            "candidates": candidates,
+            "cursor": cursor,
+        })
     }
 
     /// Soonest a *valid* (non-dead) key in the given candidate set recovers
