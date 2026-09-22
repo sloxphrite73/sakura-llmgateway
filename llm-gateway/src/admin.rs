@@ -444,6 +444,12 @@ pub async fn import_config(
 
 // ---------- strategy ----------
 
+/// GET /api/strategy — the current routing strategy (filter toggles + sort
+/// stack). Read counterpart to `update_strategy`; the UI loads it on refresh.
+pub async fn get_strategy(State(app): State<std::sync::Arc<App>>) -> Response {
+    ok(app.read_config().strategy)
+}
+
 #[derive(serde::Deserialize)]
 pub struct StrategyInput {
     pub filter: crate::config::Filter,
