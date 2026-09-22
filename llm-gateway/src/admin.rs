@@ -26,6 +26,10 @@ pub struct ProviderInput {
     pub model_allowlist_only: Option<bool>,
     /// `"openai"` (default) or `"anthropic"` — the wire protocol this upstream speaks.
     pub protocol: Option<String>,
+    /// Whether this upstream exposes a pollable token-balance API (spec §2.2).
+    pub has_token_balance_api: Option<bool>,
+    /// Whether this upstream exposes a pollable bill/credit-balance API (spec §2.2).
+    pub has_bill_balance_api: Option<bool>,
 }
 
 pub async fn create_provider(
@@ -45,8 +49,8 @@ pub async fn create_provider(
             model_allowlist_only: input.model_allowlist_only.unwrap_or(false),
             aliases: Default::default(),
             protocol: input.protocol.unwrap_or_default(),
-            has_token_balance_api: false,
-            has_bill_balance_api: false,
+            has_token_balance_api: input.has_token_balance_api.unwrap_or(false),
+            has_bill_balance_api: input.has_bill_balance_api.unwrap_or(false),
             price_table: Default::default(),
         });
     });
@@ -69,6 +73,12 @@ pub async fn update_provider(
             if let Some(protocol) = &input.protocol {
                 p.protocol = protocol.clone();
             }
+            if let Some(v) = input.has_token_balance_api {
+                p.has_token_balance_api = v;
+            }
+            if let Some(v) = input.has_bill_balance_api {
+                p.has_bill_balance_api = v;
+            }
             found = true;
         }
     });
@@ -77,6 +87,35 @@ pub async fn update_provider(
     } else {
         err(StatusCode::NOT_FOUND, "provider not found")
     }
+}
+
+/// PUT /api/providers/{id}/price-table — replace a provider's per-model price
+/// table (spec §2.2 `price`, sort I). Body `{table: {model: ¥/1M tok}}`;
+/// missing models = 0 (free). Lets the UI edit model prices (the prototype's
+/// model-edit price field) without a full config import.
+pub async fn update_price_table(
+    State(app): State<std::sync::Arc<App>>,
+    Path(id): Path<String>,
+    Json(input): Json<PriceTableInput>,
+) -> Response {
+    let mut found = false;
+    let cfg = app.write_config(|c| {
+        if let Some(p) = c.providers.iter_mut().find(|p| p.id == id) {
+            p.price_table = input.table;
+            found = true;
+        }
+    });
+    if found {
+        ok(cfg)
+    } else {
+        err(StatusCode::NOT_FOUND, "provider not found")
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct PriceTableInput {
+    /// logical model id -> CNY per 1M tokens. Missing entry = 0 (free).
+    pub table: std::collections::BTreeMap<String, f64>,
 }
 
 pub async fn delete_provider(
@@ -657,6 +696,11 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                         .and_then(|c| c.get(&k.id))
                         .cloned()
                         .unwrap_or(serde_json::Value::Null);
+                    // Per-key strategy metrics (spec §2.2): the same snapshot the
+                    // selector's fill_rows uses, exposed so the UI can show the
+                    // success_rate / rpm / tpm / tftt / tps / token+bill balance
+                    // columns the prototype had. None balances = +∞ (shown as 不限).
+                    let m = app.metrics_of(&p.id, &k.id);
                     serde_json::json!({
                         "id": k.id,
                         "key": mask(&k.key),
@@ -667,6 +711,15 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                         "invalid": invalid,
                         "requests": pool.get("requests").and_then(|r| r.get(&k.id)).cloned().unwrap_or(serde_json::json!(0)),
                         "last_error": pool.get("last_error").and_then(|r| r.get(&k.id)).cloned().unwrap_or(serde_json::Value::Null),
+                        "metrics": {
+                            "success_rate": m.success_rate,
+                            "rpm": m.rpm,
+                            "tpm": m.tpm,
+                            "avg_tftt_ms": m.avg_tftt_ms,
+                            "tps": m.tps,
+                            "token_balance": m.token_balance,
+                            "bill_balance": m.bill_balance,
+                        },
                     })
                 })
                 .collect();
@@ -674,8 +727,12 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                 "id": p.id,
                 "name": p.name,
                 "base_url": p.base_url,
+                "protocol": p.protocol,
                 "aliases": p.aliases,
                 "model_allowlist_only": p.model_allowlist_only,
+                "has_token_balance_api": p.has_token_balance_api,
+                "has_bill_balance_api": p.has_bill_balance_api,
+                "price_table": p.price_table,
                 "models": p.models,
                 "keys": keys,
             })

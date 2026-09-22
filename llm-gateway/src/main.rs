@@ -66,6 +66,7 @@ async fn main() {
             "/api/providers/{id}",
             put(admin::update_provider).delete(admin::delete_provider),
         )
+        .route("/api/providers/{id}/price-table", put(admin::update_price_table))
         .route("/api/providers/{id}/models", post(admin::add_model))
         .route(
             "/api/providers/{id}/models/{model_id}",
