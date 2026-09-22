@@ -17,6 +17,7 @@
   .pdot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 50%;
     background: var(--color-text-link); margin-right: 0.4375rem; vertical-align: middle; flex: none; }
   .pl-item .pdot { margin-right: 0; }
+  .num .nm-sans { font-family: var(--font-sans); }
   button.danger { border-color: var(--color-action-destructive); color: var(--color-action-destructive); }
   button.danger:hover { border-color: var(--color-action-destructive-hover); color: var(--color-action-destructive-hover); background: var(--color-surface-raised); }
   .empty { padding: 1.5rem; text-align: center; color: var(--color-text-tertiary); }
@@ -143,6 +144,9 @@ const I18N = {
     '切换语言 / switch language':'切换语言 / switch language',
     '模型导入':'模型导入', '全选 / 全不选':'全选 / 全不选', '导入所选':'导入所选', '已存在':'已存在', '已选 {n} 个':'已选 {n} 个',
     'provider · model':'provider · model', 'RPM':'RPM', 'TPM':'TPM',
+    'Token 余额 API':'Token 余额 API', '账单余额 API':'账单余额 API', '价格表':'价格表', '¥/1M tok':'¥/1M tok',
+    '不限额度':'不限', '保存价格表':'保存价格表', 'Key 池概览':'Key 池概览',
+    'token余额':'token余额', '账单余额':'账单余额', '模型 ID':'模型 ID', '上游模型名':'上游模型名',
   },
   en: {
     '控制台':'Console', '运行中':'Running', '导航':'Navigate', 'Key 池':'Key pool',
@@ -222,6 +226,9 @@ const I18N = {
     '切换语言 / switch language':'switch language',
     '模型导入':'Import models', '全选 / 全不选':'All / none', '导入所选':'Import selected', '已存在':'exists', '已选 {n} 个':'{n} selected',
     'provider · model':'provider · model', 'RPM':'RPM', 'TPM':'TPM',
+    'Token 余额 API':'Token balance API', '账单余额 API':'Bill balance API', '价格表':'Price table', '¥/1M tok':'¥/1M tok',
+    '不限额度':'Unlimited', '保存价格表':'Save price table', 'Key 池概览':'Key pool overview',
+    'token余额':'Token balance', '账单余额':'Bill balance', '模型 ID':'Model ID', '上游模型名':'Upstream model',
   }
 };
 let LANG = 'zh';
@@ -235,7 +242,7 @@ function applyLang(lang){
 }
 /* lang/theme init moved to the boot block at the end of the script: applyLang
    triggers renderTopbar/Sidebar/SideFoot/renderMain, which reference the data
-   globals (STATUS/S/NAV…) declared below — running init here (before those
+   globals (STATUS/S/NAV…) declared below - running init here (before those
    `let`/`const` lines execute) hit a temporal-dead-zone error. */
 
 /* ============ theme ============ */
@@ -246,7 +253,7 @@ function applyTheme(mode){
     : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>';
   try { localStorage.setItem(THEME_KEY, mode); } catch(e){}
 }
-/* theme init moved to boot (see lang note above — same TDZ reason). */
+/* theme init moved to boot (see lang note above - same TDZ reason). */
 $('theme-toggle').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'));
 $('lang-toggle').addEventListener('click', () => applyLang(LANG === 'zh' ? 'en' : 'zh'));
 
@@ -300,6 +307,7 @@ const S = {
   localProv:null,            // selected provider id (providers board)
   modelTab:'info',           // 'info' | 'groups'
   modelFilter:'all',
+  editingModel:null,        // {pid, mid} | null - model info edit pane
   groupEdit:null,            // {isNew, id, entries:[{pid,model}]}
   keyFilter:'all',
   reqModel:'', reqProv:'不限',
@@ -308,6 +316,18 @@ const S = {
   addDraft:null,            // {name, base_url, protocol, models[], key, source}
 };
 const PNAME = id => { const p = (STATUS&&STATUS.providers||[]).find(x=>x.id===id); return p ? p.name : id; };
+// Aggregate a per-key metric across a provider's keys. A null balance means
+// unlimited (不限); any unlimited key makes the aggregate unlimited.
+// rpm and other always-numeric metrics are plain sums.
+const sumMetric = (keys, field) => {
+  if (!keys || !keys.length) return null;
+  let s = 0;
+  for (const k of keys){ const v = k && k.metrics ? k.metrics[field] : null; if (v == null) return null; s += v; }
+  return s;
+};
+const sumRpm = keys => { let s = 0; if (keys) for (const k of keys){ if (k && k.metrics && k.metrics.rpm) s += k.metrics.rpm; } return s; };
+const fmtTok = v => v == null ? `<span class="nm-sans faint">${t('不限额度')}</span>` : v.toLocaleString();
+const fmtBill = v => v == null ? `<span class="nm-sans faint">${t('不限额度')}</span>` : '' + v;
 
 /* ============ shell render ============ */
 function renderTopbar(){
@@ -324,7 +344,7 @@ function renderSidebar(){
       <span class="side-label">${t(n.label)}</span>
     </button>`).join('');
 }
-function setTab(id){ S.tab=id; if(id!=='models') S.groupEdit=null; renderSidebar(); renderMain(); }
+function setTab(id){ S.tab=id; if(id!=='models'){ S.groupEdit=null; S.editingModel=null; } renderSidebar(); renderMain(); }
 function setLocalProv(id){ S.localProv=id; renderMain(); }
 function renderSideFoot(){
   const f = $('side-foot'); if (!f) return;
@@ -376,20 +396,24 @@ function renderOverview(m){
   const tot = (STATS&&STATS.total) || {success:0, fail:0};
   const rot = (STATS&&STATS.rotations_total) || 0;
   const allreq = tot.success + tot.fail;
-  const rate = allreq ? (tot.success/allreq*100).toFixed(1)+'%' : '—';
+  const rate = allreq ? (tot.success/allreq*100).toFixed(1)+'%' : '-';
   const hist = (STATS&&STATS.histogram) || [];
   const peak = Math.max(1, ...hist.map(h => h.success + h.fail));
   const apiBase = `http://127.0.0.1:${STATUS.api_port}`;
   const provRows = provs.length ? provs.map(p => {
-    let pk=0, pc=0, po=0; (p.keys||[]).forEach(k => { if (k.invalid) po++; else if (k.cooling) pc++; else pk++; });
+    const keys = p.keys || [];
+    const tb = sumMetric(keys, 'token_balance');
+    const bb = sumMetric(keys, 'bill_balance');
+    const rpm = sumRpm(keys);
     return `<tr class="row-click" onclick="S.localProv='${p.id}';setTab('providers')">
       <td><span class="pdot"></span>${esc(p.name)}</td>
-      <td><code>${esc(p.base_url)}</code></td>
-      <td class="num">${(p.keys||[]).length}</td>
-      <td class="num">${(p.models||[]).length}</td>
-      <td class="num"><span class="st ok">${pk}</span> <span class="st cool">${pc}</span> <span class="st off">${po}</span></td>
+      <td><span class="pill">${esc(p.protocol || 'openai')}</span></td>
+      <td class="num">${keys.length}</td>
+      <td class="num">${fmtTok(tb)}</td>
+      <td class="num">${fmtBill(bb)}</td>
+      <td class="num">${rpm}</td>
     </tr>`;
-  }).join('') : `<tr><td colspan="5" class="faint">${t('暂无数据')}</td></tr>`;
+  }).join('') : `<tr><td colspan="6" class="faint">${t('暂无数据')}</td></tr>`;
   const provStats = Object.entries((STATS&&STATS.providers) || {});
   const modelStats = Object.entries((STATS&&STATS.models) || {});
   const keyStats = Object.entries((STATS&&STATS.keys) || {});
@@ -408,7 +432,7 @@ function renderOverview(m){
     <div class="section">
       <div class="section-title">${t('提供商概览')} <span class="note">${t('点行进详情')}</span></div>
       <div class="card"><table>
-        <tr><th>${t('提供商')}</th><th>${t('Base URL')}</th><th>${t('Key')}</th><th>${t('模型')}</th><th>${t('可用')} / ${t('冷却')} / ${t('异常')}</th></tr>
+        <tr><th>${t('提供商')}</th><th>${t('协议')}</th><th>${t('Key')}</th><th>${t('token余额')}</th><th>${t('账单余额')}</th><th>${t('RPM')}</th></tr>
         ${provRows}
       </table></div>
     </div>
@@ -446,21 +470,21 @@ function renderOverview(m){
       <div class="section-title">${t('按提供商')}</div>
       <div class="card"><table>
         <tr><th>${t('提供商')}</th><th>${t('请求')}</th><th>${t('成功')}</th><th>${t('失败')}</th><th>${t('换 Key 次数')}</th><th>${t('成功率')}</th></tr>
-        ${statRow(provStats, 6, ([id,p])=>{ const a=p.success+p.fail; return `<tr><td>${esc(p.name)}</td><td class="num">${p.success+p.fail}</td><td class="num">${p.success}</td><td class="num">${p.fail}</td><td class="num">${p.rotations||0}</td><td class="num">${a?(p.success/a*100).toFixed(1)+'%':'—'}</td></tr>`; })}
+        ${statRow(provStats, 6, ([id,p])=>{ const a=p.success+p.fail; return `<tr><td>${esc(p.name)}</td><td class="num">${p.success+p.fail}</td><td class="num">${p.success}</td><td class="num">${p.fail}</td><td class="num">${p.rotations||0}</td><td class="num">${a?(p.success/a*100).toFixed(1)+'%':'-'}</td></tr>`; })}
       </table></div>
     </div>
     <div class="section">
       <div class="section-title">${t('按模型')}</div>
       <div class="card"><table>
         <tr><th>${t('模型')}</th><th>${t('请求')}</th><th>${t('成功')}</th><th>${t('失败')}</th><th>${t('成功率')}</th></tr>
-        ${statRow(modelStats, 5, ([mid,s])=>{ const a=s.success+s.fail; return `<tr><td><span class="keytag">${esc(mid)}</span></td><td class="num">${s.success+s.fail}</td><td class="num">${s.success}</td><td class="num">${s.fail}</td><td class="num">${a?(s.success/a*100).toFixed(1)+'%':'—'}</td></tr>`; })}
+        ${statRow(modelStats, 5, ([mid,s])=>{ const a=s.success+s.fail; return `<tr><td><span class="keytag">${esc(mid)}</span></td><td class="num">${s.success+s.fail}</td><td class="num">${s.success}</td><td class="num">${s.fail}</td><td class="num">${a?(s.success/a*100).toFixed(1)+'%':'-'}</td></tr>`; })}
       </table></div>
     </div>
     <div class="section">
       <div class="section-title">${t('按 API Key')}</div>
       <div class="card"><table>
         <tr><th>${t('API Key')}</th><th>${t('请求')}</th><th>${t('成功')}</th><th>${t('失败')}</th><th>${t('成功率')}</th></tr>
-        ${statRow(keyStats, 5, ([id,k])=>{ const a=k.success+k.fail; return `<tr><td>${esc(k.name)}</td><td class="num">${k.success+k.fail}</td><td class="num">${k.success}</td><td class="num">${k.fail}</td><td class="num">${a?(k.success/a*100).toFixed(1)+'%':'—'}</td></tr>`; })}
+        ${statRow(keyStats, 5, ([id,k])=>{ const a=k.success+k.fail; return `<tr><td>${esc(k.name)}</td><td class="num">${k.success+k.fail}</td><td class="num">${k.success}</td><td class="num">${k.fail}</td><td class="num">${a?(k.success/a*100).toFixed(1)+'%':'-'}</td></tr>`; })}
       </table></div>
     </div>`;
   for (const id of ['api-url','api-url-anthropic']) {
@@ -505,8 +529,20 @@ function providerDetail(p){
         <div class="card card-pad">
           <div class="pd-field"><span class="lbl">${t('名称')}</span><input class="val" id="pe-name-${p.id}" aria-label="${t('名称')}" value="${esc(p.name)}"></div>
           <div class="pd-field"><span class="lbl">${t('Base URL')}</span><input class="val mono" id="pe-url-${p.id}" aria-label="${t('Base URL')}" value="${esc(p.base_url)}"></div>
+          <div class="pd-field"><span class="lbl">${t('协议')}</span>
+            <select class="val" id="pe-proto-${p.id}" aria-label="${t('协议')}">
+              <option value="openai" ${(p.protocol||'openai')==='openai'?'selected':''}>openai</option>
+              <option value="anthropic" ${p.protocol==='anthropic'?'selected':''}>anthropic</option>
+            </select>
+          </div>
           <div class="pd-field pd-row">
-            <label class="toggle"><input type="checkbox" id="pe-allow-${p.id}" aria-label="${t('白名单')}" ${p.model_allowlist_only?'checked':''} onchange="setAllowlist('${p.id}', this.checked)"><span class="track"></span><span class="slabel">${t('白名单')}${t(' 仅允许列表内模型')}</span></label>
+            <label class="toggle"><input type="checkbox" id="pe-allow-${p.id}" aria-label="${t('白名单')}" ${p.model_allowlist_only?'checked':''}><span class="track"></span><span class="slabel">${t('白名单')}${t(' 仅允许列表内模型')}</span></label>
+          </div>
+          <div class="pd-field pd-row">
+            <label class="toggle"><input type="checkbox" id="pe-tbapi-${p.id}" aria-label="${t('Token 余额 API')}" ${p.has_token_balance_api?'checked':''}><span class="track"></span><span class="slabel">${t('Token 余额 API')}</span></label>
+          </div>
+          <div class="pd-field pd-row">
+            <label class="toggle"><input type="checkbox" id="pe-bbapi-${p.id}" aria-label="${t('账单余额 API')}" ${p.has_bill_balance_api?'checked':''}><span class="track"></span><span class="slabel">${t('账单余额 API')}</span></label>
           </div>
           <div class="faint" style="margin-top:0.5rem">${t('{mc} 个托管模型 · {kc} 把 Key').replace('{mc}',mc).replace('{kc}',kc)}</div>
         </div>
@@ -514,6 +550,36 @@ function providerDetail(p){
       <div class="row" style="margin-top:1rem;gap:0.625rem">
         <button class="primary" onclick="saveProvider('${p.id}')">${t('保存')}</button>
         <button class="small danger" onclick="delProvider('${p.id}')">${t('删除提供商')}</button>
+      </div>
+
+      <div class="section">
+        <div class="section-title">${t('价格表')} <span class="note">${t('¥/1M tok')}</span></div>
+        <div class="card card-pad">
+          ${models.length ? `<table style="margin-bottom:0.75rem">
+            <tr><th>${t('模型')}</th><th>${t('单价')}</th></tr>
+            ${models.map(mm => { const pr = (p.price_table||{})[mm.id]!=null ? (p.price_table||{})[mm.id] : 0; return `<tr>
+              <td><span class="keytag">${esc(mm.id)}</span></td>
+              <td><input class="eval pe-price" data-model="${esc(mm.id)}" type="number" step="0.01" min="0" aria-label="${t('单价')}" value="${pr}"><span class="eunit">${t('¥/1M tok')}</span></td>
+            </tr>`; }).join('')}
+          </table>` : `<div class="faint" style="margin-bottom:0.75rem">${t('无')}</div>`}
+          <div class="row" style="gap:0.5rem">
+            <button class="primary small" onclick="savePriceTable('${p.id}')">${t('保存价格表')}</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">${t('Key 池概览')}</div>
+        <div class="card card-pad">
+          <div class="stat-grid">
+            <div class="stat-box ok"><div class="num">${keys.filter(k=>!k.invalid&&!k.cooling).length}</div><div class="label">${t('可用')}</div></div>
+            <div class="stat-box warn"><div class="num">${keys.filter(k=>k.cooling).length}</div><div class="label">${t('冷却')}</div></div>
+            <div class="stat-box err"><div class="num">${keys.filter(k=>k.invalid).length}</div><div class="label">${t('异常')}</div></div>
+            <div class="stat-box"><div class="num">${fmtTok(sumMetric(keys,'token_balance'))}</div><div class="label">${t('token余额')}</div></div>
+            <div class="stat-box"><div class="num">${fmtBill(sumMetric(keys,'bill_balance'))}</div><div class="label">${t('账单余额')}</div></div>
+            <div class="stat-box"><div class="num">${sumRpm(keys)}</div><div class="label">${t('RPM')}</div></div>
+          </div>
+        </div>
       </div>
 
       <div class="section">
@@ -560,11 +626,11 @@ function providerDetail(p){
             <tr>
               <td><span class="keytag" data-key-id="${esc(k.id)}" data-revealed="0">${esc(k.key)}</span></td>
               <td>${keyStatus(k)}</td>
-              <td>${esc(k.label||'—')}</td>
-              <td class="num">${k.cooldown_secs!=null?k.cooldown_secs:t('默认')}</td>
-              <td class="num">${k.learned_cooldown!=null?`<span class="pill" title="${t('由 429 探测自动学习')}">${k.learned_cooldown}s</span>`:'—'}</td>
+              <td>${esc(k.label||'-')}</td>
+              <td class="num">${k.cooldown_secs!=null?k.cooldown_secs:`<span class="nm-sans">${t('默认')}</span>`}</td>
+              <td class="num">${k.learned_cooldown!=null?`<span class="pill" title="${t('由 429 探测自动学习')}">${k.learned_cooldown}s</span>`:'-'}</td>
               <td class="num">${k.requests||0}</td>
-              <td class="faint"><span class="ak-err" title="${esc(k.last_error||'')}">${esc(k.last_error||'—')}</span></td>
+              <td class="faint"><span class="ak-err" title="${esc(k.last_error||'')}">${esc(k.last_error||'-')}</span></td>
               <td class="ak-actions">
                 <button class="small" onclick="toggleKey('${k.id}', this)">${t('显示')}</button>
                 <button class="small" onclick="copyKey('${k.id}', this)">${t('复制')}</button>
@@ -592,7 +658,7 @@ function akPaste(btn){ try { navigator.clipboard.readText().then(v=>{ const i=bt
 
 /* ---------- provider / key / model / alias actions ---------- */
 async function saveProvider(id){
-  try { await api('PUT', '/api/providers/'+id, { name: $('pe-name-'+id).value, base_url: $('pe-url-'+id).value, model_allowlist_only: $('pe-allow-'+id).checked }); toast(t('已保存')); await refresh(); }
+  try { await api('PUT', '/api/providers/'+id, { name: $('pe-name-'+id).value, base_url: $('pe-url-'+id).value, protocol: $('pe-proto-'+id).value, model_allowlist_only: $('pe-allow-'+id).checked, has_token_balance_api: $('pe-tbapi-'+id).checked, has_bill_balance_api: $('pe-bbapi-'+id).checked }); toast(t('已保存')); await refresh(); }
   catch(e){ toast(t('失败: ')+e.message); }
 }
 async function delProvider(id){
@@ -635,10 +701,13 @@ async function toggleModel(id, mid){
   try { await api('PUT', '/api/providers/'+id+'/models/'+encodeURIComponent(mid)); await refresh(); }
   catch(e){ toast(e.message); }
 }
-async function setAllowlist(id, on){
-  const p = STATUS.providers.find(x=>x.id===id);
-  try { await api('PUT', '/api/providers/'+id, { name: p.name, base_url: p.base_url, model_allowlist_only: on }); toast(t('已保存')); await refresh(); }
-  catch(e){ toast(e.message); await refresh(); }
+async function savePriceTable(id){
+  const p = (STATUS.providers||[]).find(x=>x.id===id);
+  if (!p) return;
+  const table = {};
+  document.querySelectorAll('.pe-price').forEach(inp => { const m = inp.dataset.model; const v = parseFloat(inp.value); table[m] = isNaN(v)?0:v; });
+  try { await api('PUT', '/api/providers/'+id+'/price-table', { table }); toast(t('已保存')); await refresh(); }
+  catch(e){ toast(t('失败: ')+e.message); }
 }
 
 /* ---------- key show / copy (reveal raw key on explicit user action via export) ---------- */
@@ -834,10 +903,11 @@ function renderModels(m){
       <button class="${S.modelTab==='groups'?'active':''}" onclick="setModelTab('groups')">${t('模型组管理')}</button>
     </div>
     <div id="model-pane"></div>`;
-  if (S.modelTab==='info') renderModelList($('model-pane'));
+  if (S.editingModel) renderModelEdit($('model-pane'));
+  else if (S.modelTab==='info') renderModelList($('model-pane'));
   else renderModelGroups($('model-pane'));
 }
-function setModelTab(tab){ S.modelTab=tab; S.groupEdit=null; renderMain(); }
+function setModelTab(tab){ S.modelTab=tab; S.editingModel=null; S.groupEdit=null; renderMain(); }
 function renderModelList(c){
   const provs = STATUS.providers || [];
   const fchips = [['all', t('全部')]].concat(provs.map(p=>[p.id, p.name]));
@@ -852,17 +922,75 @@ function renderModelList(c){
       ${shown.length ? shown.map(({pid,m})=>{
         const p = provs.find(x=>x.id===pid);
         const aliases = Object.entries(p.aliases||{}).filter(([a,mm])=>mm===m.id).map(([a])=>a);
+        const price = (p.price_table||{})[m.id]!=null ? (p.price_table||{})[m.id] : 0;
+        const M = (p.keys||[])[0]; const mt = M && M.metrics;
         return `
-        <div class="mc ${m.enabled?'':'disabled'}" onclick="toggleModel('${pid}','${esc(m.id)}')">
+        <div class="mc ${m.enabled?'':'disabled'}" onclick="editModel('${pid}','${esc(m.id)}')" role="button" tabindex="0">
           <div class="mc-top"><div>
             <div class="mc-name">${esc(m.id)}</div>
             <div class="mc-prov">${esc(p.name)}${aliases.length?` · ↔ ${aliases.map(esc).join(', ')}`:''}</div>
           </div>
           <span class="mc-sw ${m.enabled?'on':''}" onclick="event.stopPropagation();toggleModel('${pid}','${esc(m.id)}')" title="${t('启用/禁用')}"><span class="track"></span><span class="slabel">${m.enabled?t('启用'):t('禁用')}</span></span></div>
+          <div class="mc-meta"><span>${t('单价')} <b>¥${price}</b></span></div>
+          <div class="mc-hover">
+            <span>RPM <b>${mt?mt.rpm:'-'}</b></span>
+            <span>TPM <b>${mt?Number(mt.tpm).toLocaleString():'-'}</b></span>
+            <span>avgTFTT <b>${mt?mt.avg_tftt_ms+'ms':'-'}</b></span>
+          </div>
           <span class="mc-arrow">→</span>
         </div>`;
       }).join('') : `<div class="empty">${t('暂无数据')}</div>`}
     </div>`;
+}
+function editModel(pid, mid){ S.editingModel={pid, mid}; renderMain(); }
+function backToModelList(){ S.editingModel=null; renderMain(); }
+function renderModelEdit(c){
+  const p = (STATUS.providers||[]).find(x=>x.id===S.editingModel.pid);
+  if (!p){ S.editingModel=null; renderModelList(c); return; }
+  const mo = (p.models||[]).find(m=>m.id===S.editingModel.mid);
+  if (!mo){ S.editingModel=null; renderModelList(c); return; }
+  const price = (p.price_table||{})[mo.id]!=null ? (p.price_table||{})[mo.id] : 0;
+  const aliases = Object.entries(p.aliases||{}).filter(([a,mm])=>mm===mo.id);
+  c.innerHTML = `
+    <div class="edit-head">
+      <button class="ghost" onclick="backToModelList()">${t('← 返回')}</button>
+    </div>
+    <div class="edit-card">
+      <div class="edit-name">${esc(mo.id)}</div>
+      <div class="edit-sub">${esc(p.name)} · ${t('上游')} ${esc(mo.id)}${aliases.length?` · ↔ ${aliases.map(a=>esc(a[0])).join(', ')}`:''}</div>
+      <div class="card card-pad">
+        <div class="erow"><span class="elbl">${t('模型 ID')}</span><input class="eval" aria-label="${t('模型 ID')}" value="${esc(mo.id)}" readonly></div>
+        <div class="erow"><span class="elbl">${t('上游模型名')}</span><input class="eval" aria-label="${t('上游模型名')}" value="${esc(mo.id)}" readonly></div>
+        <div class="erow"><span class="elbl">${t('单价')}</span><input class="eval" id="me-price-${p.id}" type="number" step="0.01" min="0" aria-label="${t('单价')}" value="${price}"><span class="eunit">${t('¥/1M tok')}</span></div>
+        <div class="erow"><span class="elbl">${t('启用')}</span><span class="mc-sw ${mo.enabled?'on':''}" onclick="toggleModel('${p.id}','${esc(mo.id)}')" role="button" tabindex="0" aria-label="${t('启用/禁用')}"><span class="track"></span><span class="slabel">${mo.enabled?t('是'):t('否')}</span></span></div>
+        <div class="erow"><span class="elbl">${t('别名')}</span>
+          <div class="alias-list">
+            ${aliases.length?aliases.map(([a])=>`<span class="keytag">${esc(a)} <a href="#" aria-label="${t('删除')}" class="alias-x" style="color:var(--color-action-destructive)" onclick="delAlias('${p.id}','${esc(a)}');return false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></a></span>`).join(' '):`<span class="faint">${t('无')}</span>`}
+            <input class="eval" id="me-alias-${p.id}" aria-label="${t('添加别名')}" placeholder="${t('添加别名')}" style="max-width:7.5rem">
+            <button class="small" onclick="addModelAlias('${p.id}','${esc(mo.id)}')">${t('添加')}</button>
+          </div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:1rem;gap:0.625rem">
+        <button class="primary" onclick="saveModelPrice('${p.id}','${esc(mo.id)}')">${t('保存')}</button>
+        <button class="small" onclick="backToModelList()">${t('取消')}</button>
+      </div>
+    </div>`;
+}
+async function addModelAlias(pid, mid){
+  const inp = $('me-alias-'+pid); if (!inp) return;
+  const a = inp.value.trim(); if (!a) return;
+  try { await api('POST', '/api/providers/'+pid+'/aliases', { alias:a, model:mid }); inp.value=''; await refresh(); }
+  catch(e){ toast(e.message); }
+}
+async function saveModelPrice(pid, mid){
+  const inp = $('me-price-'+pid); if (!inp) return;
+  const v = parseFloat(inp.value); const price = isNaN(v)?0:v;
+  const p = (STATUS.providers||[]).find(x=>x.id===pid);
+  const table = Object.assign({}, (p&&(p.price_table||{}))||{});
+  table[mid] = price;
+  try { await api('PUT', '/api/providers/'+pid+'/price-table', { table }); toast(t('已保存')); S.editingModel=null; await refresh(); }
+  catch(e){ toast(t('失败: ')+e.message); }
 }
 function renderModelGroups(c){
   if (S.groupEdit) { renderGroupEditor(c); return; }
@@ -973,21 +1101,24 @@ function renderApiKeys(m){
       ${chips.map(c=>`<span class="chip ${f===c[0]?'active':''}" onclick="S.keyFilter='${c[0]}';renderMain()" role="button" tabindex="0">${c[1]}</span>`).join('')}
     </div>
     <div class="card"><div class="tbl-scroll"><table>
-      <tr><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('状态')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
+      <tr><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('状态')}</th><th>${t('token余额')}</th><th>${t('账单')}</th><th>${t('成功率')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
       ${list.length ? list.map(({pid,k})=>`
       <tr>
         <td><span class="keytag" data-key-id="${esc(k.id)}" data-revealed="0">${esc(k.key)}</span></td>
         <td>${esc(PNAME(pid))}</td>
         <td>${keyStatus(k)}</td>
+        <td class="num">${fmtTok(k.metrics?k.metrics.token_balance:null)}</td>
+        <td class="num">${fmtBill(k.metrics?k.metrics.bill_balance:null)}</td>
+        <td class="num">${(((k.metrics&&k.metrics.success_rate)||0)*100).toFixed(1)}%</td>
         <td class="num">${k.requests||0}</td>
-        <td class="faint"><span class="ak-err" title="${esc(k.last_error||'')}">${esc(k.last_error||'—')}</span></td>
+        <td class="faint"><span class="ak-err" title="${esc(k.last_error||'')}">${esc(k.last_error||'-')}</span></td>
         <td class="ak-actions">
           <button class="small" type="button" onclick="toggleKey('${k.id}', this)">${t('显示')}</button>
           <button class="small" type="button" onclick="copyKey('${k.id}', this)">${t('复制')}</button>
           ${(k.cooling||k.invalid)?`<button class="small" type="button" onclick="clearCooldown('${k.id}')">${k.invalid?t('解除无效'):t('解除冷却')}</button>`:''}
           <button class="small danger" type="button" onclick="delKey('${pid}','${k.id}')">${t('删除')}</button>
         </td>
-      </tr>`).join('') : `<tr><td colspan="6" class="faint">${t('暂无数据')}</td></tr>`}
+      </tr>`).join('') : `<tr><td colspan="9" class="faint">${t('暂无数据')}</td></tr>`}
     </table></div></div>`;
 }
 async function akAdd(batch){
@@ -1203,7 +1334,7 @@ $('hamburger').addEventListener('click', ()=>{
   $('sidebar').classList.toggle('collapsed', S.collapsed);
 });
 
-/* boot — lang + theme init deferred to here so the data globals (STATUS / S /
+/* boot - lang + theme init deferred to here so the data globals (STATUS / S /
    NAV …) are declared before applyLang/applyTheme trigger the first render
    (the inline IIFEs that used to run mid-script hit a temporal-dead-zone error
    on STATUS). */
