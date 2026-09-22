@@ -1,0 +1,17 @@
+/* Sakura — self-hosted fonts (SIL OFL). Linked before sakura-theme.css.
+   Inter: UI sans (latin). JetBrains Mono: data/code/identifiers (latin).
+   Sarasa Gothic SC: CJK (Chinese) UI body — unicode-range CJK-only so Latin
+   stays on Inter. Subset to GB2312 common (~7k chars), self-hosted offline. */
+
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 400; font-display: swap; src: url("fonts/inter-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 500; font-display: swap; src: url("fonts/inter-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 600; font-display: swap; src: url("fonts/inter-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 700; font-display: swap; src: url("fonts/inter-latin-700-normal.woff2") format("woff2"); }
+
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url("fonts/jetbrains-mono-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 700; font-display: swap; src: url("fonts/jetbrains-mono-latin-700-normal.woff2") format("woff2"); }
+
+@font-face { font-family: "Sarasa Gothic SC"; font-style: normal; font-weight: 400; font-display: swap; unicode-range: U+3000-303F, U+4E00-9FFF, U+FF00-FFEF; src: url("fonts/sarasa-gothic-sc-regular.woff2") format("woff2"); }
+@font-face { font-family: "Sarasa Gothic SC"; font-style: normal; font-weight: 600; font-display: swap; unicode-range: U+3000-303F, U+4E00-9FFF, U+FF00-FFEF; src: url("fonts/sarasa-gothic-sc-semibold.woff2") format("woff2"); }
+@font-face { font-family: "Sarasa Gothic SC"; font-style: normal; font-weight: 700; font-display: swap; unicode-range: U+3000-303F, U+4E00-9FFF, U+FF00-FFEF; src: url("fonts/sarasa-gothic-sc-bold.woff2") format("woff2"); }

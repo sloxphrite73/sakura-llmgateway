@@ -20,6 +20,9 @@ async fn serve_file(name: &str) -> Response {
                 Some("js") => "application/javascript; charset=utf-8",
                 Some("svg") => "image/svg+xml",
                 Some("png") => "image/png",
+                Some("woff2") => "font/woff2",
+                Some("woff") => "font/woff",
+                Some("json") => "application/json; charset=utf-8",
                 _ => "application/octet-stream",
             };
             (
