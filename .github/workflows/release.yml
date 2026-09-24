@@ -70,6 +70,11 @@ jobs:
           if-no-files-found: error
 
   build-android:
+    # Android temporarily skipped (user: "安卓先不发"). The Windows-only
+    # release is created below. To resume Android releases, delete the
+    # `if: false` line and restore `build-android` in `release.needs` + the
+    # apk glob in `release.files`.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -177,7 +182,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [build-windows, build-android]
+    needs: [build-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -192,4 +197,3 @@ jobs:
           generate_release_notes: true
           files: |
             dist/sakura-llmgateway-*-x86_64-pc-windows-msvc.exe
-            dist/sakura-llmgateway-*-universal.apk
