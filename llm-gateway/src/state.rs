@@ -95,6 +95,12 @@ pub struct App {
     /// Free-provider catalog: session cache for a remote refresh (embedded catalog
     /// is compile-time and needs no state).
     pub catalog: crate::free_catalog::CatalogCache,
+    /// Actual bound ports, set after startup binding. May differ from the
+    /// configured `api_port`/`ui_port` when the configured port was occupied and
+    /// the fallback walked to a free one. 0 = not bound yet (callers fall back to
+    /// the config value).
+    pub bound_api_port: std::sync::atomic::AtomicU16,
+    pub bound_ui_port: std::sync::atomic::AtomicU16,
 }
 
 pub fn now_ms() -> u64 {
@@ -244,6 +250,8 @@ impl App {
             config_dirty: Mutex::new(false),
             learned_at: Mutex::new(std::collections::HashMap::new()),
             catalog: crate::free_catalog::CatalogCache::new(),
+            bound_api_port: std::sync::atomic::AtomicU16::new(0),
+            bound_ui_port: std::sync::atomic::AtomicU16::new(0),
         }
     }
 

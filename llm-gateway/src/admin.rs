@@ -792,6 +792,13 @@ pub async fn get_stats(State(app): State<std::sync::Arc<App>>) -> Response {
 
 pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
     let cfg = app.read_config();
+    // Actual bound ports (may differ from config if the configured port was
+    // occupied at startup and the fallback walked to a free one). 0 = not yet
+    // bound (e.g. a unit-test App) → fall back to the configured value.
+    let bound_api = app.bound_api_port.load(std::sync::atomic::Ordering::Relaxed);
+    let bound_ui = app.bound_ui_port.load(std::sync::atomic::Ordering::Relaxed);
+    let api_port = if bound_api != 0 { bound_api } else { cfg.api_port };
+    let ui_port = if bound_ui != 0 { bound_ui } else { cfg.ui_port };
     let pool = app.status();
     let providers: Vec<serde_json::Value> = cfg
         .providers
@@ -865,8 +872,8 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
         "default_cooldown_secs": cfg.default_cooldown_secs,
         "max_attempts": cfg.max_attempts,
         "auth": cfg.auth,
-        "api_port": cfg.api_port,
-        "ui_port": cfg.ui_port,
+        "api_port": api_port,
+        "ui_port": ui_port,
         "providers": providers,
     }))
 }

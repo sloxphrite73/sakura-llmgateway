@@ -38,9 +38,8 @@ async fn main() {
     };
 
     println!("[gateway] config file: {}", config_path.display());
-    println!("[gateway] web ui:     http://127.0.0.1:{}/", cfg.ui_port);
-    println!("[gateway] openai api: http://127.0.0.1:{}/v1", cfg.api_port);
-    println!("[gateway] anthropic api: http://127.0.0.1:{}/v1/messages", cfg.api_port);
+    // Bound ports are printed after binding (they may differ from config if the
+    // configured port was occupied and the fallback walked to a free one).
     if cfg.auth.enabled {
         println!("[gateway] auth:       ENABLED ({} keys)", cfg.auth.keys.len());
     } else {
@@ -139,37 +138,68 @@ async fn main() {
         }
     });
 
-    // Bind with a short retry window: a stale twin process (e.g. the Android app's
-    // service racing a restart) may still hold the ports for a few seconds. Panicking
-    // here turned every transient clash into a dead gateway (ERR_CONNECTION_REFUSED).
-    let bind_retry = |port: u16| {
-        let app = app.clone();
-        async move {
-            let mut delay = std::time::Duration::from_millis(500);
-            for _ in 0..10 {
-                match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
-                    Ok(l) => return Ok(l),
-                    Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                        tokio::time::sleep(delay).await;
-                        delay = (delay * 2).min(std::time::Duration::from_secs(2));
-                    }
-                    Err(e) => return Err(e),
+    // Bind with a transient-retry + free-port fallback. A stale twin process
+    // (e.g. the Android service racing a restart) may hold the ports for a few
+    // seconds — retry the configured port briefly for that. A PERMANENT occupant
+    // (another gateway instance, or anything else on the port) used to crash the
+    // gateway; now, after the retry window, we walk up (preferred+1, +2, …) and
+    // bind the first free port — never crash on AddrInUse. Returns the listener
+    // and the port it actually bound.
+    async fn bind_with_fallback(preferred: u16) -> std::io::Result<(tokio::net::TcpListener, u16)> {
+        let mut delay = std::time::Duration::from_millis(500);
+        for _ in 0..10 {
+            match tokio::net::TcpListener::bind(("127.0.0.1", preferred)).await {
+                Ok(l) => return Ok((l, preferred)),
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(std::time::Duration::from_secs(2));
                 }
+                Err(e) => return Err(e),
             }
-            let _ = app; // keep closure self-contained
-            Err(std::io::Error::new(
-                std::io::ErrorKind::AddrInUse,
-                format!("port {port} still in use after ~10s of retries"),
-            ))
         }
-    };
-    let api_listener = bind_retry(app.read_config().api_port)
+        // Configured port still occupied after the retry window → walk up.
+        const CAP: u16 = 100;
+        for off in 1..=CAP {
+            let p = preferred.wrapping_add(off);
+            if p == 0 {
+                continue;
+            }
+            match tokio::net::TcpListener::bind(("127.0.0.1", p)).await {
+                Ok(l) => {
+                    eprintln!("[gateway] port {preferred} occupied; fell back to {p}");
+                    return Ok((l, p));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            format!("no free port in {preferred}..={}", preferred.wrapping_add(CAP)),
+        ))
+    }
+
+    let cfg_api = app.read_config().api_port;
+    let cfg_ui = app.read_config().ui_port;
+    let (api_listener, api_port) = bind_with_fallback(cfg_api)
         .await
         .expect("failed to bind api port");
-    let ui_listener = bind_retry(app.read_config().ui_port)
+    let (ui_listener, ui_port) = bind_with_fallback(cfg_ui)
         .await
         .expect("failed to bind ui port");
+    app.bound_api_port
+        .store(api_port, std::sync::atomic::Ordering::Relaxed);
+    app.bound_ui_port
+        .store(ui_port, std::sync::atomic::Ordering::Relaxed);
 
+    println!("[gateway] web ui:        http://127.0.0.1:{ui_port}/");
+    println!("[gateway] openai api:    http://127.0.0.1:{api_port}/v1");
+    println!("[gateway] anthropic api: http://127.0.0.1:{api_port}/v1/messages");
+    if api_port != cfg_api || ui_port != cfg_ui {
+        eprintln!(
+            "[gateway] NOTE: configured ports ({cfg_api}/{cfg_ui}) were occupied; actual ports above."
+        );
+    }
     println!("[gateway] ready.");
     tokio::try_join!(
         axum::serve(api_listener, api),

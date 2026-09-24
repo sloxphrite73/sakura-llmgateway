@@ -652,7 +652,7 @@ mod tests {
 
     // --- build_candidates: the four filter modes (spec §4) ---
 
-    use crate::config::{ApiKey, Config, Filter, ManagedModel, ModelGroup, Provider, Strategy};
+    use crate::config::{ApiKey, Config, Filter, ManagedModel, ModelGroup, Provider};
     use std::collections::BTreeMap;
 
     /// Two providers + one cross-provider model group, for filter-mode tests.
