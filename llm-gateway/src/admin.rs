@@ -52,6 +52,8 @@ pub async fn create_provider(
             has_token_balance_api: input.has_token_balance_api.unwrap_or(false),
             has_bill_balance_api: input.has_bill_balance_api.unwrap_or(false),
             price_table: Default::default(),
+            rpm_limit: None,
+            tpm_limit: None,
         });
     });
     ok(cfg)
@@ -87,6 +89,34 @@ pub async fn update_provider(
     } else {
         err(StatusCode::NOT_FOUND, "provider not found")
     }
+}
+
+#[derive(serde::Deserialize)]
+pub struct RateLimitInput {
+    /// Manual per-provider RPM cap (provider detail "配额与速率" panel).
+    /// `None` = clear to auto; `Some(n)` = set the cap.
+    pub rpm_limit: Option<u32>,
+    pub tpm_limit: Option<u32>,
+}
+
+/// PUT /api/providers/{id}/rate-limits — set a provider's manual RPM/TPM caps
+/// (informational; not enforced as throttling — the strategy layer's `rpm`/`tpm`
+/// sort attributes use per-key live metrics, spec §2.2). `null` clears to auto.
+/// A dedicated endpoint (rather than folding into `update_provider`) so `null`
+/// is distinguishable from "field omitted" (serde collapses `null` → outer
+/// `None` on `Option<Option<_>>`, so a nullable-in-PUT needs its own route).
+pub async fn set_rate_limits(
+    State(app): State<std::sync::Arc<App>>,
+    Path(id): Path<String>,
+    Json(input): Json<RateLimitInput>,
+) -> Response {
+    let cfg = app.write_config(|c| {
+        if let Some(p) = c.providers.iter_mut().find(|p| p.id == id) {
+            p.rpm_limit = input.rpm_limit;
+            p.tpm_limit = input.tpm_limit;
+        }
+    });
+    ok(cfg)
 }
 
 /// PUT /api/providers/{id}/price-table — replace a provider's per-model price
@@ -143,6 +173,18 @@ pub struct KeyInput {
     #[serde(default)]
     pub label: String,
     pub cooldown_secs: Option<u64>,
+    // Spec §2.2 "手动 seed": optional initial values for a brand-new key with no
+    // live history. All optional; omitted = use built-in defaults.
+    #[serde(default)]
+    pub seed_rpm: Option<u32>,
+    #[serde(default)]
+    pub seed_tpm: Option<u32>,
+    #[serde(default)]
+    pub seed_success_rate: Option<f64>,
+    #[serde(default)]
+    pub seed_avg_tftt_ms: Option<u32>,
+    #[serde(default)]
+    pub seed_tps: Option<f32>,
 }
 
 pub async fn add_key(
@@ -162,6 +204,11 @@ pub async fn add_key(
                 label: input.label.trim().to_string(),
                 cooldown_secs: input.cooldown_secs,
                 learned_cooldown: None,
+                seed_rpm: input.seed_rpm,
+                seed_tpm: input.seed_tpm,
+                seed_success_rate: input.seed_success_rate,
+                seed_avg_tftt_ms: input.seed_avg_tftt_ms,
+                seed_tps: input.seed_tps,
             });
             found = true;
         }
@@ -183,6 +230,50 @@ pub async fn delete_key(
             let before = p.keys.len();
             p.keys.retain(|k| k.id != key_id);
             found = p.keys.len() < before;
+        }
+    });
+    if found {
+        ok(cfg)
+    } else {
+        err(StatusCode::NOT_FOUND, "key not found")
+    }
+}
+
+/// Update a key's metric seeds (spec §2.2 "手动 seed"). Dedicated endpoint for
+/// nullable fields: a plain `Option<T>` where JSON `null`/omitted → `None` (clear
+/// the seed) and a number → `Some` (set it). The UI sends all five fields each
+/// save (empty input → null → clear). `cooldown_secs` is create-time only and
+/// not touched here.
+#[derive(serde::Deserialize)]
+pub struct KeySeedInput {
+    #[serde(default)]
+    pub seed_rpm: Option<u32>,
+    #[serde(default)]
+    pub seed_tpm: Option<u32>,
+    #[serde(default)]
+    pub seed_success_rate: Option<f64>,
+    #[serde(default)]
+    pub seed_avg_tftt_ms: Option<u32>,
+    #[serde(default)]
+    pub seed_tps: Option<f32>,
+}
+
+pub async fn update_key_seed(
+    State(app): State<std::sync::Arc<App>>,
+    Path((id, key_id)): Path<(String, String)>,
+    Json(input): Json<KeySeedInput>,
+) -> Response {
+    let mut found = false;
+    let cfg = app.write_config(|c| {
+        if let Some(p) = c.providers.iter_mut().find(|p| p.id == id) {
+            if let Some(k) = p.keys.iter_mut().find(|k| k.id == key_id) {
+                k.seed_rpm = input.seed_rpm;
+                k.seed_tpm = input.seed_tpm;
+                k.seed_success_rate = input.seed_success_rate;
+                k.seed_avg_tftt_ms = input.seed_avg_tftt_ms;
+                k.seed_tps = input.seed_tps;
+                found = true;
+            }
         }
     });
     if found {
@@ -267,7 +358,7 @@ pub async fn add_model(
                 result = Err(format!("model `{mid}` already exists on provider `{}`", p.name));
                 return;
             }
-            p.models.push(ManagedModel { id: mid, enabled: true });
+            p.models.push(ManagedModel { id: mid, enabled: true, context_length: None });
         }
     });
     match result {
@@ -384,13 +475,36 @@ pub async fn import_models(
         if let Some(p) = c.providers.iter_mut().find(|p| p.id == id) {
             for mid in incoming {
                 if !p.models.iter().any(|m| m.id == mid) {
-                    p.models.push(ManagedModel { id: mid, enabled: true });
+                    p.models.push(ManagedModel { id: mid, enabled: true, context_length: None });
                     imported += 1;
                 }
             }
         }
     });
     ok(serde_json::json!({ "imported": imported, "config": cfg }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ContextInput {
+    /// New context window in tokens. `None` = clear (unknown).
+    pub context_length: Option<u32>,
+}
+
+/// PUT /api/providers/{id}/models/{model_id}/context-length — set a managed
+/// model's `context_length` (informational; shown on the card as "Nk").
+pub async fn set_model_context(
+    State(app): State<std::sync::Arc<App>>,
+    Path((id, model_id)): Path<(String, String)>,
+    Json(input): Json<ContextInput>,
+) -> Response {
+    let cfg = app.write_config(|c| {
+        if let Some(p) = c.providers.iter_mut().find(|p| p.id == id) {
+            if let Some(m) = p.models.iter_mut().find(|m| m.id == model_id) {
+                m.context_length = input.context_length;
+            }
+        }
+    });
+    ok(cfg)
 }
 
 // ---------- settings ----------
@@ -605,6 +719,7 @@ pub async fn get_stats(State(app): State<std::sync::Arc<App>>) -> Response {
                 "hour_ms": h * 3_600_000,
                 "success": b.map(|b| b.success).unwrap_or(0),
                 "fail": b.map(|b| b.fail).unwrap_or(0),
+                "tokens": b.map(|b| b.tokens).unwrap_or(0),
             })
         })
         .collect();
@@ -636,7 +751,7 @@ pub async fn get_stats(State(app): State<std::sync::Arc<App>>) -> Response {
         .map(|(id, b)| {
             (
                 id.clone(),
-                serde_json::json!({ "name": key_name(id), "success": b.success, "fail": b.fail }),
+                serde_json::json!({ "name": key_name(id), "success": b.success, "fail": b.fail, "tokens": b.tokens }),
             )
         })
         .collect();
@@ -646,7 +761,7 @@ pub async fn get_stats(State(app): State<std::sync::Arc<App>>) -> Response {
         .map(|(id, b)| {
             (
                 id.clone(),
-                serde_json::json!({ "name": provider_name(id), "success": b.success, "fail": b.fail,
+                serde_json::json!({ "name": provider_name(id), "success": b.success, "fail": b.fail, "tokens": b.tokens,
                     "rotations": stats.rotations.get(id).copied().unwrap_or(0) }),
             )
         })
@@ -657,14 +772,14 @@ pub async fn get_stats(State(app): State<std::sync::Arc<App>>) -> Response {
         .map(|(m, b)| {
             (
                 m.clone(),
-                serde_json::json!({ "success": b.success, "fail": b.fail }),
+                serde_json::json!({ "success": b.success, "fail": b.fail, "tokens": b.tokens, "avg_tftt_ms": app.model_avg_tftt(m) }),
             )
         })
         .collect();
 
     ok(serde_json::json!({
         "now_ms": now,
-        "total": { "success": stats.total.success, "fail": stats.total.fail },
+        "total": { "success": stats.total.success, "fail": stats.total.fail, "tokens": stats.total.tokens },
         "rotations_total": stats.rotations.values().sum::<u64>(),
         "histogram": histogram,
         "keys": keys,
@@ -707,6 +822,11 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                         "label": k.label,
                         "cooldown_secs": k.cooldown_secs,
                         "learned_cooldown": k.learned_cooldown,
+                        "seed_rpm": k.seed_rpm,
+                        "seed_tpm": k.seed_tpm,
+                        "seed_success_rate": k.seed_success_rate,
+                        "seed_avg_tftt_ms": k.seed_avg_tftt_ms,
+                        "seed_tps": k.seed_tps,
                         "cooling": cooling,
                         "invalid": invalid,
                         "requests": pool.get("requests").and_then(|r| r.get(&k.id)).cloned().unwrap_or(serde_json::json!(0)),
@@ -732,6 +852,8 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                 "model_allowlist_only": p.model_allowlist_only,
                 "has_token_balance_api": p.has_token_balance_api,
                 "has_bill_balance_api": p.has_bill_balance_api,
+                "rpm_limit": p.rpm_limit,
+                "tpm_limit": p.tpm_limit,
                 "price_table": p.price_table,
                 "models": p.models,
                 "keys": keys,

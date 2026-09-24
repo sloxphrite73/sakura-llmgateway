@@ -17,6 +17,21 @@ pub struct ApiKey {
     /// the user-set `cooldown_secs`; beats it in cooldown resolution order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub learned_cooldown: Option<u64>,
+    // --- metric seeds (spec §2.2 "手动 seed + 自动覆盖"): pre-set initial values
+    // used only while a key has no live measurement history (fill_rows `None`
+    // branch leaves the skeleton; the `Some(m)` branch overwrites with live
+    // data once any request touches the key). All `None` = use the built-in
+    // defaults (success_rate 1.0, others 0), so old configs load unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_rpm: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_tpm: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_success_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_avg_tftt_ms: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_tps: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +39,12 @@ pub struct ManagedModel {
     pub id: String,
     #[serde(default = "bool_true")]
     pub enabled: bool,
+    /// Max context window in tokens (informational; shown on the model card as
+    /// e.g. "128k"). Edited from the UI in K units (UI value × 1000 → tokens).
+    /// `None`/missing = unknown (shown as 0). Backward-compatible: old configs
+    /// without the field load as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u32>,
 }
 
 fn bool_true() -> bool {
@@ -70,6 +91,16 @@ pub struct Provider {
     /// = 0 (free). Feeds the `price` strategy sort attribute (I, spec §2.2).
     #[serde(default)]
     pub price_table: std::collections::BTreeMap<String, f64>,
+    /// Manual per-provider RPM cap (provider detail "配额与速率" panel). `None` =
+    /// auto — the UI shows the live aggregate of this provider's key metrics
+    /// (read-only) and saves nothing. Informational only (not enforced as
+    /// throttling; the strategy layer's `rpm` sort attribute uses per-key live
+    /// metrics, spec §2.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm_limit: Option<u32>,
+    /// Manual per-provider TPM cap (spec §2.2). `None` = auto.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tpm_limit: Option<u32>,
 }
 
 impl Provider {

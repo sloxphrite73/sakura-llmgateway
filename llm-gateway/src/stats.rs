@@ -7,6 +7,11 @@ use std::path::Path;
 pub struct Bucket {
     pub success: u64,
     pub fail: u64,
+    /// Tokens (input+output) attributed to this bucket. Populated from the
+    /// upstream's reported `usage` (or a rough body estimate when absent); 0 for
+    /// streaming requests that report no usage chunk (non-stream is always exact).
+    #[serde(default)]
+    pub tokens: u64,
 }
 
 impl Bucket {
@@ -71,6 +76,24 @@ impl Stats {
     /// layer absorbed). Bumped per provider; shown on the Status page as 换Key次数.
     pub fn record_rotation(&mut self, provider: &str) {
         *self.rotations.entry(provider.to_string()).or_insert(0) += 1;
+    }
+
+    /// Attribute `tokens` (input+output) to the total, the current hour bucket, the
+    /// key (if any), the provider, and the model (if non-empty). Skips 0 so a
+    /// zero-token request doesn't spawn empty buckets.
+    pub fn add_tokens(&mut self, tokens: u64, key: Option<&str>, provider: &str, model: &str, now_ms: u64) {
+        if tokens == 0 {
+            return;
+        }
+        self.total.tokens += tokens;
+        self.hourly.entry(now_ms / HOUR_MS).or_default().tokens += tokens;
+        if let Some(k) = key {
+            self.keys.entry(k.to_string()).or_default().tokens += tokens;
+        }
+        self.providers.entry(provider.to_string()).or_default().tokens += tokens;
+        if !model.is_empty() {
+            self.models.entry(model.to_string()).or_default().tokens += tokens;
+        }
     }
 
     /// Keep only the trailing 24 hourly buckets (current hour + previous 23).

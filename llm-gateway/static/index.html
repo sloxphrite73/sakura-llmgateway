@@ -7,50 +7,26 @@
 <link rel="stylesheet" href="/static/sakura-fonts.css">
 <link rel="stylesheet" href="/static/sakura-theme.css">
 <link rel="stylesheet" href="/static/sakura-ui.css">
-<style>
-  /* Only components NOT in sakura-ui.css, all token-based (var() + rem), no hex/px. */
-  .msg { position: fixed; bottom: 1.5rem; right: 1.5rem; background: var(--color-surface-raised);
-    border: 1px solid var(--color-action-primary-hover); color: var(--color-text-primary);
-    padding: 0.625rem 1rem; border-radius: 0.5rem; max-width: 26rem; box-shadow: var(--shadow-md);
-    display: none; z-index: 50; font-size: 0.8125rem; }
-  .msg.show { display: block; }
-  .pdot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 50%;
-    background: var(--color-text-link); margin-right: 0.4375rem; vertical-align: middle; flex: none; }
-  .pl-item .pdot { margin-right: 0; }
-  .num .nm-sans { font-family: var(--font-sans); }
-  button.danger { border-color: var(--color-action-destructive); color: var(--color-action-destructive); }
-  button.danger:hover { border-color: var(--color-action-destructive-hover); color: var(--color-action-destructive-hover); background: var(--color-surface-raised); }
-  .empty { padding: 1.5rem; text-align: center; color: var(--color-text-tertiary); }
-  .overlay { position: fixed; inset: 0; background: var(--color-surface-overlay); display: flex;
-    align-items: center; justify-content: center; z-index: 40; padding: 1.25rem; }
-  .overlay .box { background: var(--color-surface-card); border: 1px solid var(--color-border-strong);
-    border-radius: 0.75rem; width: 30rem; max-width: 100%; max-height: 72vh; overflow: auto; padding: 1.25rem; }
-  .overlay h3 { font-size: 1.0625rem; font-weight: 700; margin-bottom: 0.75rem; }
-  .modal-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.3125rem 0; font-size: 0.8125rem; }
-  .kv-endpoints { display: grid; grid-template-columns: 7.5rem 1fr; gap: 0.5rem 1rem; font-size: 0.8125rem; }
-  .kv-endpoints .k { color: var(--color-text-secondary); }
-  .kv-endpoints code { cursor: pointer; color: var(--color-text-link); }
-  .grp-entry { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
-  .grp-entry select { min-width: 9rem; }
-  .grp-entry input { flex: 1; min-width: 0; }
-</style>
 </head>
 <body>
 <div class="app">
+  <!-- top bar -->
   <div class="topbar">
-    <button class="iconbtn hamburger" id="hamburger" aria-label="收起或展开侧栏" title="收起或展开侧栏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+    <button class="iconbtn hamburger" id="hamburger" title="收起/展开侧栏" aria-label="收起或展开侧栏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
     <div class="brand">Sakura LLM Gateway<span class="sub" id="brand-sub">控制台</span></div>
     <div class="spacer"></div>
     <div class="run-pill"><span class="dot"></span><span id="run-pill-text">运行中</span> <code id="run-pill-port">:8001</code></div>
-    <button class="iconbtn" id="theme-toggle" aria-label="切换浅色/深色" title="切换浅色/深色"></button>
-    <button class="iconbtn lang-toggle" id="lang-toggle" aria-label="切换语言 / switch language" title="切换语言 / switch language">EN</button>
+    <button class="iconbtn" id="theme-toggle" title="切换浅色/深色" aria-label="切换浅色/深色主题"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg></button>
+    <button class="iconbtn lang-toggle" id="lang-toggle" onclick="toggleLang()" aria-label="切换语言 / switch language" title="切换语言 / switch language"></button>
   </div>
   <div class="body">
+    <!-- vertical collapsible sidebar (Berry: nav + bottom menu-card + version chip) -->
     <aside class="sidebar" id="sidebar">
       <div class="side-head"><span class="htext" id="side-head-text">导航</span></div>
       <nav class="side-nav" id="side-nav"></nav>
       <div class="side-foot" id="side-foot"></div>
     </aside>
+    <!-- main -->
     <main class="main" id="main" tabindex="0"></main>
   </div>
 </div>
@@ -60,298 +36,238 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-/* ============ i18n (zh identity-keyed / en lookup) ============ */
-/* Keys are the Chinese literals the prototype t(...) calls pass; zh renders
-   them unchanged, en maps them to English. t() falls back to the key itself. */
-const LANG_KEY = 'sakura-lang';
-const THEME_KEY = 'sakura-theme';
-const I18N = {
-  zh: {
-    '控制台':'控制台', '运行中':'运行中', '导航':'导航', 'Key 池':'Key 池',
-    '概览':'概览', '提供商':'提供商', '模型':'模型', '策略':'策略', 'API Key':'API Key', '添加提供商':'添加提供商', '设置':'设置',
-    '可用':'可用', '冷却':'冷却', '冷却中':'冷却中', '异常':'异常',
-    '网关全局快照':'网关全局快照', '模型条目':'模型条目', '模型组':'模型组',
-    '提供商概览':'提供商概览', '点行进详情':'点行进详情', 'Base URL':'Base URL', 'Key':'Key',
-    'API 端点':'API 端点', 'OpenAI 兼容接口':'OpenAI 兼容接口', 'Anthropic Messages':'Anthropic Messages',
-    '模型用':'模型用', '或别名':'或别名', '点击复制':'点击复制',
-    '请求统计 · 数据持久化，重启不丢失':'请求统计 · 数据持久化，重启不丢失',
-    '总览':'总览', '成功请求':'成功请求', '失败请求':'失败请求', '换 Key 次数':'换 Key 次数', '成功率':'成功率',
-    '过去 24 小时请求':'过去 24 小时请求', '每小时一柱 · 绿=成功 红=失败':'每小时一柱 · 绿=成功 红=失败',
-    '每小时一柱':'每小时一柱', '按提供商':'按提供商', '按模型':'按模型', '按 API Key':'按 API Key',
-    '请求':'请求', '成功':'成功', '失败':'失败', '暂无数据':'暂无数据',
-    '{h}:00 · 成功 {ok} / 失败 {fail}':'{h}:00 · 成功 {ok} / 失败 {fail}',
-    '+ 添加':'+ 添加', '提供商详情 · 模型与 Key 在此管理':'提供商详情 · 模型与 Key 在此管理',
-    '基本信息':'基本信息', '名称':'名称',
-    '{mc} 个托管模型 · {kc} 把 Key':'{mc} 个托管模型 · {kc} 把 Key',
-    '白名单':'白名单', ' 仅允许列表内模型':' 仅允许列表内模型',
-    '保存':'保存', '删除提供商':'删除提供商',
-    '托管模型':'托管模型', '添加模型 id':'添加模型 id', '删除模型':'删除模型', '添加模型':'添加模型',
-    '从上游获取模型':'从上游获取模型', '拉取中…':'拉取中…', '启用':'启用', '禁用':'禁用', '启用/禁用':'启用/禁用',
-    '别名':'别名', '添加别名':'添加别名', '无':'无',
-    '备注（可选）':'备注（可选）', '冷却秒（可选）':'冷却秒（可选）', '添加 Key':'添加 Key', '备注':'备注',
-    '状态':'状态', '请求数':'请求数', '最近错误':'最近错误', '操作':'操作', '账单':'账单',
-    '冷却 · 剩 ':'冷却 · 剩 ', '无效 · 剩 ':'无效 · 剩 ',
-    '显示':'显示', '隐藏':'隐藏', '复制':'复制', '已复制':'已复制', '删除':'删除',
-    '解除冷却':'解除冷却', '解除无效':'解除无效', '默认':'默认', '学习冷却':'学习冷却',
-    '由 429 探测自动学习':'由 429 探测自动学习',
-    '模型信息：所有模型条目大列表 · 模型组跨提供商编组':'模型信息：所有模型条目大列表 · 模型组跨提供商编组',
-    '模型信息':'模型信息', '模型组管理':'模型组管理', '全部':'全部', '上游':'上游',
-    '组名':'组名', '成员 (provider · model)':'成员 (provider · model)', '成员数':'成员数', '编辑':'编辑',
-    '+ 新建模型组':'+ 新建模型组', '同一模型跨提供商编组 · 每个模型恒属且仅属一组':'同一模型跨提供商编组 · 每个模型恒属且仅属一组',
-    '多成员组在"模型优先"模式下跨提供商兜底，长上下文靠排序而非换模型':'多成员组在"模型优先"模式下跨提供商兜底，长上下文靠排序而非换模型',
-    '添加成员':'添加成员', '取消':'取消', 'provider':'provider', 'upstream model':'upstream model',
-    '全局状态总览 · 跨所有提供商一张表':'全局状态总览 · 跨所有提供商一张表',
-    '粘贴 API Key，多个每行一个可批量添加':'粘贴 API Key，多个每行一个可批量添加', '批量添加':'批量添加',
-    '删除所有无效 Key':'删除所有无效 Key',
-    '策略管理':'策略管理', '过滤器':'过滤器', '不改变模型组':'不改变模型组', '不改变提供商':'不改变提供商', '当前：':'当前：',
-    '精确轮换':'精确轮换', '模型优先':'模型优先', '提供商优先':'提供商优先', '可用优先':'可用优先',
-    '精确 (provider,model) 轮换 Key - 当前行为，零惊喜':'精确 (provider,model) 轮换 Key - 当前行为，零惊喜',
-    '模型优先 - 跨提供商同模型':'模型优先 - 跨提供商同模型', '提供商优先 - 换模型':'提供商优先 - 换模型', '可用优先 - 所有候选':'可用优先 - 所有候选',
-    '优先策略':'优先策略', '关键字 3 / 4 / 5（1=valid↓ 2=非冷却↓ 固定前导）':'关键字 3 / 4 / 5（1=valid↓ 2=非冷却↓ 固定前导）',
-    '关键字 {n}':'关键字 {n}', '（跳过）':'（跳过）', '不限':'不限',
-    '演示':'演示', 'dry-run 实时':'dry-run 实时', '模拟请求':'模拟请求', '请求模型':'请求模型', '请求提供商':'请求提供商',
-    '路由命中':'路由命中', '429 全冷却':'429 全冷却', '429 无可用':'429 无可用', '429 候选为空':'429 候选为空',
-    '返回':'返回', '候选 {n} 条均无效':'候选 {n} 条均无效', '当前过滤下无候选':'当前过滤下无候选', '候选为空':'候选为空',
-    '#':'#', 'valid':'valid', 'cool':'cool', '单价':'单价', 'TPS':'TPS',
-    '是':'是', '否':'否',
-    '成功率 ↓':'成功率 ↓', 'RPM ↓':'RPM ↓', 'TPM ↓':'TPM ↓', '首字延迟 ↑':'首字延迟 ↑',
-    'token余额 ↓':'token余额 ↓', 'token余额 ↑':'token余额 ↑', '账单余额 ↓':'账单余额 ↓', '账单余额 ↑':'账单余额 ↑',
-    '单价 ↑':'单价 ↑', '生成速度TPS ↓':'生成速度TPS ↓',
-    '从免费目录选一家，或自定义填入':'从免费目录选一家，或自定义填入',
-    '自定义提供商':'自定义提供商', '手动填写 base_url、协议与模型':'手动填写 base_url、协议与模型',
-    '从免费目录选择':'从免费目录选择', '从免费目录选一家，预填 base_url / 协议 / 模型':'从免费目录选一家，预填 base_url / 协议 / 模型',
-    '免费目录 · 点一张预填配置':'免费目录 · 点一张预填配置', '协议':'协议',
-    '添加：':'添加：', '已从目录预填，可改 · 粘 Key 后添加':'已从目录预填，可改 · 粘 Key 后添加',
-    '手动填写 · 粘 Key 后添加':'手动填写 · 粘 Key 后添加', '添加':'添加', '粘贴 API Key':'粘贴 API Key',
-    '← 返回':'← 返回', '从剪贴板粘贴':'从剪贴板粘贴',
-    '从 GitHub 更新目录':'从 GitHub 更新目录', '更新中…':'更新中…', '目录已更新':'目录已更新',
-    '免 Key':'免 Key', '已添加':'已添加', '预置免费模型':'预置免费模型', '领额度教程':'领额度教程', '注册 / 取 Key':'注册 / 取 Key', '确认添加':'确认添加',
-    '全局设置 · 端口修改后重启生效':'全局设置 · 端口修改后重启生效', '基本':'基本',
-    '默认冷却时间（秒）':'默认冷却时间（秒）', '每请求最大尝试次数':'每请求最大尝试次数',
-    'API 端口':'API 端口', 'UI 端口':'UI 端口', '启用本地 API 鉴权':'启用本地 API 鉴权', '鉴权 Key，逗号分隔':'鉴权 Key，逗号分隔',
-    '保存设置':'保存设置', '配置文件':'配置文件', '导出配置':'导出配置', '导入配置':'导入配置',
-    'gateway.json · 导入即时热生效':'gateway.json · 导入即时热生效',
-    '导入会整体替换当前配置（含端口与鉴权），文件无效则整体拒绝':'导入会整体替换当前配置（含端口与鉴权），文件无效则整体拒绝',
-    '已保存':'已保存', '失败: ':'失败: ', '已触发下载':'已触发下载', '导入成功，已热生效':'导入成功，已热生效', '导入失败: ':'导入失败: ',
-    '添加成功':'添加成功', '添加失败: ':'添加失败: ', '复制失败: ':'复制失败: ', '未找到该 Key':'未找到该 Key',
-    '拉取失败: ':'拉取失败: ', '上游未返回任何模型':'上游未返回任何模型', '未选择任何模型':'未选择任何模型',
-    '已导入 {n} 个模型':'已导入 {n} 个模型', '更新失败: ':'更新失败: ',
-    '此供应商需要 API Key':'此供应商需要 API Key', '部分 Key 添加失败: ':'部分 Key 添加失败: ',
-    '删除该提供商及其所有 Key？':'删除该提供商及其所有 Key？', '删除该 Key？':'删除该 Key？',
-    '删除模型 {m}？指向它的别名将无法使用。':'删除模型 {m}？指向它的别名将无法使用。',
-    '删除该模型组？':'删除该模型组？',
-    '导入 {n} 将整体替换当前配置（含端口与鉴权设置），确定继续？':'导入 {n} 将整体替换当前配置（含端口与鉴权设置），确定继续？',
-    '切换语言 / switch language':'切换语言 / switch language',
-    '模型导入':'模型导入', '全选 / 全不选':'全选 / 全不选', '导入所选':'导入所选', '已存在':'已存在', '已选 {n} 个':'已选 {n} 个',
-    'provider · model':'provider · model', 'RPM':'RPM', 'TPM':'TPM',
-    'Token 余额 API':'Token 余额 API', '账单余额 API':'账单余额 API', '价格表':'价格表', '¥/1M tok':'¥/1M tok',
-    '不限额度':'不限', '保存价格表':'保存价格表', 'Key 池概览':'Key 池概览',
-    'token余额':'token余额', '账单余额':'账单余额', '模型 ID':'模型 ID', '上游模型名':'上游模型名',
-  },
-  en: {
-    '控制台':'Console', '运行中':'Running', '导航':'Navigate', 'Key 池':'Key pool',
-    '概览':'Overview', '提供商':'Providers', '模型':'Models', '策略':'Strategy', 'API Key':'API Keys', '添加提供商':'Add provider', '设置':'Settings',
-    '可用':'Ready', '冷却':'Cooling', '冷却中':'Cooling', '异常':'Invalid',
-    '网关全局快照':'Gateway global snapshot', '模型条目':'Model entries', '模型组':'Model groups',
-    '提供商概览':'Provider overview', '点行进详情':'Click row for detail', 'Base URL':'Base URL', 'Key':'Key',
-    'API 端点':'API endpoints', 'OpenAI 兼容接口':'OpenAI-compatible', 'Anthropic Messages':'Anthropic Messages',
-    '模型用':'models:', '或别名':'or alias', '点击复制':'Click to copy',
-    '请求统计 · 数据持久化，重启不丢失':'Request stats · persisted across restarts',
-    '总览':'Totals', '成功请求':'Successful requests', '失败请求':'Failed requests', '换 Key 次数':'Key rotations', '成功率':'Success rate',
-    '过去 24 小时请求':'Past 24h requests', '每小时一柱 · 绿=成功 红=失败':'One bar per hour · green=success red=fail',
-    '每小时一柱':'One bar per hour', '按提供商':'By provider', '按模型':'By model', '按 API Key':'By API key',
-    '请求':'Requests', '成功':'Success', '失败':'Fail', '暂无数据':'No data yet',
-    '{h}:00 · 成功 {ok} / 失败 {fail}':'{h}:00 · {ok} ok / {fail} fail',
-    '+ 添加':'+ Add', '提供商详情 · 模型与 Key 在此管理':'Provider detail · models & keys managed here',
-    '基本信息':'Basic info', '名称':'Name',
-    '{mc} 个托管模型 · {kc} 把 Key':'{mc} managed models · {kc} keys',
-    '白名单':'allowlist', ' 仅允许列表内模型':' Only allow listed models',
-    '保存':'Save', '删除提供商':'Delete provider',
-    '托管模型':'Managed models', '添加模型 id':'Add model id', '删除模型':'Delete model', '添加模型':'Add model',
-    '从上游获取模型':'Fetch models from upstream', '拉取中…':'Fetching…', '启用':'Enabled', '禁用':'Disabled', '启用/禁用':'Enable/Disable',
-    '别名':'Aliases', '添加别名':'Add alias', '无':'None',
-    '备注（可选）':'Label (optional)', '冷却秒（可选）':'Cooldown sec (optional)', '添加 Key':'Add key', '备注':'Label',
-    '状态':'Status', '请求数':'Requests', '最近错误':'Last error', '操作':'Actions', '账单':'Bill',
-    '冷却 · 剩 ':'Cooling · ', '无效 · 剩 ':'Invalid · ',
-    '显示':'Show', '隐藏':'Hide', '复制':'Copy', '已复制':'Copied', '删除':'Delete',
-    '解除冷却':'Clear cooldown', '解除无效':'Unblock', '默认':'default', '学习冷却':'Learned',
-    '由 429 探测自动学习':'learned automatically from 429 probes',
-    '模型信息：所有模型条目大列表 · 模型组跨提供商编组':'All models in one list · cross-provider groups',
-    '模型信息':'Model info', '模型组管理':'Model groups', '全部':'All', '上游':'Upstream',
-    '组名':'Group', '成员 (provider · model)':'Members (provider · model)', '成员数':'Count', '编辑':'Edit',
-    '+ 新建模型组':'+ New group', '同一模型跨提供商编组 · 每个模型恒属且仅属一组':'Same model grouped across providers · each model belongs to exactly one group',
-    '多成员组在"模型优先"模式下跨提供商兜底，长上下文靠排序而非换模型':'Multi-member groups cross-provider fallback in "model-priority" mode; long context via sort, not model switch',
-    '添加成员':'Add member', '取消':'Cancel', 'provider':'provider', 'upstream model':'upstream model',
-    '全局状态总览 · 跨所有提供商一张表':'Global status · one table across all providers',
-    '粘贴 API Key，多个每行一个可批量添加':'Paste API key; multi-line for batch add', '批量添加':'Batch add',
-    '删除所有无效 Key':'Delete all invalid keys',
-    '策略管理':'Strategy management', '过滤器':'Filters', '不改变模型组':'Lock model group', '不改变提供商':'Lock provider', '当前：':'Now: ',
-    '精确轮换':'Exact', '模型优先':'Model priority', '提供商优先':'Provider priority', '可用优先':'Availability',
-    '精确 (provider,model) 轮换 Key - 当前行为，零惊喜':'Exact (provider,model) key rotation - current behavior, zero surprise',
-    '模型优先 - 跨提供商同模型':'Model priority - cross-provider same model', '提供商优先 - 换模型':'Provider priority - switch model', '可用优先 - 所有候选':'Availability priority - all candidates',
-    '优先策略':'Priority', '关键字 3 / 4 / 5（1=valid↓ 2=非冷却↓ 固定前导）':'Keys 3/4/5 (1=valid↓ 2=non-cooled↓ fixed lead)',
-    '关键字 {n}':'Key {n}', '（跳过）':'(skip)', '不限':'Any',
-    '演示':'Demo', 'dry-run 实时':'dry-run live', '模拟请求':'Simulate request', '请求模型':'Request model', '请求提供商':'Request provider',
-    '路由命中':'Routed', '429 全冷却':'429 all cooling', '429 无可用':'429 no valid', '429 候选为空':'429 empty',
-    '返回':'returns', '候选 {n} 条均无效':'{n} candidates, all invalid', '当前过滤下无候选':'No candidates under current filter', '候选为空':'No candidates',
-    '#':'#', 'valid':'valid', 'cool':'cool', '单价':'Price', 'TPS':'TPS',
-    '是':'Yes', '否':'No',
-    '成功率 ↓':'Success rate ↓', 'RPM ↓':'RPM ↓', 'TPM ↓':'TPM ↓', '首字延迟 ↑':'TFTT ↑',
-    'token余额 ↓':'Token balance ↓', 'token余额 ↑':'Token balance ↑', '账单余额 ↓':'Bill balance ↓', '账单余额 ↑':'Bill balance ↑',
-    '单价 ↑':'Price ↑', '生成速度TPS ↓':'Gen speed TPS ↓',
-    '从免费目录选一家，或自定义填入':'Pick from the free catalog, or fill in custom',
-    '自定义提供商':'Custom provider', '手动填写 base_url、协议与模型':'Manually fill base_url, protocol, models',
-    '从免费目录选择':'Pick from free catalog', '从免费目录选一家，预填 base_url / 协议 / 模型':'Pick from the free catalog; prefill base_url / protocol / models',
-    '免费目录 · 点一张预填配置':'Free catalog · click one to prefill', '协议':'Protocol',
-    '添加：':'Add: ', '已从目录预填，可改 · 粘 Key 后添加':'Prefilled from catalog, editable · paste key then add',
-    '手动填写 · 粘 Key 后添加':'Fill in manually · paste key then add', '添加':'Add', '粘贴 API Key':'Paste API key',
-    '← 返回':'← Back', '从剪贴板粘贴':'Paste from clipboard',
-    '从 GitHub 更新目录':'Update from GitHub', '更新中…':'Updating…', '目录已更新':'Catalog updated',
-    '免 Key':'keyless', '已添加':'Added', '预置免费模型':'Included free models', '领额度教程':'Setup guide', '注册 / 取 Key':'Sign up / get key', '确认添加':'Add',
-    '全局设置 · 端口修改后重启生效':'Global settings · port changes need restart', '基本':'Basic',
-    '默认冷却时间（秒）':'Default cooldown (s)', '每请求最大尝试次数':'Max attempts per request',
-    'API 端口':'API port', 'UI 端口':'UI port', '启用本地 API 鉴权':'Enable local API auth', '鉴权 Key，逗号分隔':'Auth keys, comma-separated',
-    '保存设置':'Save settings', '配置文件':'Config file', '导出配置':'Export config', '导入配置':'Import config',
-    'gateway.json · 导入即时热生效':'gateway.json · import hot-reloads',
-    '导入会整体替换当前配置（含端口与鉴权），文件无效则整体拒绝':'Import fully replaces the current config (ports & auth included); invalid files are rejected',
-    '已保存':'Saved', '失败: ':'Failed: ', '已触发下载':'Download started', '导入成功，已热生效':'Imported, hot-reloaded', '导入失败: ':'Import failed: ',
-    '添加成功':'Provider added', '添加失败: ':'Add failed: ', '复制失败: ':'Copy failed: ', '未找到该 Key':'Key not found',
-    '拉取失败: ':'Fetch failed: ', '上游未返回任何模型':'Upstream returned no models', '未选择任何模型':'No models selected',
-    '已导入 {n} 个模型':'Imported {n} models', '更新失败: ':'Refresh failed: ',
-    '此供应商需要 API Key':'This provider needs an API key', '部分 Key 添加失败: ':'Some keys failed: ',
-    '删除该提供商及其所有 Key？':'Delete this provider and all its keys?', '删除该 Key？':'Delete this key?',
-    '删除模型 {m}？指向它的别名将无法使用。':'Delete model {m}? Aliases pointing to it will stop working.',
-    '删除该模型组？':'Delete this model group?',
-    '导入 {n} 将整体替换当前配置（含端口与鉴权设置），确定继续？':'Importing {n} will fully replace the current config (ports & auth included). Continue?',
-    '切换语言 / switch language':'switch language',
-    '模型导入':'Import models', '全选 / 全不选':'All / none', '导入所选':'Import selected', '已存在':'exists', '已选 {n} 个':'{n} selected',
-    'provider · model':'provider · model', 'RPM':'RPM', 'TPM':'TPM',
-    'Token 余额 API':'Token balance API', '账单余额 API':'Bill balance API', '价格表':'Price table', '¥/1M tok':'¥/1M tok',
-    '不限额度':'Unlimited', '保存价格表':'Save price table', 'Key 池概览':'Key pool overview',
-    'token余额':'Token balance', '账单余额':'Bill balance', '模型 ID':'Model ID', '上游模型名':'Upstream model',
-  }
-};
-let LANG = 'zh';
-function t(key){ const v = I18N[LANG][key]; return v === undefined ? key : v; }
-function applyLang(lang){
-  LANG = I18N[lang] ? lang : 'zh';
-  document.documentElement.lang = LANG === 'zh' ? 'zh-CN' : 'en';
-  try { localStorage.setItem(LANG_KEY, LANG); } catch(e){}
-  $('lang-toggle').textContent = LANG === 'zh' ? 'EN' : '中';
-  renderTopbar(); renderSidebar(); renderSideFoot(); renderMain();
-}
-/* lang/theme init moved to the boot block at the end of the script: applyLang
-   triggers renderTopbar/Sidebar/SideFoot/renderMain, which reference the data
-   globals (STATUS/S/NAV…) declared below - running init here (before those
-   `let`/`const` lines execute) hit a temporal-dead-zone error. */
+/* ============ data globals (populated from the admin API by refresh()) ============
+   Kept in the prototype's mock shapes (PROVIDERS/MODELS/GROUPS/KEYS/CATALOG) so
+   every prototype render function below reads them unchanged. The prototype's
+   inline mock literals are replaced by adapters mapping the real API responses
+   into these same shapes. Fields with no real backend are kept (per the agreed
+   rule) but bound to 0 / '' / Infinity so nothing is faked. */
+let PROVIDERS = [];
+let MODELS = [];
+let GROUPS = [];
+let KEYS = [];
+let CATALOG = [];
+let STATUS = null, STATS = null, STRATEGY = null, MODEL_GROUPS = null, DRY = null, RES = null;
+const PNAME = id => (PROVIDERS.find(p=>p.id===id)||{}).name || id;
 
-/* ============ theme ============ */
-function applyTheme(mode){
-  document.documentElement.dataset.theme = mode;
-  $('theme-toggle').innerHTML = mode === 'light'
-    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>'
-    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>';
-  try { localStorage.setItem(THEME_KEY, mode); } catch(e){}
-}
-/* theme init moved to boot (see lang note above - same TDZ reason). */
-$('theme-toggle').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'));
-$('lang-toggle').addEventListener('click', () => applyLang(LANG === 'zh' ? 'en' : 'zh'));
-
-/* ============ helpers ============ */
+/* ============ api helper ============ */
 async function api(method, url, body){
   const r = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined });
-  if (!r.ok){ const e = await r.json().catch(()=>({})); throw new Error(e.error || (''+r.status)); }
+  if (!r.ok){ let msg = ''+r.status; try { const e = await r.json(); if (e && e.error) msg = e.error; } catch(_){} throw new Error(msg); }
   const txt = await r.text();
   return txt ? JSON.parse(txt) : null;
 }
-function toast(msg){ const m = $('msg'); m.textContent = msg; m.classList.add('show'); clearTimeout(m._t); m._t = setTimeout(()=>m.classList.remove('show'), 2600); }
-function copyText(s, btn){
-  const done = () => { if (!btn){ toast(t('已复制')); return; } const old = btn.textContent; btn.textContent = t('已复制'); setTimeout(()=>btn.textContent = old, 1200); };
-  if (navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(s).then(done).catch(()=>{}); }
-  else { const ta = document.createElement('textarea'); ta.value = s; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch(e){} ta.remove(); }
+function copyText(s){
+  if (navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(s).catch(()=>{}); }
+  else { const ta = document.createElement('textarea'); ta.value = s; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch(e){} ta.remove(); }
 }
+function toast(msg){ const m = $('msg'); if(!m) return; m.textContent = msg; m.classList.add('show'); clearTimeout(m._t); m._t = setTimeout(()=>m.classList.remove('show'), 2600); }
 
-/* ============ icons ============ */
+/* ============ sidebar items + icons ============ */
 const ICONS = {
-  overview:'<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1.709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
-  providers:'<rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>',
-  models:'<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0.58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0.58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/>',
-  strategy:'<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
-  apikeys:'<path d="m2 21 9.6-9.6"/><path d="m7.5 15.5 2.3 2.3a1 1 0 0 1 0 1.4l-2.1 2.1a1 1 0 0 1-1.4 0L4 19"/><circle cx="15.5" cy="7.5" r="5.5"/>',
-  settings:'<path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/>',
-  addCustom:'<circle cx="12" cy="12" r="9"/><path d="M12 8v8"/><path d="M8 12h8"/>',
+  overview: '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1.709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  providers: '<rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>',
+  models: '<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0.58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0.58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/>',
+  strategy: '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
+  apikeys: '<path d="m2 21 9.6-9.6"/><path d="m7.5 15.5 2.3 2.3a1 1 0 0 1 0 1.4l-2.1 2.1a1 1 0 0 1-1.4 0L4 19"/><circle cx="15.5" cy="7.5" r="5.5"/>',
+  stats: '<path d="M21 12c.552 0 1.005-.449.95-.998a10 10 0 0 0-8.953-8.951c-.55-.055-.998.398-.998.95v8a1 1 0 0 0 1 1z"/><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>',
+  settings: '<path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/>',
+  addCustom: '<circle cx="12" cy="12" r="9"/><path d="M12 8v8"/><path d="M8 12h8"/>',
+  addCatalog: '<path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/>',
 };
-const NAV = [
-  { id:'overview',     label:'概览',      icon: ICONS.overview },
-  { id:'providers',    label:'提供商',    icon: ICONS.providers },
-  { id:'models',       label:'模型',      icon: ICONS.models },
-  { id:'api-keys',     label:'API Key',   icon: ICONS.apikeys },
-  { id:'strategy',     label:'策略',      icon: ICONS.strategy },
-  { id:'add-provider', label:'添加提供商', icon: ICONS.addCustom },
-  { id:'settings',     label:'设置',      icon: ICONS.settings },
+const TABS = [
+  { id:'stats',     label:'统计' },
+  { id:'providers', label:'提供商' },
+  { id:'models',    label:'模型' },
+  { id:'strategy',  label:'策略' },
+  { id:'apikeys',   label:'API Key' },
+  { id:'settings',  label:'设置' },
 ];
 
-/* ============ sort keys (A-J) ============ */
+/* ============ state ============ */
+const S = {
+  tab: 'stats',
+  lang: 'zh',            // 'zh' | 'en' - t() is identity in zh, looks up EN in en
+  collapsed: false,
+  localProv: null,       // providers board internal selection
+  modelTab: 'info',       // models sub-tab
+  modelFilter: 'all',     // models info list provider filter (local)
+  editingModel: null,
+  groupEdit: null,           // {isNew, id, index, entries:[{pid,model}]} | null
+  keyFilter: 'all',
+  reqModel: '',
+  reqProv: '',
+  groupLock: true,
+  provLock: true,
+  sorts: ['','',''],
+  addState: null,         // null | 'choose' | 'catalog' | 'form'
+  addDraft: null,         // { name, base_url, protocol, models[], key, source }
+  akEdit: null,           // api-key id whose metric-seed card is open (spec §2.2)
+  recycled: 0,
+};
+
+/* ============ sort comparators (A-J) ============ */
 const SORTS = {
-  A:{n:'成功率 ↓'}, B:{n:'RPM ↓'}, C:{n:'TPM ↓'}, D:{n:'首字延迟 ↑'},
-  E:{n:'token余额 ↓'}, F:{n:'token余额 ↑'}, G:{n:'账单余额 ↓'}, H:{n:'账单余额 ↑'},
-  I:{n:'单价 ↑'}, J:{n:'生成速度TPS ↓'},
+  A:{n:'成功率 ↓',        fn:(a,b)=>b.sr-a.sr},
+  B:{n:'RPM ↓',          fn:(a,b)=>b.rpm-a.rpm},
+  C:{n:'TPM ↓',          fn:(a,b)=>b.tpm-a.tpm},
+  D:{n:'首字延迟 ↑',     fn:(a,b)=>a.tftt-b.tftt},
+  E:{n:'token余额 ↓',   fn:(a,b)=>b.tb-a.tb},
+  F:{n:'token余额 ↑',    fn:(a,b)=>a.tb-b.tb},
+  G:{n:'账单余额 ↓',     fn:(a,b)=>b.bb-a.bb},
+  H:{n:'账单余额 ↑',     fn:(a,b)=>a.bb-b.bb},
+  I:{n:'单价 ↑',         fn:(a,b)=>a.price-b.price},
+  J:{n:'生成速度TPS ↓', fn:(a,b)=>b.tps-a.tps},
 };
 const SORT_KEYS = Object.keys(SORTS);
-const CLIP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>';
 
-/* ============ state + globals ============ */
-let STATUS=null, STATS=null, CATALOG=null, STRATEGY=null, MODEL_GROUPS=null, DRY=null;
-const S = {
-  tab:'overview', collapsed:false,
-  localProv:null,            // selected provider id (providers board)
-  modelTab:'info',           // 'info' | 'groups'
-  modelFilter:'all',
-  editingModel:null,        // {pid, mid} | null - model info edit pane
-  groupEdit:null,            // {isNew, id, entries:[{pid,model}]}
-  keyFilter:'all',
-  reqModel:'', reqProv:'不限',
-  groupLock:true, provLock:true, sorts:['','',''],
-  addState:null,            // null | 'choose' | 'catalog' | 'form'
-  addDraft:null,            // {name, base_url, protocol, models[], key, source}
+/* ============ i18n (zh identity / en lookup) ============ */
+/* t() returns its arg unchanged in zh (so zh renders byte-identical to the
+   pre-i18n file); in en it looks up EN (Chinese-string key -> English).
+   Parametrized strings use {param} placeholders, replaced by the caller. */
+const EN = {
+  '控制台':'Console', '运行中':'Running',
+  '导航':'Navigate', 'Key 池':'Key pool',
+  '统计':'Stats', '提供商':'Providers', '模型':'Models', '策略':'Strategy', 'API Key':'API Keys', '设置':'Settings',
+  '可用':'Ready', '冷却':'Cooling', '冷却中':'Cooling', '异常':'Invalid',
+  '概览':'Overview', '网关全局快照':'Gateway global snapshot',
+  '可用 Key':'Available keys', '异常 Key':'Invalid keys', '模型条目':'Model entries', '模型组':'Model groups',
+  '提供商概览':'Provider overview', '点行进详情':'Click row for detail',
+  '协议':'Protocol', 'token 余额':'Token balance', '账单余额':'Bill balance', 'RPM':'RPM', 'TPM':'TPM', 'Key':'Key',
+  '不限':'Unlimited',
+  '+ 添加':'+ Add', '基本信息 + 限额（已归并到提供商下）':'Basic info + quota (merged under provider)',
+  '基本信息':'Basic info', '名称':'Name', 'Base URL':'Base URL',
+  '托管模型 {mc} 个 · Key {kc} 把（Key 在 API Key 板统一管理）':'{mc} managed models · {kc} keys (managed in API Keys board)',
+  '配额与速率':'Quota & rate', 'RPM/TPM 可手填或采用自动检测':'RPM/TPM manual or auto-detected',
+  '配额重置时间':'Quota reset time', '重置配额（token）':'Reset quota (tokens)', '重置配额':'Reset quota', '采用自动检测结果':'Use auto-detection',
+  '保存':'Save', '删除提供商':'Delete provider',
+  '冷却 · 剩 {cd}s':'Cooling · {cd}s left', '智能冷却时长':'Smart cooldown',
+  '模型信息：所有模型条目大列表，点一条进编辑页 · 模型组：跨提供商同模型编组':'Model info: all models in one list, click to edit · Groups: cross-provider same-model grouping',
+  '模型信息':'Model info', '模型组管理':'Model groups',
+  '从上游获取模型（演示）':'Fetch models from upstream (demo)',
+  '上下文':'Context', '输入':'Input', '输出':'Output', '启用':'Enabled', '禁用':'Disabled', '无':'None',
+  '← 返回':'← Back',
+  '模型 ID':'Model ID', '上游模型名':'Upstream model', '上下文长度':'Context length', '输入价格':'Input price', '输出价格':'Output price', '别名':'Aliases',
+  'tokens':'tokens', '¥/1M tok':'¥/1M tok', '是':'Yes', '否':'No', '添加别名':'Add alias', '添加':'Add', '取消':'Cancel',
+  '同一模型跨提供商编组 · 每个模型恒属且仅属一组':'Same model grouped across providers · each model belongs to exactly one group',
+  '组名':'Group', '成员 (provider · model)':'Members (provider · model)', '成员数':'Count', '编辑':'Edit',
+  '+ 新建模型组':'+ New group', '多成员组在"模型优先"模式下跨提供商兜底，长上下文靠排序而非换模型':'Multi-member groups cross-provider fallback in "model-priority" mode; long context via sort, not model switch',
+  '暂无可用模型':'No models available', '选择模型':'Select model', '已编组':'Grouped',
+  '过滤器':'Filters', '不改变模型组':'Lock model group', '不改变提供商':'Lock provider', '当前：':'Now: ',
+  '优先策略':'Priority', '关键字 3 / 4 / 5（1=valid↓ 2=非冷却↓ 固定前导）':'Keys 3/4/5 (1=valid↓ 2=non-cooled↓ fixed lead)',
+  '关键字 {n}':'Key {n}', '（跳过）':'(skip)', '演示':'Demo', 'dry-run 实时':'dry-run live', '模拟请求':'Simulate request',
+  '路由命中':'Routed', '429 全冷却':'429 all cooling', '429 无可用':'429 no valid', '429 候选为空':'429 empty',
+  '返回':'returns', '候选 {n} 条均无效':'{n} candidates, all invalid', '当前过滤下无候选':'No candidates under current filter',
+  '#':'#', 'valid':'valid', 'cool':'cool', '单价':'Price', 'TPS':'TPS', '成功率':'Success rate', '候选为空':'No candidates',
+  '精确 (provider,model) 轮换 Key - 当前行为，零惊喜':'Exact (provider,model) key rotation - current behavior, zero surprise',
+  '模型优先 - 跨提供商同模型':'Model priority - cross-provider same model', '提供商优先 - 换模型':'Provider priority - switch model', '可用优先 - 所有候选':'Availability priority - all candidates',
+  '精确轮换':'Exact', '模型优先':'Model priority', '提供商优先':'Provider priority', '可用优先':'Availability',
+  'API Key':'API Keys', '全局状态总览 · 跨所有提供商一张表':'Global status · one table across all providers', '已回收 {n} 把':'{n} recycled',
+  '全部':'All', '粘贴 API Key，多个每行一个可批量添加':'Paste API key; multi-line for batch add', '批量添加':'Batch add',
+  '移动所有无效Key至回收站':'Move all invalid keys to recycle',
+  '状态':'Status', '请求数':'Requests', '最近错误':'Last error', '操作':'Actions', '账单':'Bill',
+  '显示':'Show', '复制':'Copy', '删除':'Delete', '从剪贴板粘贴':'Paste from clipboard', '已复制':'Copied',
+  '请求与 Token 用量 · 数据持久化，重启不丢失':'Request & token usage · persisted across restarts',
+  '总览':'Overview', '过去 24 小时请求':'Past 24h requests', '过去 24 小时 Token 用量':'Past 24h token usage',
+  '按提供商':'By provider', '按模型':'By model', '按 API Key':'By API key',
+  '成功请求':'Successful requests', '失败请求':'Failed requests', '换 Key 次数':'Key rotations', '成功率':'Success rate', 'Token 总消耗':'Total tokens',
+  '每小时一柱 · 绿=成功 红=失败':'One bar per hour · green=success red=fail',
+  '成功':'Success', '失败':'Fail', 'Token 消耗':'Tokens',
+  '{h}:00 · 成功 {ok} / 失败 {fail}':'{h}:00 · {ok} ok / {fail} fail', '{h}:00 · {n} tok':'{h}:00 · {n} tok',
+  '全局设置 · 端口修改后重启生效':'Global settings · port changes need restart', '基本':'Basic',
+  '默认冷却时间（秒）':'Default cooldown (s)', '每请求最大尝试次数':'Max attempts per request', 'API 端口':'API port', 'UI 端口':'UI port',
+  '启用本地 API 鉴权':'Enable local API auth', '鉴权 Key，逗号分隔':'Auth keys, comma-separated', '保存设置':'Save settings',
+  '配置文件':'Config file', '导出配置':'Export config', '导入配置':'Import config', 'gateway.json · 导入即时热生效':'gateway.json · import hot-reloads',
+  '添加提供商':'Add provider', '从免费目录选一家，或自定义填入':'Pick from the free catalog, or fill in custom',
+  '自定义提供商':'Custom provider', '手动填写 base_url、协议与模型':'Manually fill base_url, protocol, models',
+  '已有的提供商':'Existing providers', '从免费目录选一家，预填 base_url / 协议 / 模型':'Pick from the free catalog; prefill base_url / protocol / models',
+  '免费目录 · 点一张预填配置':'Free catalog · click one to prefill', '添加：':'Add: ',
+  '已从目录预填，可改 · 粘 Key 后添加':'Prefilled from catalog, editable · paste key then add', '手动填写 · 粘 Key 后添加':'Fill in manually · paste key then add',
+  '托管模型':'Managed models', '添加模型 id':'Add model id', '删除模型':'Delete model', '粘贴 API Key':'Paste API key',
+  '切换语言 / switch language':'切换语言 / switch language',
+  '从上游获取模型':'Fetch models from upstream', '启用/禁用':'Enable/Disable', '上游':'Upstream',
+  '策略管理':'Strategy management', '请求模型':'Request model', '请求提供商':'Request provider',
+  '隐藏':'Hide', '每小时一柱':'One bar per hour', '请求':'Requests', '从免费目录选择':'Pick from free catalog',
+  '成功率 ↓':'Success rate ↓', 'RPM ↓':'RPM ↓', 'TPM ↓':'TPM ↓', '首字延迟 ↑':'TFTT ↑',
+  'token余额 ↓':'Token balance ↓', 'token余额 ↑':'Token balance ↑',
+  '账单余额 ↓':'Bill balance ↓', '账单余额 ↑':'Bill balance ↑', '单价 ↑':'Price ↑', '生成速度TPS ↓':'Gen speed TPS ↓',
+  /* feedback strings for the wired (real-API) mutations — no new UI elements */
+  '删除该提供商及其所有 Key？':'Delete this provider and all its keys?',
+  '删除该 Key？':'Delete this key?',
+  '删除模型 {m}？指向它的别名将无法使用。':'Delete model {m}? Aliases pointing to it will stop working.',
+  '导入 {n} 将整体替换当前配置（含端口与鉴权设置），确定继续？':'Importing {n} will fully replace the current config (ports & auth included). Continue?',
+  '暂无数据':'No data yet',
+  /* toast feedback strings for wired (real-API) mutations */
+  '已保存':'Saved', '已删除':'Deleted', '添加成功':'Added', '添加失败: ':'Add failed: ',
+  '导入成功':'Imported', '导入失败: ':'Import failed: ', '已触发下载':'Download started',
+  '未找到该 Key':'Key not found', '失败: ':'Failed: ',
+  /* api-key metric seed editor (spec §2.2 手动 seed) */
+  'Seed':'Seed', '预置':'Seed', '指标预置':'Metric seed',
+  '无实测史时的预置初值，有实测后自动覆盖；留空 = 清除':'Preset initial values used before any live measurement; auto-overridden once measured; empty = clear',
+  /* upstream-fetch auto-import + model-group editor + readonly hints */
+  '请先选择提供商':'Pick a provider first', '拉取中…':'Fetching…', '拉取失败: ':'Fetch failed: ',
+  '上游未返回任何模型':'Upstream returned no models', '新添加 {n} 个模型':'Added {n} models',
+  '无后端':'No backend',
+  '添加成员':'Add member', 'provider':'provider', 'upstream model':'upstream model',
+  '删除该模型组？':'Delete this model group?', 'K':'K',
 };
-const PNAME = id => { const p = (STATUS&&STATUS.providers||[]).find(x=>x.id===id); return p ? p.name : id; };
-// Aggregate a per-key metric across a provider's keys. A null balance means
-// unlimited (不限); any unlimited key makes the aggregate unlimited.
-// rpm and other always-numeric metrics are plain sums.
-const sumMetric = (keys, field) => {
-  if (!keys || !keys.length) return null;
-  let s = 0;
-  for (const k of keys){ const v = k && k.metrics ? k.metrics[field] : null; if (v == null) return null; s += v; }
-  return s;
-};
-const sumRpm = keys => { let s = 0; if (keys) for (const k of keys){ if (k && k.metrics && k.metrics.rpm) s += k.metrics.rpm; } return s; };
-const fmtTok = v => v == null ? `<span class="nm-sans faint">${t('不限额度')}</span>` : v.toLocaleString();
-const fmtBill = v => v == null ? `<span class="nm-sans faint">${t('不限额度')}</span>` : '' + v;
-
-/* ============ shell render ============ */
-function renderTopbar(){
-  const bs = $('brand-sub'); if (bs) bs.textContent = t('控制台');
-  const rp = $('run-pill-text'); if (rp) rp.textContent = t('运行中');
-  const port = $('run-pill-port');
-  if (port) port.textContent = STATUS ? ':' + STATUS.ui_port : ':8001';
+const t = k => S.lang==='en' ? (EN[k] != null ? EN[k] : k) : k;
+function toggleLang(){ S.lang = S.lang==='zh'?'en':'zh'; try{ localStorage.setItem('lang', S.lang); }catch(_){} renderTopbar(); renderSidebar(); renderMain(); }
+function renderLangToggle(){
+  const b = $('lang-toggle'); if(!b) return;
+  // lucide "globe" icon (ready-made language/international glyph).
+  b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
 }
+function renderTopbar(){
+  const bs = $('brand-sub'); if(bs) bs.textContent = t('控制台');
+  const rp = $('run-pill-text'); if(rp) rp.textContent = t('运行中');
+  const port = $('run-pill-port'); if(port) port.textContent = STATUS ? ':' + STATUS.ui_port : ':8001';
+  renderLangToggle();
+}
+
+/* ============ route preview (server dry-run, mapped to the prototype shape) ============
+   The prototype computed this client-side over KEYS; the real gateway selects
+   server-side (spec §3-§6), so computeRoute() now returns the cached result of
+   POST /api/strategy/dry-run (mapped into {state, winner, cand, retry} so the
+   prototype's renderStrategy + resultBanner stay byte-identical). */
+function computeRoute(){
+  return RES || { state:'429-empty', cand:[] };
+}
+function modeName(){
+  const { groupLock, provLock } = S;
+  if (groupLock && provLock)  return '精确 (provider,model) 轮换 Key - 当前行为，零惊喜';
+  if (groupLock && !provLock) return '模型优先 - 跨提供商同模型';
+  if (!groupLock && provLock) return '提供商优先 - 换模型';
+  return '可用优先 - 所有候选';
+}
+
+/* ============ render: shell ============ */
 function renderSidebar(){
-  const h = $('side-head-text'); if (h) h.textContent = t('导航');
-  $('side-nav').innerHTML = NAV.map(n => `
-    <button class="side-item ${S.tab===n.id?'active':''}" onclick="setTab('${n.id}')" title="${t(n.label)}" aria-label="${t(n.label)}">
-      <svg viewBox="0 0 24 24">${n.icon}</svg>
-      <span class="side-label">${t(n.label)}</span>
+  const h = $('side-head-text'); if(h) h.textContent = t('导航');
+  $('side-nav').innerHTML = TABS.map(tb => `
+    <button class="side-item ${S.tab===tb.id?'active':''}" onclick="setTab('${tb.id}')" title="${t(tb.label)}">
+      <svg viewBox="0 0 24 24">${ICONS[tb.id]}</svg>
+      <span class="side-label">${t(tb.label)}</span>
     </button>`).join('');
 }
-function setTab(id){ S.tab=id; if(id!=='models'){ S.groupEdit=null; S.editingModel=null; } renderSidebar(); renderMain(); }
-function setLocalProv(id){ S.localProv=id; renderMain(); }
+function setTab(id){ S.tab=id; if(id!=='models') S.editingModel=null; renderSidebar(); renderMain(); }
+function setLocalProv(id){ S.localProv=id; S.addState=null; renderMain(); }
+
+/* ============ render: main dispatcher ============ */
+function renderMain(){
+  const m = $('main');
+  if (!STATUS) { m.innerHTML = ''; return; }
+  if (S.tab==='providers') renderProviders(m);
+  else if (S.tab==='models') renderModels(m);
+  else if (S.tab==='strategy') renderStrategy(m);
+  else if (S.tab==='apikeys') renderApiKeys(m);
+  else if (S.tab==='stats') renderStats(m);
+  else if (S.tab==='settings') renderSettings(m);
+  renderSideFoot();
+}
 function renderSideFoot(){
-  const f = $('side-foot'); if (!f) return;
-  let ok=0, cool=0, off=0;
-  (STATUS&&STATUS.providers||[]).forEach(p => (p.keys||[]).forEach(k => {
-    if (k.invalid) off++; else if (k.cooling) cool++; else ok++;
-  }));
+  const ok = KEYS.filter(k=>k.valid&&!k.cool).length, cool = KEYS.filter(k=>k.cool).length, off = KEYS.filter(k=>!k.valid).length;
+  const f = $('side-foot'); if(!f) return;
   f.innerHTML = `
     <div class="menu-card">
       <div class="mc-label">${t('Key 池')}</div>
@@ -361,429 +277,137 @@ function renderSideFoot(){
     </div>
     <span class="ver-chip">Sakura v0.1</span>`;
 }
-function renderMain(){
-  const m = $('main');
-  if (!STATUS) { m.innerHTML = ''; return; }
-  if (S.tab==='overview') renderOverview(m);
-  else if (S.tab==='providers') renderProviders(m);
-  else if (S.tab==='models') renderModels(m);
-  else if (S.tab==='api-keys') renderApiKeys(m);
-  else if (S.tab==='strategy') renderStrategy(m);
-  else if (S.tab==='add-provider') { if(!S.addState) S.addState='choose'; m.innerHTML = renderAddView(); }
-  else if (S.tab==='settings') renderSettings(m);
-  renderSideFoot();
-}
 
-/* ============ helpers: key/model status ============ */
-function keyStatus(k){
-  if (k.invalid){
-    const rem = Math.max(0, Math.ceil((k.invalid.until_ms - STATUS.now_ms)/1000));
-    return `<span class="st off" data-until="${k.invalid.until_ms}" data-kind="invalid">${t('无效 · 剩 ')}${rem}s</span>`;
-  }
-  if (k.cooling){
-    const rem = Math.max(0, Math.ceil((k.cooling.until_ms - STATUS.now_ms)/1000));
-    return `<span class="st cool" data-until="${k.cooling.until_ms}">${t('冷却 · 剩 ')}${rem}s</span>`;
-  }
-  return `<span class="st ok">${t('可用')}</span>`;
-}
-
-/* ============ overview (snapshot + request stats) ============ */
+/* ---------- overview (kept as in the prototype — not wired to a tab) ---------- */
 function renderOverview(m){
-  const provs = STATUS.providers || [];
-  let ok=0, cool=0, off=0, mc=0;
-  provs.forEach(p => { mc += (p.models||[]).length; (p.keys||[]).forEach(k => { if (k.invalid) off++; else if (k.cooling) cool++; else ok++; }); });
-  const gc = (MODEL_GROUPS||[]).length;
-  const tot = (STATS&&STATS.total) || {success:0, fail:0};
-  const rot = (STATS&&STATS.rotations_total) || 0;
-  const allreq = tot.success + tot.fail;
-  const rate = allreq ? (tot.success/allreq*100).toFixed(1)+'%' : '-';
-  const hist = (STATS&&STATS.histogram) || [];
-  const peak = Math.max(1, ...hist.map(h => h.success + h.fail));
-  const apiBase = `http://127.0.0.1:${STATUS.api_port}`;
-  const provRows = provs.length ? provs.map(p => {
-    const keys = p.keys || [];
-    const tb = sumMetric(keys, 'token_balance');
-    const bb = sumMetric(keys, 'bill_balance');
-    const rpm = sumRpm(keys);
-    return `<tr class="row-click" onclick="S.localProv='${p.id}';setTab('providers')">
-      <td><span class="pdot"></span>${esc(p.name)}</td>
-      <td><span class="pill">${esc(p.protocol || 'openai')}</span></td>
-      <td class="num">${keys.length}</td>
-      <td class="num">${fmtTok(tb)}</td>
-      <td class="num">${fmtBill(bb)}</td>
-      <td class="num">${rpm}</td>
-    </tr>`;
-  }).join('') : `<tr><td colspan="6" class="faint">${t('暂无数据')}</td></tr>`;
-  const provStats = Object.entries((STATS&&STATS.providers) || {});
-  const modelStats = Object.entries((STATS&&STATS.models) || {});
-  const keyStats = Object.entries((STATS&&STATS.keys) || {});
-  const statRow = (entries, cols, render) => entries.length ? entries.map(render).join('') : `<tr><td colspan="${cols}" class="faint">${t('暂无数据')}</td></tr>`;
+  const ok = KEYS.filter(k=>k.valid&&!k.cool).length;
+  const cool = KEYS.filter(k=>k.cool).length;
+  const off = KEYS.filter(k=>!k.valid).length;
   m.innerHTML = `
     <h2 class="board-title">${t('概览')}</h2>
     <div class="board-note">${t('网关全局快照')}</div>
     <div class="stat-grid">
-      <div class="stat-box"><div class="num">${provs.length}</div><div class="label">${t('提供商')}</div></div>
-      <div class="stat-box ok"><div class="num">${ok}</div><div class="label">${t('可用')}</div></div>
+      <div class="stat-box"><div class="num">${PROVIDERS.length}</div><div class="label">${t('提供商')}</div></div>
+      <div class="stat-box ok"><div class="num">${ok}</div><div class="label">${t('可用 Key')}</div></div>
       <div class="stat-box warn"><div class="num">${cool}</div><div class="label">${t('冷却中')}</div></div>
-      <div class="stat-box err"><div class="num">${off}</div><div class="label">${t('异常')}</div></div>
-      <div class="stat-box"><div class="num">${mc}</div><div class="label">${t('模型条目')}</div></div>
-      <div class="stat-box"><div class="num">${gc}</div><div class="label">${t('模型组')}</div></div>
+      <div class="stat-box err"><div class="num">${off}</div><div class="label">${t('异常 Key')}</div></div>
+      <div class="stat-box"><div class="num">${MODELS.length}</div><div class="label">${t('模型条目')}</div></div>
+      <div class="stat-box"><div class="num">${GROUPS.length}</div><div class="label">${t('模型组')}</div></div>
     </div>
     <div class="section">
       <div class="section-title">${t('提供商概览')} <span class="note">${t('点行进详情')}</span></div>
       <div class="card"><table>
-        <tr><th>${t('提供商')}</th><th>${t('协议')}</th><th>${t('Key')}</th><th>${t('token余额')}</th><th>${t('账单余额')}</th><th>${t('RPM')}</th></tr>
-        ${provRows}
-      </table></div>
-    </div>
-    <div class="section">
-      <div class="section-title">${t('API 端点')}</div>
-      <div class="card card-pad">
-        <div class="kv-endpoints">
-          <span class="k">${t('OpenAI 兼容接口')}</span><code id="api-url" title="${t('点击复制')}">${esc(apiBase)}/v1</code>
-          <span class="k">${t('Anthropic Messages')}</span><code id="api-url-anthropic" title="${t('点击复制')}">${esc(apiBase)}/v1/messages</code>
-        </div>
-        <div class="faint" style="margin-top:0.5rem">${t('模型用')} <code>provider/model</code> ${t('或别名')}</div>
-      </div>
-    </div>
-    <div class="section">
-      <div class="section-title">${t('请求统计 · 数据持久化，重启不丢失')}</div>
-      <div class="board-note">${t('总览')}</div>
-      <div class="stat-grid">
-        <div class="stat-box ok"><div class="num">${tot.success}</div><div class="label">${t('成功请求')}</div></div>
-        <div class="stat-box err"><div class="num">${tot.fail}</div><div class="label">${t('失败请求')}</div></div>
-        <div class="stat-box warn"><div class="num">${rot}</div><div class="label">${t('换 Key 次数')}</div></div>
-        <div class="stat-box"><div class="num">${rate}</div><div class="label">${t('成功率')}</div></div>
-      </div>
-    </div>
-    <div class="section">
-      <div class="section-title">${t('过去 24 小时请求')} <span class="note">${t('每小时一柱 · 绿=成功 红=失败')}</span></div>
-      <div class="card card-pad">
-        ${hist.length ? `<div class="hist">${hist.map(h => {
-          const okH=(h.success/peak*100).toFixed(2), failH=(h.fail/peak*100).toFixed(2);
-          return `<div class="bar-wrap" title="${t('{h}:00 · 成功 {ok} / 失败 {fail}').replace('{h}',new Date(h.hour_ms).getHours()).replace('{ok}',h.success).replace('{fail}',h.fail)}">${h.fail?`<div class="bar fail" style="height:${failH}%"></div>`:''}${h.success?`<div class="bar ok" style="height:${okH}%"></div>`:''}</div>`;
-        }).join('')}</div>
-        <div class="hist-x">${hist.map((h,i)=>(i%4===0)?`<span>${new Date(h.hour_ms).getHours()}:00</span>`:'<span></span>').join('')}</div>` : `<div class="empty">${t('暂无数据')}</div>`}
-      </div>
-    </div>
-    <div class="section">
-      <div class="section-title">${t('按提供商')}</div>
-      <div class="card"><table>
-        <tr><th>${t('提供商')}</th><th>${t('请求')}</th><th>${t('成功')}</th><th>${t('失败')}</th><th>${t('换 Key 次数')}</th><th>${t('成功率')}</th></tr>
-        ${statRow(provStats, 6, ([id,p])=>{ const a=p.success+p.fail; return `<tr><td>${esc(p.name)}</td><td class="num">${p.success+p.fail}</td><td class="num">${p.success}</td><td class="num">${p.fail}</td><td class="num">${p.rotations||0}</td><td class="num">${a?(p.success/a*100).toFixed(1)+'%':'-'}</td></tr>`; })}
-      </table></div>
-    </div>
-    <div class="section">
-      <div class="section-title">${t('按模型')}</div>
-      <div class="card"><table>
-        <tr><th>${t('模型')}</th><th>${t('请求')}</th><th>${t('成功')}</th><th>${t('失败')}</th><th>${t('成功率')}</th></tr>
-        ${statRow(modelStats, 5, ([mid,s])=>{ const a=s.success+s.fail; return `<tr><td><span class="keytag">${esc(mid)}</span></td><td class="num">${s.success+s.fail}</td><td class="num">${s.success}</td><td class="num">${s.fail}</td><td class="num">${a?(s.success/a*100).toFixed(1)+'%':'-'}</td></tr>`; })}
-      </table></div>
-    </div>
-    <div class="section">
-      <div class="section-title">${t('按 API Key')}</div>
-      <div class="card"><table>
-        <tr><th>${t('API Key')}</th><th>${t('请求')}</th><th>${t('成功')}</th><th>${t('失败')}</th><th>${t('成功率')}</th></tr>
-        ${statRow(keyStats, 5, ([id,k])=>{ const a=k.success+k.fail; return `<tr><td>${esc(k.name)}</td><td class="num">${k.success+k.fail}</td><td class="num">${k.success}</td><td class="num">${k.fail}</td><td class="num">${a?(k.success/a*100).toFixed(1)+'%':'-'}</td></tr>`; })}
+        <tr><th>${t('提供商')}</th><th>${t('协议')}</th><th>${t('Key')}</th><th>${t('token 余额')}</th><th>${t('账单余额')}</th><th>${t('RPM')}</th></tr>
+        ${PROVIDERS.map(p=>{ const kc=KEYS.filter(k=>k.prov===p.id).length; return `
+        <tr class="row-click" onclick="S.localProv='${p.id}';setTab('providers')">
+          <td><span class="pdot" style="display:inline-block;width:0.5rem;height:0.5rem;border-radius:50%;background:${p.dot};margin-right:0.4375rem;vertical-align:middle"></span>${esc(p.name)}</td>
+          <td><span class="pill">${p.proto}</span></td>
+          <td class="num">${kc}</td>
+          <td class="num">${p.tb===Infinity?`<span class="faint">${t('不限')}</span>`:p.tb.toLocaleString()}</td>
+          <td class="num">${p.bb===Infinity?`<span class="faint">${t('不限')}</span>`:p.bb}</td>
+          <td class="num">${p.rpm||'<span class="faint">-</span>'}</td>
+        </tr>`; }).join('')}
       </table></div>
     </div>`;
-  for (const id of ['api-url','api-url-anthropic']) {
-    const el = $(id); if (el) { el.style.cursor='pointer'; el.onclick = () => copyText(el.textContent, null); }
-  }
 }
 
-/* ============ providers (master-detail) ============ */
+/* ---------- providers (internal master-detail, 限额 folded in) ---------- */
 function renderProviders(m){
-  const provs = STATUS.providers || [];
-  if (!provs.length){ m.innerHTML = `<h2 class="board-title">${t('提供商')}</h2><div class="board-note">${t('暂无数据')}</div>`; return; }
-  const sel = S.localProv && provs.find(p=>p.id===S.localProv) ? S.localProv : provs[0].id;
+  if (!PROVIDERS.length){ m.innerHTML = `<h2 class="board-title">${t('提供商')}</h2><div class="board-note">${t('暂无数据')}</div>`; return; }
+  const sel = (S.localProv && PROVIDERS.find(p=>p.id===S.localProv)) ? S.localProv : PROVIDERS[0].id;
   S.localProv = sel;
-  const p = provs.find(x=>x.id===sel);
+  const p = PROVIDERS.find(x=>x.id===sel) || PROVIDERS[0];
   m.innerHTML = `
     <div class="prov-board">
       <div class="prov-list-col">
-        <div class="pl-head"><span>${t('提供商')}</span><span class="add" onclick="enterAdd()" role="button" tabindex="0">${t('+ 添加')}</span></div>
-        ${provs.map(pp => `
-        <div class="pl-item ${sel===pp.id?'active':''}" onclick="setLocalProv('${pp.id}')">
-          <span class="pdot"></span>
-          <span class="pl-name">${esc(pp.name)}</span>
-          <span class="pl-badge">${(pp.keys||[]).length}</span>
-        </div>`).join('')}
+        <div class="pl-head"><span>${t('提供商')}</span><span class="add" onclick="enterAdd()">${t('+ 添加')}</span></div>
+        ${PROVIDERS.map(p=>{ const kc=KEYS.filter(k=>k.prov===p.id).length; return `
+        <div class="pl-item ${sel===p.id?'active':''}" onclick="setLocalProv('${p.id}')">
+          <span class="pdot" style="background:${p.dot}"></span>
+          <span class="pl-name">${esc(p.name)}</span>
+          <span class="pl-badge">${kc}</span>
+        </div>`; }).join('')}
       </div>
       <div class="prov-detail-col">
-        <h2 class="board-title">${esc(p.name)}</h2>
-        <div class="board-note">${t('提供商详情 · 模型与 Key 在此管理')}</div>
-        ${providerDetail(p)}
+        ${S.addState ? renderAddView() : `<h2 class="board-title">${esc(p.name)}</h2><div class="board-note">${t('基本信息 + 限额（已归并到提供商下）')}</div>${providerDetail(p)}`}
       </div>
     </div>`;
 }
 function providerDetail(p){
-  const kc = (p.keys||[]).length, mc = (p.models||[]).length;
-  const models = p.models || [];
-  const aliases = Object.entries(p.aliases || {});
-  const keys = p.keys || [];
+  const kc = KEYS.filter(k=>k.prov===p.id).length;
+  const mc = MODELS.filter(mo=>mo.prov===p.id).length;
+  const liveR = KEYS.filter(k=>k.prov===p.id).reduce((s,k)=>s+(k.rpm||0),0);
+  const liveT = KEYS.filter(k=>k.prov===p.id).reduce((s,k)=>s+(k.tpm||0),0);
+  const autoR = p.rpmLimit==null, autoT = p.tpmLimit==null;
   return `
     <div class="pd-card">
       <div class="section">
         <div class="section-title">${t('基本信息')}</div>
         <div class="card card-pad">
           <div class="pd-field"><span class="lbl">${t('名称')}</span><input class="val" id="pe-name-${p.id}" aria-label="${t('名称')}" value="${esc(p.name)}"></div>
-          <div class="pd-field"><span class="lbl">${t('Base URL')}</span><input class="val mono" id="pe-url-${p.id}" aria-label="${t('Base URL')}" value="${esc(p.base_url)}"></div>
+          <div class="pd-field"><span class="lbl">${t('Base URL')}</span><input class="val mono" id="pe-url-${p.id}" aria-label="${t('Base URL')}" value="${esc(p.base)}"></div>
           <div class="pd-field"><span class="lbl">${t('协议')}</span>
             <select class="val" id="pe-proto-${p.id}" aria-label="${t('协议')}">
-              <option value="openai" ${(p.protocol||'openai')==='openai'?'selected':''}>openai</option>
-              <option value="anthropic" ${p.protocol==='anthropic'?'selected':''}>anthropic</option>
+              <option value="openai" ${p.proto==='openai'?'selected':''}>openai</option>
+              <option value="anthropic" ${p.proto==='anthropic'?'selected':''}>anthropic</option>
             </select>
           </div>
-          <div class="pd-field pd-row">
-            <label class="toggle"><input type="checkbox" id="pe-allow-${p.id}" aria-label="${t('白名单')}" ${p.model_allowlist_only?'checked':''}><span class="track"></span><span class="slabel">${t('白名单')}${t(' 仅允许列表内模型')}</span></label>
-          </div>
-          <div class="pd-field pd-row">
-            <label class="toggle"><input type="checkbox" id="pe-tbapi-${p.id}" aria-label="${t('Token 余额 API')}" ${p.has_token_balance_api?'checked':''}><span class="track"></span><span class="slabel">${t('Token 余额 API')}</span></label>
-          </div>
-          <div class="pd-field pd-row">
-            <label class="toggle"><input type="checkbox" id="pe-bbapi-${p.id}" aria-label="${t('账单余额 API')}" ${p.has_bill_balance_api?'checked':''}><span class="track"></span><span class="slabel">${t('账单余额 API')}</span></label>
-          </div>
-          <div class="faint" style="margin-top:0.5rem">${t('{mc} 个托管模型 · {kc} 把 Key').replace('{mc}',mc).replace('{kc}',kc)}</div>
+          <div class="faint" style="font-size:0.75rem;margin-top:0.25rem">${t('托管模型 {mc} 个 · Key {kc} 把（Key 在 API Key 板统一管理）').replace('{mc}',mc).replace('{kc}',kc)}</div>
         </div>
       </div>
-      <div class="row" style="margin-top:1rem;gap:0.625rem">
+      <div class="section">
+        <div class="section-title">${t('配额与速率')} <span class="note">${t('RPM/TPM 可手填或采用自动检测')}</span></div>
+        <div class="card card-pad">
+          <div class="pd-field pd-row">
+            <span class="lbl">${t('RPM')}</span>
+            <input class="val ${autoR?'locked':''}" id="pe-rpm-${p.id}" aria-label="${t('RPM')}" type="number" min="0" value="${autoR?liveR:(p.rpmLimit||0)}" ${autoR?'readonly':''}>
+            <label class="toggle"><input type="checkbox" id="pe-rpm-auto-${p.id}" ${autoR?'checked':''} onchange="provRateToggle('${p.id}','rpm',${liveR})"><span class="track"></span><span class="slabel">${t('采用自动检测结果')}</span></label>
+          </div>
+          <div class="pd-field pd-row">
+            <span class="lbl">${t('TPM')}</span>
+            <input class="val ${autoT?'locked':''}" id="pe-tpm-${p.id}" aria-label="${t('TPM')}" type="number" min="0" value="${autoT?liveT:(p.tpmLimit||0)}" ${autoT?'readonly':''}>
+            <label class="toggle"><input type="checkbox" id="pe-tpm-auto-${p.id}" ${autoT?'checked':''} onchange="provRateToggle('${p.id}','tpm',${liveT})"><span class="track"></span><span class="slabel">${t('采用自动检测结果')}</span></label>
+          </div>
+          <div class="pd-field pd-row">
+            <span class="lbl">${t('配额重置时间')}</span>
+            <input class="val" aria-label="${t('配额重置时间')}" value="${esc(p.resetAt||'')}">
+          </div>
+          <div class="pd-field pd-row">
+            <span class="lbl">${t('重置配额')}</span>
+            <input class="val" aria-label="${t('重置配额（token）')}" type="number" value="${p.resetQuota||0}">
+          </div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:1.5rem;gap:0.625rem">
         <button class="primary" onclick="saveProvider('${p.id}')">${t('保存')}</button>
-        <button class="small danger" onclick="delProvider('${p.id}')">${t('删除提供商')}</button>
-      </div>
-
-      <div class="section">
-        <div class="section-title">${t('价格表')} <span class="note">${t('¥/1M tok')}</span></div>
-        <div class="card card-pad">
-          ${models.length ? `<table style="margin-bottom:0.75rem">
-            <tr><th>${t('模型')}</th><th>${t('单价')}</th></tr>
-            ${models.map(mm => { const pr = (p.price_table||{})[mm.id]!=null ? (p.price_table||{})[mm.id] : 0; return `<tr>
-              <td><span class="keytag">${esc(mm.id)}</span></td>
-              <td><input class="eval pe-price" data-model="${esc(mm.id)}" type="number" step="0.01" min="0" aria-label="${t('单价')}" value="${pr}"><span class="eunit">${t('¥/1M tok')}</span></td>
-            </tr>`; }).join('')}
-          </table>` : `<div class="faint" style="margin-bottom:0.75rem">${t('无')}</div>`}
-          <div class="row" style="gap:0.5rem">
-            <button class="primary small" onclick="savePriceTable('${p.id}')">${t('保存价格表')}</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="section">
-        <div class="section-title">${t('Key 池概览')}</div>
-        <div class="card card-pad">
-          <div class="stat-grid">
-            <div class="stat-box ok"><div class="num">${keys.filter(k=>!k.invalid&&!k.cooling).length}</div><div class="label">${t('可用')}</div></div>
-            <div class="stat-box warn"><div class="num">${keys.filter(k=>k.cooling).length}</div><div class="label">${t('冷却')}</div></div>
-            <div class="stat-box err"><div class="num">${keys.filter(k=>k.invalid).length}</div><div class="label">${t('异常')}</div></div>
-            <div class="stat-box"><div class="num">${fmtTok(sumMetric(keys,'token_balance'))}</div><div class="label">${t('token余额')}</div></div>
-            <div class="stat-box"><div class="num">${fmtBill(sumMetric(keys,'bill_balance'))}</div><div class="label">${t('账单余额')}</div></div>
-            <div class="stat-box"><div class="num">${sumRpm(keys)}</div><div class="label">${t('RPM')}</div></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="section">
-        <div class="section-title">${t('托管模型')} <span class="note">${mc} ${t('模型')}</span></div>
-        <div class="card card-pad">
-          ${models.length ? `<table style="margin-bottom:0.75rem">
-            <tr><th>${t('模型')}</th><th>${t('状态')}</th><th></th></tr>
-            ${models.map(mm => `<tr>
-              <td><span class="keytag">${esc(mm.id)}</span></td>
-              <td>${mm.enabled?`<span class="st ok">${t('启用')}</span>`:`<span class="st off">${t('禁用')}</span>`}</td>
-              <td class="row">
-                <button class="small" onclick="toggleModel('${p.id}','${esc(mm.id)}')">${t('启用/禁用')}</button>
-                <button class="small danger" onclick="delModel('${p.id}','${esc(mm.id)}')">${t('删除模型')}</button>
-              </td></tr>`).join('')}
-          </table>` : `<div class="faint" style="margin-bottom:0.75rem">${t('无')}</div>`}
-          <div class="row" style="gap:0.5rem">
-            <input id="nm-${p.id}" aria-label="${t('添加模型 id')}" placeholder="${t('添加模型 id')}" style="flex:1;min-width:12rem">
-            <button class="small" onclick="addModel('${p.id}')">${t('添加模型')}</button>
-            <button class="small" onclick="fetchUpstreamModels('${p.id}', this)">${t('从上游获取模型')}</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="section">
-        <div class="section-title">${t('别名')} <span class="note">${aliases.length}</span></div>
-        <div class="card card-pad">
-          <div class="alias-list" style="margin-bottom:0.75rem">
-            ${aliases.length ? aliases.map(([a,mm])=>`<span class="keytag">${esc(a)} → ${esc(mm)} <a href="#" aria-label="${t('删除')}" class="alias-x" style="color:var(--color-action-destructive)" onclick="delAlias('${p.id}','${esc(a)}');return false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></a></span>`).join(' ') : `<span class="faint">${t('无')}</span>`}
-          </div>
-          <div class="row" style="gap:0.5rem">
-            <input id="al-${p.id}" aria-label="${t('添加别名')}" placeholder="${t('别名')}" style="min-width:8rem">
-            <input id="am-${p.id}" class="mono" aria-label="${t('模型')}" placeholder="${t('模型')}" style="min-width:10rem">
-            <button class="small" onclick="addAlias('${p.id}')">${t('添加别名')}</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="section">
-        <div class="section-title">${t('API Key')} <span class="note">${kc}</span></div>
-        <div class="card">
-          <table>
-            <tr><th>${t('Key')}</th><th>${t('状态')}</th><th>${t('备注')}</th><th>${t('冷却')}</th><th>${t('学习冷却')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
-            ${keys.length ? keys.map(k => `
-            <tr>
-              <td><span class="keytag" data-key-id="${esc(k.id)}" data-revealed="0">${esc(k.key)}</span></td>
-              <td>${keyStatus(k)}</td>
-              <td>${esc(k.label||'-')}</td>
-              <td class="num">${k.cooldown_secs!=null?k.cooldown_secs:`<span class="nm-sans">${t('默认')}</span>`}</td>
-              <td class="num">${k.learned_cooldown!=null?`<span class="pill" title="${t('由 429 探测自动学习')}">${k.learned_cooldown}s</span>`:'-'}</td>
-              <td class="num">${k.requests||0}</td>
-              <td class="faint"><span class="ak-err" title="${esc(k.last_error||'')}">${esc(k.last_error||'-')}</span></td>
-              <td class="ak-actions">
-                <button class="small" onclick="toggleKey('${k.id}', this)">${t('显示')}</button>
-                <button class="small" onclick="copyKey('${k.id}', this)">${t('复制')}</button>
-                ${(k.cooling||k.invalid)?`<button class="small" onclick="clearCooldown('${k.id}')">${k.invalid?t('解除无效'):t('解除冷却')}</button>`:''}
-                <button class="small danger" onclick="delKey('${p.id}','${k.id}')">${t('删除')}</button>
-              </td>
-            </tr>`).join('') : `<tr><td colspan="8" class="faint">${t('暂无数据')}</td></tr>`}
-          </table>
-          <div class="card-pad">
-            <div class="ak-add">
-              <span class="ak-input-wrap">
-                <input id="nk-${p.id}" class="ak-key-input" aria-label="${t('API Key')}" placeholder="${t('粘贴 API Key')}">
-                <button class="ak-paste" type="button" aria-label="${t('从剪贴板粘贴')}" title="${t('从剪贴板粘贴')}" onclick="akPaste(this)">${CLIP}</button>
-              </span>
-              <input id="nl-${p.id}" aria-label="${t('备注（可选）')}" placeholder="${t('备注（可选）')}" style="min-width:9rem">
-              <input id="nc-${p.id}" type="number" aria-label="${t('冷却秒（可选）')}" placeholder="${t('冷却秒（可选）')}" style="min-width:9rem">
-              <button class="primary small" onclick="addKey('${p.id}')">${t('添加 Key')}</button>
-            </div>
-          </div>
-        </div>
+        <button class="small" style="border-color:var(--color-feedback-error-text);color:var(--color-feedback-error-text)" onclick="delProvider('${p.id}')">${t('删除提供商')}</button>
       </div>
     </div>`;
 }
-function akPaste(btn){ try { navigator.clipboard.readText().then(v=>{ const i=btn.parentElement.querySelector('input'); if(i) i.value=v; }).catch(()=>{}); } catch(e){} }
-
-/* ---------- provider / key / model / alias actions ---------- */
-async function saveProvider(id){
-  try { await api('PUT', '/api/providers/'+id, { name: $('pe-name-'+id).value, base_url: $('pe-url-'+id).value, protocol: $('pe-proto-'+id).value, model_allowlist_only: $('pe-allow-'+id).checked, has_token_balance_api: $('pe-tbapi-'+id).checked, has_bill_balance_api: $('pe-bbapi-'+id).checked }); toast(t('已保存')); await refresh(); }
-  catch(e){ toast(t('失败: ')+e.message); }
+function provRateToggle(id, field, live){
+  const inp = $('pe-'+field+'-'+id), cb = $('pe-'+field+'-auto-'+id);
+  if(!inp||!cb) return;
+  inp.readOnly = cb.checked;
+  inp.classList.toggle('locked', cb.checked);
+  if(cb.checked) inp.value = live;
 }
-async function delProvider(id){
-  if (!confirm(t('删除该提供商及其所有 Key？'))) return;
-  try { await api('DELETE', '/api/providers/'+id); await refresh(); toast(t('已保存')); }
-  catch(e){ toast(t('失败: ')+e.message); }
-}
-async function addKey(id){
-  const cd = $('nc-'+id).value;
-  try { await api('POST', '/api/providers/'+id+'/keys', { key: $('nk-'+id).value, label: $('nl-'+id).value, cooldown_secs: cd?+cd:null }); $('nk-'+id).value=''; $('nl-'+id).value=''; $('nc-'+id).value=''; await refresh(); }
-  catch(e){ toast(e.message); }
-}
-async function delKey(pid, kid){
-  if (!confirm(t('删除该 Key？'))) return;
-  try { await api('DELETE', '/api/providers/'+pid+'/keys/'+kid); await refresh(); }
-  catch(e){ toast(e.message); }
-}
-async function clearCooldown(kid){
-  try { await api('DELETE', '/api/keys/'+kid+'/cooldown'); await refresh(); }
-  catch(e){ toast(e.message); }
-}
-async function addAlias(id){
-  try { await api('POST', '/api/providers/'+id+'/aliases', { alias: $('al-'+id).value, model: $('am-'+id).value }); $('al-'+id).value=''; $('am-'+id).value=''; await refresh(); }
-  catch(e){ toast(e.message); }
-}
-async function delAlias(id, alias){
-  try { await api('DELETE', '/api/providers/'+id+'/aliases/'+encodeURIComponent(alias)); await refresh(); }
-  catch(e){ toast(e.message); }
-}
-async function addModel(id){
-  try { await api('POST', '/api/providers/'+id+'/models', { id: $('nm-'+id).value }); $('nm-'+id).value=''; await refresh(); }
-  catch(e){ toast(e.message); }
-}
-async function delModel(id, mid){
-  if (!confirm(t('删除模型 {m}？指向它的别名将无法使用。').replace('{m}', mid))) return;
-  try { await api('DELETE', '/api/providers/'+id+'/models/'+encodeURIComponent(mid)); await refresh(); }
-  catch(e){ toast(e.message); }
-}
-async function toggleModel(id, mid){
-  try { await api('PUT', '/api/providers/'+id+'/models/'+encodeURIComponent(mid)); await refresh(); }
-  catch(e){ toast(e.message); }
-}
-async function savePriceTable(id){
-  const p = (STATUS.providers||[]).find(x=>x.id===id);
-  if (!p) return;
-  const table = {};
-  document.querySelectorAll('.pe-price').forEach(inp => { const m = inp.dataset.model; const v = parseFloat(inp.value); table[m] = isNaN(v)?0:v; });
-  try { await api('PUT', '/api/providers/'+id+'/price-table', { table }); toast(t('已保存')); await refresh(); }
-  catch(e){ toast(t('失败: ')+e.message); }
+function keyStatus(k){
+  if (!k.valid) return `<span class="st off">${t('异常')}</span>`;
+  if (k.cool)   return `<span class="st cool">${t('冷却 · 剩 {cd}s').replace('{cd}',k.cd)}</span>`;
+  return `<span class="st ok">${t('可用')}</span>`;
 }
 
-/* ---------- key show / copy (reveal raw key on explicit user action via export) ---------- */
-async function findRealKey(keyId){
-  const cfg = await api('GET', '/api/config/export');
-  for (const p of (cfg.providers||[])) for (const k of (p.keys||[])) if (k.id === keyId) return k.key;
-  return null;
-}
-async function toggleKey(keyId, btn){
-  const tag = document.querySelector(`.keytag[data-key-id="${keyId}"]`);
-  if (!tag) return;
-  if (tag.dataset.revealed === '1'){
-    const k = (STATUS&&STATUS.providers||[]).flatMap(p=>p.keys).find(k=>k.id===keyId);
-    tag.textContent = k ? k.key : '••••'; tag.dataset.revealed = '0'; btn.textContent = t('显示'); return;
-  }
-  try {
-    const real = await findRealKey(keyId);
-    if (!real){ toast(t('未找到该 Key')); return; }
-    tag.textContent = real; tag.dataset.revealed = '1'; btn.textContent = t('隐藏');
-  } catch(e){ toast(t('复制失败: ')+e.message); }
-}
-async function copyKey(keyId, btn){
-  try {
-    const real = await findRealKey(keyId);
-    if (!real){ toast(t('未找到该 Key')); return; }
-    copyText(real, btn);
-  } catch(e){ toast(t('复制失败: ')+e.message); }
-}
-
-/* ---------- upstream model fetch + import modal ---------- */
-async function fetchUpstreamModels(id, btn){
-  const old = btn.textContent; btn.disabled = true; btn.textContent = t('拉取中…');
-  let models;
-  try { const r = await api('GET', '/api/providers/'+id+'/upstream-models'); models = r.models || []; }
-  catch(e){ toast(t('拉取失败: ')+e.message); btn.disabled=false; btn.textContent=old; return; }
-  btn.disabled = false; btn.textContent = old;
-  if (!models.length){ toast(t('上游未返回任何模型')); return; }
-  const existing = new Set(((STATUS.providers.find(x=>x.id===id)||{}).models||[]).map(m=>m.id));
-  openImportModal(id, models, existing);
-}
-function openImportModal(pid, models, existing){
-  let overlay = document.getElementById('modal-overlay');
-  if (!overlay){
-    overlay = document.createElement('div'); overlay.id='modal-overlay'; overlay.className='overlay';
-    overlay.innerHTML = `<div class="box">
-      <h3>${t('模型导入')}</h3>
-      <div class="row" style="margin:0.5rem 0"><button class="small" onclick="modalToggleAll()">${t('全选 / 全不选')}</button><span class="faint" id="modal-count"></span></div>
-      <div id="modal-list"></div>
-      <div class="row" style="margin-top:1rem;justify-content:flex-end"><button onclick="document.getElementById('modal-overlay').remove()">${t('取消')}</button><button class="primary" onclick="modalImport()">${t('导入所选')}</button></div>
-    </div>`;
-    document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target===overlay) overlay.remove(); });
-  }
-  overlay.dataset.pid = pid;
-  $('modal-list').innerHTML = models.map(m => `
-    <label class="modal-row"><input type="checkbox" class="modal-cb" value="${esc(m)}" ${existing.has(m)?'':'checked'}><span class="keytag">${esc(m)}</span>${existing.has(m)?`<span class="faint">${t('已存在')}</span>`:''}</label>`).join('');
-  updateModalCount();
-}
-function updateModalCount(){ const cbs=[...document.querySelectorAll('.modal-cb:checked')]; $('modal-count').textContent = t('已选 {n} 个').replace('{n}', cbs.length); }
-function modalToggleAll(){ const cbs=[...document.querySelectorAll('.modal-cb')]; const allOn=cbs.every(c=>c.checked); cbs.forEach(c=>c.checked=!allOn); updateModalCount(); }
-async function modalImport(){
-  const overlay = document.getElementById('modal-overlay'); const pid = overlay.dataset.pid;
-  const models = [...document.querySelectorAll('.modal-cb:checked')].map(c=>c.value);
-  if (!models.length){ toast(t('未选择任何模型')); return; }
-  try { const r = await api('POST', '/api/providers/'+pid+'/models/import', { models }); toast(t('已导入 {n} 个模型').replace('{n}', r.imported||0)); overlay.remove(); await refresh(); }
-  catch(e){ toast(e.message); }
-}
-
-/* ============ add-provider (two cards) ============ */
-function enterAdd(){ S.addState='choose'; S.addDraft=null; setTab('add-provider'); }
+/* ---------- add provider (catalog pick | custom) ---------- */
+function enterAdd(){ S.addState='choose'; S.addDraft=null; renderMain(); }
 function backToAddChoose(){ S.addState='choose'; renderMain(); }
-function enterAddCustom(){ S.addDraft={ name:'', base_url:'', protocol:'openai', models:[], key:'', source:'custom' }; S.addState='form'; renderMain(); }
+function enterAddCustom(){
+  S.addDraft = { name:'', base_url:'', protocol:'openai', models:[], key:'', source:'custom' };
+  S.addState='form'; renderMain();
+}
 function enterAddCatalog(){ S.addState='catalog'; renderMain(); }
 function pickCatalogEntry(i){
-  const c = (CATALOG.providers||[])[i]; if (!c) return;
-  S.addDraft = { name:c.name, base_url:c.base_url, protocol:c.protocol||'openai', models:(c.free_models||[]).slice(), key:'', source:'catalog' };
+  const c = CATALOG[i]; if(!c) return;
+  S.addDraft = { name:c.name, base_url:c.base_url, protocol:c.protocol, models:(c.free_models||[]).slice(), key:'', source:'catalog' };
   S.addState='form'; renderMain();
 }
 function addDraftModel(){
@@ -792,28 +416,33 @@ function addDraftModel(){
   inp.value=''; renderMain();
 }
 function removeDraftModel(i){ S.addDraft.models.splice(i,1); renderMain(); }
-function refreshAddBtn(){ const d=S.addDraft, b=document.getElementById('add-commit'); if(b&&d) b.disabled = !(d.name.trim()&&d.base_url.trim()&&d.key.trim()); }
+function refreshAddBtn(){
+  const d=S.addDraft; const b=document.getElementById('add-commit');
+  if(b&&d) b.disabled = !(d.name.trim()&&d.base_url.trim()&&d.key.trim());
+}
 async function commitAdd(){
   const d = S.addDraft;
   if(!d || !d.name.trim() || !d.base_url.trim() || !d.key.trim()) return;
   try {
-    const cfg = await api('POST', '/api/providers', { name:d.name.trim(), base_url:d.base_url.trim(), protocol:d.protocol });
+    const cfg = await api('POST', '/api/providers', { name:d.name.trim(), base_url:d.base_url.trim().replace(/\/+$/,''), protocol:d.protocol });
     const prov = (cfg.providers||[]).find(x=>x.name===d.name.trim());
     if (!prov) throw new Error('provider create failed');
     const pid = prov.id;
     await api('POST', '/api/providers/'+pid+'/keys', { key:d.key.trim(), label:'' });
     for (const mId of d.models){ try { await api('POST', '/api/providers/'+pid+'/models', { id:mId }); } catch(e){ /* ignore duplicate-model conflicts */ } }
-    S.addState=null; S.addDraft=null; S.localProv=pid; S.tab='providers';
-    await refresh(); renderSidebar(); toast(t('添加成功'));
-  } catch(e){ toast(t('添加失败: ')+e.message); }
+    S.addState=null; S.addDraft=null; S.localProv=pid;
+    await refresh(); toast(t('添加成功'));
+  } catch(e){ console.error('commitAdd', e); toast(t('添加失败: ')+e.message); }
 }
 function renderAddView(){
-  if (S.addState==='catalog') return renderAddCatalog();
-  if (S.addState==='form') return renderAddForm();
-  return renderAddChoose();
+  if(S.addState==='choose') return renderAddChoose();
+  if(S.addState==='catalog') return renderAddCatalog();
+  if(S.addState==='form') return renderAddForm();
+  return '';
 }
 function renderAddChoose(){
   return `
+    <div class="edit-head"><button class="ghost" onclick="S.addState=null;renderMain()">${t('← 返回')}</button></div>
     <h2 class="board-title">${t('添加提供商')}</h2>
     <div class="board-note">${t('从免费目录选一家，或自定义填入')}</div>
     <div class="add-choose">
@@ -823,29 +452,26 @@ function renderAddChoose(){
         <span class="ap-arrow">→</span>
       </button>
       <button class="add-pick" onclick="enterAddCatalog()" aria-label="${t('从免费目录选择')}">
-        <span class="ap-icon"><svg viewBox="0 0 24 24">${ICONS.models}</svg></span>
-        <span class="ap-text"><span class="ap-title">${t('从免费目录选择')}</span><span class="ap-desc">${t('从免费目录选一家，预填 base_url / 协议 / 模型')}</span></span>
+        <span class="ap-icon"><svg viewBox="0 0 24 24">${ICONS.addCatalog}</svg></span>
+        <span class="ap-text"><span class="ap-title">${t('已有的提供商')}</span><span class="ap-desc">${t('从免费目录选一家，预填 base_url / 协议 / 模型')}</span></span>
         <span class="ap-arrow">→</span>
       </button>
     </div>`;
 }
 function renderAddCatalog(){
-  const cats = (CATALOG&&CATALOG.providers) || [];
-  const existing = {}; (STATUS.providers||[]).forEach(p => { existing[p.name] = p; });
   return `
     <div class="edit-head"><button class="ghost" onclick="backToAddChoose()">${t('← 返回')}</button></div>
-    <h2 class="board-title">${t('从免费目录选择')}</h2>
+    <h2 class="board-title">${t('已有的提供商')}</h2>
     <div class="board-note">${t('免费目录 · 点一张预填配置')}</div>
-    <div class="row" style="margin-bottom:1rem"><button class="small" onclick="refreshCatalog(this)">${t('从 GitHub 更新目录')}</button></div>
     <div class="mc-grid">
-      ${cats.map((c,i)=>`
+      ${CATALOG.map((c,i)=>`
       <div class="mc" onclick="pickCatalogEntry(${i})">
         <div class="mc-top"><div>
-          <div class="mc-name">${esc(c.name)}${c.keyless?` <span class="pill sakura">${t('免 Key')}</span>`:''}${existing[c.name]?` <span class="pill">${t('已添加')}</span>`:''}</div>
+          <div class="mc-name">${esc(c.name)}</div>
           <div class="mc-prov">${esc(c.base_url)}</div>
         </div></div>
-        <div class="mc-meta"><span>${t('模型')} <b>${(c.free_models||[]).length}</b></span><span>${t('协议')} <b>${esc(c.protocol||'openai')}</b></span></div>
-        <div class="mc-prov">${esc(LANG==='zh' ? c.notes_zh : c.notes_en)}</div>
+        <div class="mc-meta"><span>${t('模型')} <b>${(c.free_models||[]).length}</b></span><span>${t('协议')} <b>${esc(c.protocol)}</b></span></div>
+        <div class="mc-prov">${esc(S.lang==='en' ? (c.notes_en||c.notes_zh||c.note||'') : (c.notes_zh||c.notes_en||c.note||''))}</div>
         <span class="mc-arrow">→</span>
       </div>`).join('') || `<div class="empty">${t('暂无数据')}</div>`}
     </div>`;
@@ -854,7 +480,7 @@ function renderAddForm(){
   const d = S.addDraft; const isCatalog = d.source==='catalog';
   const valid = !!(d.name.trim()&&d.base_url.trim()&&d.key.trim());
   return `
-    <div class="edit-head"><button class="ghost" onclick="${isCatalog?`backToAddChoose()`:`S.addState=null;S.tab='providers';renderSidebar();renderMain()`}">${t('← 返回')}</button></div>
+    <div class="edit-head"><button class="ghost" onclick="${isCatalog?`enterAddCatalog()`:`S.addState=null;renderMain()`}">${t('← 返回')}</button></div>
     <h2 class="board-title">${isCatalog?t('添加：')+esc(d.name):t('自定义提供商')}</h2>
     <div class="board-note">${isCatalog?t('已从目录预填，可改 · 粘 Key 后添加'):t('手动填写 · 粘 Key 后添加')}</div>
     <div class="card card-pad">
@@ -869,8 +495,8 @@ function renderAddForm(){
       <div class="pd-field">
         <span class="lbl">${t('托管模型')}</span>
         <div class="alias-list">
-          ${d.models.map((mm,i)=>`<span class="keytag">${esc(mm)} <a href="#" aria-label="${t('删除模型')}" class="alias-x" style="color:var(--color-action-destructive)" onclick="removeDraftModel(${i});return false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></a></span>`).join('')}
-          <input id="add-model-input" aria-label="${t('添加模型 id')}" placeholder="${t('添加模型 id')}">
+          ${d.models.map((m,i)=>`<span class="keytag">${esc(m)} <a href="#" aria-label="${t('删除模型')}" class="alias-x" style="color:var(--color-feedback-error-text);text-decoration:none" onclick="removeDraftModel(${i});return false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></a></span>`).join('')}
+          <input id="add-model-input" aria-label="${t('添加模型')}" placeholder="${t('添加模型 id')}" style="max-width:11rem">
           <button class="small" onclick="addDraftModel()">${t('添加')}</button>
         </div>
       </div>
@@ -881,268 +507,262 @@ function renderAddForm(){
         </span>
       </div>
     </div>
-    <div class="row" style="margin-top:1rem;gap:0.625rem">
+    <div class="row" style="margin-top:1.5rem;gap:0.625rem">
       <button id="add-commit" class="primary" onclick="commitAdd()" ${valid?'':'disabled'}>${t('添加提供商')}</button>
-      <button class="small" onclick="${isCatalog?`backToAddChoose()`:`S.addState=null;S.tab='providers';renderSidebar();renderMain()`}">${t('取消')}</button>
+      <button class="small" onclick="${isCatalog?`enterAddCatalog()`:`S.addState=null;renderMain()`}">${t('取消')}</button>
     </div>`;
 }
-async function refreshCatalog(btn){
-  const old = btn.textContent; btn.disabled=true; btn.textContent=t('更新中…');
-  try { CATALOG = await api('POST', '/api/free-catalog/refresh'); renderMain(); toast(t('目录已更新')); }
-  catch(e){ toast(t('更新失败: ')+e.message); }
-  btn.disabled=false; btn.textContent=old;
-}
 
-/* ============ models (info list + groups) ============ */
+/* ---------- models (info list -> edit / groups) ---------- */
 function renderModels(m){
   m.innerHTML = `
     <h2 class="board-title">${t('模型')}</h2>
-    <div class="board-note">${t('模型信息：所有模型条目大列表 · 模型组跨提供商编组')}</div>
+    <div class="board-note">${t('模型信息：所有模型条目大列表，点一条进编辑页 · 模型组：跨提供商同模型编组')}</div>
     <div class="subtabs">
       <button class="${S.modelTab==='info'?'active':''}" onclick="setModelTab('info')">${t('模型信息')}</button>
       <button class="${S.modelTab==='groups'?'active':''}" onclick="setModelTab('groups')">${t('模型组管理')}</button>
     </div>
     <div id="model-pane"></div>`;
-  if (S.editingModel) renderModelEdit($('model-pane'));
+  if (S.editingModel!=null) renderModelEdit($('model-pane'));
   else if (S.modelTab==='info') renderModelList($('model-pane'));
   else renderModelGroups($('model-pane'));
 }
-function setModelTab(tab){ S.modelTab=tab; S.editingModel=null; S.groupEdit=null; renderMain(); }
+function setModelTab(t){ S.modelTab=t; S.editingModel=null; S.groupEdit=null; renderMain(); }
+async function toggleModelOn(i){
+  const mo = MODELS[i]; if(!mo) return;
+  try { await api('PUT', '/api/providers/'+mo.prov+'/models/'+encodeURIComponent(mo.id)); await refresh(); }
+  catch(e){ console.error('toggleModelOn', e); toast(t('失败: ')+e.message); }
+}
 function renderModelList(c){
-  const provs = STATUS.providers || [];
-  const fchips = [['all', t('全部')]].concat(provs.map(p=>[p.id, p.name]));
-  const list = [];
-  provs.forEach(p => (p.models||[]).forEach(mm => list.push({ pid:p.id, m:mm })));
-  const shown = S.modelFilter==='all' ? list : list.filter(x=>x.pid===S.modelFilter);
+  const list = S.modelFilter==='all' ? MODELS : MODELS.filter(mo=>mo.prov===S.modelFilter);
+  const fchips = [['all',t('全部')]].concat(PROVIDERS.map(p=>[p.id,p.name.split(' ')[0]]));
   c.innerHTML = `
-    <div class="chips" style="margin:1rem 0">
-      ${fchips.map(fc=>`<span class="chip ${S.modelFilter===fc[0]?'active':''}" onclick="S.modelFilter='${fc[0]}';renderMain()" role="button" tabindex="0">${esc(fc[1])}</span>`).join('')}
+    <div class="chips" style="margin-bottom:1rem">
+      ${fchips.map(fc=>`<span class="chip ${S.modelFilter===fc[0]?'active':''}" onclick="S.modelFilter='${fc[0]}';renderMain()">${esc(fc[1])}</span>`).join('')}
+    </div>
+    <div class="mf-row">
+      <div class="mf-left">
+        <span class="faint" style="font-size:0.75rem">${t('提供商')}</span>
+        <select aria-label="${t('提供商')}" onchange="S.modelFilter=this.value;renderMain()">${PROVIDERS.map(p=>`<option value="${p.id}" ${S.modelFilter===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select>
+      </div>
+      <button onclick="fetchUpstreamModels(this)">${t('从上游获取模型')}</button>
     </div>
     <div class="mc-grid">
-      ${shown.length ? shown.map(({pid,m})=>{
-        const p = provs.find(x=>x.id===pid);
-        const aliases = Object.entries(p.aliases||{}).filter(([a,mm])=>mm===m.id).map(([a])=>a);
-        const price = (p.price_table||{})[m.id]!=null ? (p.price_table||{})[m.id] : 0;
-        const M = (p.keys||[])[0]; const mt = M && M.metrics;
-        return `
-        <div class="mc ${m.enabled?'':'disabled'}" onclick="editModel('${pid}','${esc(m.id)}')" role="button" tabindex="0">
-          <div class="mc-top"><div>
-            <div class="mc-name">${esc(m.id)}</div>
-            <div class="mc-prov">${esc(p.name)}${aliases.length?` · ↔ ${aliases.map(esc).join(', ')}`:''}</div>
+      ${list.map(mo=>{ const idx=MODELS.indexOf(mo); const k=KEYS.find(k=>k.prov===mo.prov&&k.model===mo.id); return `
+      <div class="mc ${mo.on?'':'disabled'}" onclick="editModel(${idx})">
+        <div class="mc-top">
+          <div>
+            <div class="mc-name">${esc(mo.id)}</div>
+            <div class="mc-prov">${esc(PNAME(mo.prov))}${mo.alias.length?` · ↔ ${mo.alias.map(esc).join(', ')}`:''}</div>
           </div>
-          <span class="mc-sw ${m.enabled?'on':''}" onclick="event.stopPropagation();toggleModel('${pid}','${esc(m.id)}')" title="${t('启用/禁用')}"><span class="track"></span><span class="slabel">${m.enabled?t('启用'):t('禁用')}</span></span></div>
-          <div class="mc-meta"><span>${t('单价')} <b>¥${price}</b></span></div>
-          <div class="mc-hover">
-            <span>RPM <b>${mt?mt.rpm:'-'}</b></span>
-            <span>TPM <b>${mt?Number(mt.tpm).toLocaleString():'-'}</b></span>
-            <span>avgTFTT <b>${mt?mt.avg_tftt_ms+'ms':'-'}</b></span>
-          </div>
-          <span class="mc-arrow">→</span>
-        </div>`;
-      }).join('') : `<div class="empty">${t('暂无数据')}</div>`}
+          <span class="mc-sw ${mo.on?'on':''}" onclick="event.stopPropagation();toggleModelOn(${idx})" title="${t('启用/禁用')}"><span class="track"></span><span class="slabel">${mo.on?t('启用'):t('禁用')}</span></span>
+        </div>
+        <div class="mc-meta">
+          <span>${t('上下文')} <b>${(mo.ctx/1000).toFixed(0)}k</b></span>
+          <span>${t('输入')} <b>¥${mo.pIn}</b></span>
+          <span>${t('输出')} <b>¥${mo.pOut}</b></span>
+        </div>
+        <div class="mc-hover">
+          <span>RPM <b>${k&&k.rpm||'-'}</b></span>
+          <span>TPM <b>${k&&k.tpm?k.tpm.toLocaleString():'-'}</b></span>
+          <span>avgTFTT <b>${mo.tftt?mo.tftt+'ms':'-'}</b></span>
+        </div>
+        <span class="mc-arrow">→</span>
+      </div>`; }).join('') || `<div class="empty">${t('无')}</div>`}
     </div>`;
 }
-function editModel(pid, mid){ S.editingModel={pid, mid}; renderMain(); }
-function backToModelList(){ S.editingModel=null; renderMain(); }
+function editModel(idx){ S.editingModel=idx; renderMain(); }
 function renderModelEdit(c){
-  const p = (STATUS.providers||[]).find(x=>x.id===S.editingModel.pid);
-  if (!p){ S.editingModel=null; renderModelList(c); return; }
-  const mo = (p.models||[]).find(m=>m.id===S.editingModel.mid);
-  if (!mo){ S.editingModel=null; renderModelList(c); return; }
-  const price = (p.price_table||{})[mo.id]!=null ? (p.price_table||{})[mo.id] : 0;
-  const aliases = Object.entries(p.aliases||{}).filter(([a,mm])=>mm===mo.id);
+  const mo = MODELS[S.editingModel];
+  if(!mo){ S.editingModel=null; renderModelList(c); return; }
+  const k = KEYS.find(k=>k.prov===mo.prov && k.model===mo.id);
+  const idx = S.editingModel;
   c.innerHTML = `
     <div class="edit-head">
-      <button class="ghost" onclick="backToModelList()">${t('← 返回')}</button>
+      <button class="ghost" onclick="backToList()">${t('← 返回')}</button>
     </div>
     <div class="edit-card">
       <div class="edit-name">${esc(mo.id)}</div>
-      <div class="edit-sub">${esc(p.name)} · ${t('上游')} ${esc(mo.id)}${aliases.length?` · ↔ ${aliases.map(a=>esc(a[0])).join(', ')}`:''}</div>
+      <div class="edit-sub">${esc(PNAME(mo.prov))} · ${t('上游')} ${esc(mo.up)}${mo.alias.length?` · ↔ ${mo.alias.map(esc).join(', ')}`:''}</div>
       <div class="card card-pad">
-        <div class="erow"><span class="elbl">${t('模型 ID')}</span><input class="eval" aria-label="${t('模型 ID')}" value="${esc(mo.id)}" readonly></div>
-        <div class="erow"><span class="elbl">${t('上游模型名')}</span><input class="eval" aria-label="${t('上游模型名')}" value="${esc(mo.id)}" readonly></div>
-        <div class="erow"><span class="elbl">${t('单价')}</span><input class="eval" id="me-price-${p.id}" type="number" step="0.01" min="0" aria-label="${t('单价')}" value="${price}"><span class="eunit">${t('¥/1M tok')}</span></div>
-        <div class="erow"><span class="elbl">${t('启用')}</span><span class="mc-sw ${mo.enabled?'on':''}" onclick="toggleModel('${p.id}','${esc(mo.id)}')" role="button" tabindex="0" aria-label="${t('启用/禁用')}"><span class="track"></span><span class="slabel">${mo.enabled?t('是'):t('否')}</span></span></div>
+        <div class="erow"><span class="elbl">${t('模型 ID')}</span><input class="eval" aria-label="${t('模型 ID')}" value="${esc(mo.id)}" readonly title="${t('无后端')}"></div>
+        <div class="erow"><span class="elbl">${t('上游模型名')}</span><input class="eval" aria-label="${t('上游模型名')}" value="${esc(mo.up)}" readonly title="${t('无后端')}"></div>
+        <div class="erow"><span class="elbl">${t('上下文长度')}</span><input class="eval" id="me-ctx-${idx}" aria-label="${t('上下文长度')}" type="number" min="0" step="1" value="${mo.ctx?Math.round(mo.ctx/1000):0}"><span class="eunit">${t('K')}</span></div>
+        <div class="erow"><span class="elbl">${t('输入价格')}</span><input class="eval" id="me-price-${idx}" aria-label="${t('输入价格')}" type="number" step="0.01" value="${mo.pIn}"><span class="eunit">${t('¥/1M tok')}</span></div>
+        <div class="erow"><span class="elbl">${t('输出价格')}</span><input class="eval" aria-label="${t('输出价格')}" type="number" step="0.01" value="${mo.pOut}" readonly title="${t('无后端')}"><span class="eunit">${t('¥/1M tok')}</span></div>
+        <div class="erow"><span class="elbl">${t('启用')}</span><span class="mc-sw ${mo.on?'on':''}" onclick="toggleModelOn(${idx})"><span class="track"></span><span class="slabel">${mo.on?t('是'):t('否')}</span></span></div>
         <div class="erow"><span class="elbl">${t('别名')}</span>
           <div class="alias-list">
-            ${aliases.length?aliases.map(([a])=>`<span class="keytag">${esc(a)} <a href="#" aria-label="${t('删除')}" class="alias-x" style="color:var(--color-action-destructive)" onclick="delAlias('${p.id}','${esc(a)}');return false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></a></span>`).join(' '):`<span class="faint">${t('无')}</span>`}
-            <input class="eval" id="me-alias-${p.id}" aria-label="${t('添加别名')}" placeholder="${t('添加别名')}" style="max-width:7.5rem">
-            <button class="small" onclick="addModelAlias('${p.id}','${esc(mo.id)}')">${t('添加')}</button>
+            ${mo.alias.length?mo.alias.map(a=>`<span class="keytag">${esc(a)} <a href="#" aria-label="${t('删除别名')}" style="color:var(--color-feedback-error-text);text-decoration:none" onclick="delModelAlias(${idx},'${esc(a)}');return false" class="alias-x"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></a></span>`).join(''):`<span class="faint" style="font-size:0.75rem">${t('无')}</span>`}
+            <input class="eval" id="me-alias-${idx}" aria-label="${t('添加别名')}" placeholder="${t('添加别名')}" style="max-width:7.5rem"><button class="small" onclick="addModelAlias(${idx})">${t('添加')}</button>
           </div>
         </div>
       </div>
       <div class="row" style="margin-top:1rem;gap:0.625rem">
-        <button class="primary" onclick="saveModelPrice('${p.id}','${esc(mo.id)}')">${t('保存')}</button>
-        <button class="small" onclick="backToModelList()">${t('取消')}</button>
+        <button class="primary" onclick="saveModelEdit(${idx})">${t('保存')}</button>
+        <button class="small" onclick="backToList()">${t('取消')}</button>
       </div>
     </div>`;
 }
-async function addModelAlias(pid, mid){
-  const inp = $('me-alias-'+pid); if (!inp) return;
-  const a = inp.value.trim(); if (!a) return;
-  try { await api('POST', '/api/providers/'+pid+'/aliases', { alias:a, model:mid }); inp.value=''; await refresh(); }
-  catch(e){ toast(e.message); }
+function backToList(){ S.editingModel=null; renderMain(); }
+async function addModelAlias(idx){
+  const mo = MODELS[idx]; if(!mo) return;
+  const inp = $('me-alias-'+idx); if(!inp) return;
+  const a = inp.value.trim(); if(!a) return;
+  try { await api('POST', '/api/providers/'+mo.prov+'/aliases', { alias:a, model:mo.id }); inp.value=''; await refresh(); }
+  catch(e){ console.error('addModelAlias', e); toast(t('失败: ')+e.message); }
 }
-async function saveModelPrice(pid, mid){
-  const inp = $('me-price-'+pid); if (!inp) return;
-  const v = parseFloat(inp.value); const price = isNaN(v)?0:v;
-  const p = (STATUS.providers||[]).find(x=>x.id===pid);
-  const table = Object.assign({}, (p&&(p.price_table||{}))||{});
-  table[mid] = price;
-  try { await api('PUT', '/api/providers/'+pid+'/price-table', { table }); toast(t('已保存')); S.editingModel=null; await refresh(); }
-  catch(e){ toast(t('失败: ')+e.message); }
+async function delModelAlias(idx, alias){
+  const mo = MODELS[idx]; if(!mo) return;
+  try { await api('DELETE', '/api/providers/'+mo.prov+'/aliases/'+encodeURIComponent(alias)); await refresh(); }
+  catch(e){ console.error('delModelAlias', e); toast(t('失败: ')+e.message); }
+}
+async function saveModelEdit(idx){
+  const mo = MODELS[idx]; if(!mo) return;
+  const inp = $('me-price-'+idx); const v = inp ? parseFloat(inp.value) : NaN;
+  const price = isNaN(v) ? 0 : v;
+  const ctxInp = $('me-ctx-'+idx); const kv = ctxInp ? parseFloat(ctxInp.value) : NaN;
+  // UI holds K units → ×1000 to tokens; 0/empty = clear (None).
+  const ctxTokens = (!isNaN(kv) && kv>0) ? Math.round(kv*1000) : null;
+  // build the full price table (existing entries + this model) and PUT it
+  const p = (STATUS.providers||[]).find(x=>x.id===mo.prov);
+  const table = Object.assign({}, (p&&(p.price_table||{})) || {});
+  table[mo.id] = price;
+  try {
+    await api('PUT', '/api/providers/'+mo.prov+'/price-table', { table });
+    await api('PUT', '/api/providers/'+mo.prov+'/models/'+encodeURIComponent(mo.id)+'/context-length', { context_length: ctxTokens });
+    await refresh(); toast(t('已保存'));
+  } catch(e){ console.error('saveModelEdit', e); toast(t('失败: ')+e.message); }
 }
 function renderModelGroups(c){
-  if (S.groupEdit) { renderGroupEditor(c); return; }
-  const groups = MODEL_GROUPS || [];
-  const provs = STATUS.providers || [];
+  if (S.groupEdit){ renderGroupEditor(c); return; }
   c.innerHTML = `
     <div class="section">
       <div class="section-title">${t('模型组')} <span class="note">${t('同一模型跨提供商编组 · 每个模型恒属且仅属一组')}</span></div>
       <div class="card"><table>
         <tr><th>${t('组名')}</th><th>${t('成员 (provider · model)')}</th><th>${t('成员数')}</th><th></th></tr>
-        ${groups.length ? groups.map((g,i)=>`
+        ${GROUPS.map((g,i)=>`
         <tr>
-          <td><span class="keytag" style="color:var(--color-action-primary-hover);border-color:var(--color-action-primary-hover)">${esc(g.id)}</span></td>
-          <td>${(g.entries||[]).map(e=>`<span class="keytag">${esc(PNAME(e[0]))} · ${esc(e[1])}</span>`).join(' ')}</td>
-          <td class="num">${(g.entries||[]).length}</td>
-          <td class="row">
-            <button class="small" onclick="editGroup(${i})">${t('编辑')}</button>
-            <button class="small danger" onclick="delGroup(${i})">${t('删除')}</button>
-          </td>
-        </tr>`).join('') : `<tr><td colspan="4" class="faint">${t('暂无数据')}</td></tr>`}
+          <td><span class="keytag" style="border-color:var(--color-action-primary-hover);color:var(--color-action-primary-hover)">${esc(g.name)}</span></td>
+          <td>${g.members.map(m=>`<span class="keytag">${esc(PNAME(m.prov))} · ${esc(m.model)}</span>`).join(' ')}</td>
+          <td class="num">${g.members.length}</td>
+          <td><button class="small" onclick="editGroup(${i})">${t('编辑')}</button></td>
+        </tr>`).join('') || `<tr><td colspan="4" class="faint">${t('暂无数据')}</td></tr>`}
       </table></div>
       <div class="row" style="margin-top:0.75rem"><button class="small" onclick="newGroup()">${t('+ 新建模型组')}</button>
-        <span class="faint">${t('多成员组在"模型优先"模式下跨提供商兜底，长上下文靠排序而非换模型')}</span></div>
+        <span class="faint" style="font-size:0.75rem">${t('多成员组在"模型优先"模式下跨提供商兜底，长上下文靠排序而非换模型')}</span></div>
     </div>`;
 }
+/* ---------- model-group editor (wired to PUT /api/model-groups) ---------- */
+function newGroup(){ S.groupEdit = { isNew:true, id:'', entries:[{ pid: PROVIDERS[0] ? PROVIDERS[0].id : '', model:'' }] }; renderMain(); }
+function editGroup(i){ const g = GROUPS[i]; if(!g) return; S.groupEdit = { isNew:false, id:g.name, index:i, entries: g.members.map(m=>({ pid:m.prov, model:m.model })) }; if(!S.groupEdit.entries.length) S.groupEdit.entries.push({ pid: PROVIDERS[0]?PROVIDERS[0].id:'', model:'' }); renderMain(); }
+function cancelGroupEdit(){ S.groupEdit=null; renderMain(); }
+function addGroupMember(){ const e=S.groupEdit; e.entries.push({ pid: PROVIDERS[0]?PROVIDERS[0].id:'', model:'' }); renderMain(); }
+function removeGroupMember(i){ S.groupEdit.entries.splice(i,1); renderMain(); }
+function groupEntryRow(i, en){
+  const pid = (en && en.pid) || (PROVIDERS[0] ? PROVIDERS[0].id : '');
+  const provModels = MODELS.filter(m=>m.prov===pid);
+  const taken = groupOccupied(i);
+  const has = provModels.length > 0;
+  const cur = (en && en.model) || '';
+  const curInList = provModels.some(m=>m.id===cur);
+  return `<div class="grp-member">
+    <select class="gp-prov" aria-label="${t('provider')}" id="grp-pid-${i}" onchange="setGroupEntryProv(${i},this.value)">${PROVIDERS.map(p=>`<option value="${p.id}" ${pid===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select>
+    <select class="gp-model mono" aria-label="${t('upstream model')}" id="grp-um-${i}" onchange="setGroupEntryModel(${i},this.value)" ${has?'':'disabled'}>
+      ${has ? (cur ? '' : `<option value="" selected disabled>${t('选择模型')}</option>`) : `<option value="" selected disabled>${t('暂无可用模型')}</option>`}
+      ${cur && !curInList ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''}
+      ${provModels.map(m=>{ const occ = taken.has(pid+':'+m.id); return `<option value="${esc(m.id)}" ${cur===m.id?'selected':''} ${occ?'disabled':''}>${esc(m.id)}${occ?' · '+t('已编组'):''}</option>`; }).join('')}
+    </select>
+    <button class="small" style="border-color:var(--color-feedback-error-text);color:var(--color-feedback-error-text)" onclick="removeGroupMember(${i})">${t('删除')}</button>
+  </div>`;
+}
+// (pid:model) already used by other groups (excl. the one being edited) and by
+// the current draft's other rows — those models are greyed (disabled) in the
+// per-row model dropdown. Each model may belong to exactly one group.
+function groupOccupied(rowIndex){
+  const e = S.groupEdit;
+  const editingName = e.isNew ? null : (GROUPS[e.index] ? GROUPS[e.index].name : null);
+  const taken = new Set();
+  GROUPS.forEach(g => {
+    if (g.name === editingName) return;
+    (g.members||[]).forEach(m => taken.add(m.prov+':'+m.model));
+  });
+  (e.entries||[]).forEach((en, i) => {
+    if (i === rowIndex) return;
+    if (en.pid && en.model) taken.add(en.pid+':'+en.model);
+  });
+  return taken;
+}
+function setGroupEntryProv(i, val){ const e=S.groupEdit; if(e && e.entries[i]){ e.entries[i].pid=val; e.entries[i].model=''; } renderMain(); }
+function setGroupEntryModel(i, val){ const e=S.groupEdit; if(e && e.entries[i]){ e.entries[i].model=val; } renderMain(); }
 function renderGroupEditor(c){
-  const e = S.groupEdit; const provs = STATUS.providers || [];
-  const provOpts = provs.map(p=>`<option value="${p.id}" ${e.entries.length&&e.entries[0].pid===p.id?'selected':''}>${esc(p.name)}</option>`).join('');
+  const e = S.groupEdit;
   c.innerHTML = `
-    <div class="edit-head"><button class="ghost" onclick="S.groupEdit=null;renderMain()">${t('← 返回')}</button></div>
-    <div class="edit-card">
-      <div class="edit-name">${esc(e.id||t('+ 新建模型组'))}</div>
+    <div class="edit-head"><button class="ghost" onclick="cancelGroupEdit()">${t('← 返回')}</button></div>
+    <div class="edit-card grp-wide">
+      <div class="edit-name grp-sans">${esc(e.id||t('+ 新建模型组'))}</div>
       <div class="card card-pad">
-        <div class="erow"><span class="elbl">${t('组名')}</span><input class="eval" id="grp-id" aria-label="${t('组名')}" value="${esc(e.id)}" ${e.isNew?'':'readonly'}></div>
-        <div id="grp-entries">
-          ${e.entries.map((en,i)=>groupEntryRow(i, en, provs)).join('')}
+        <div class="pd-field"><span class="lbl">${t('组名')}</span><input class="val" id="grp-id" aria-label="${t('组名')}" value="${esc(e.id)}" ${e.isNew?'':'readonly'} oninput="S.groupEdit.id=this.value"></div>
+      </div>
+      <div class="card card-pad">
+        <div class="section-title">${t('成员')}</div>
+        <div class="grp-members">
+          ${e.entries.map((en,i)=>groupEntryRow(i,en)).join('')}
         </div>
-        <div class="row" style="margin-top:0.5rem;gap:0.5rem">
-          <button class="small" onclick="addGroupMember()">${t('添加成员')}</button>
-          <button class="primary" onclick="saveGroup()">${t('保存')}</button>
-          <button class="small" onclick="S.groupEdit=null;renderMain()">${t('取消')}</button>
-        </div>
+        <div class="row" style="margin-top:0.75rem"><button class="small" onclick="addGroupMember()">${t('添加成员')}</button></div>
+      </div>
+      <div class="row" style="margin-top:1.5rem;gap:0.625rem">
+        <button class="primary" onclick="saveGroup()">${t('保存')}</button>
+        <button class="small" onclick="cancelGroupEdit()">${t('取消')}</button>
+        ${e.isNew?'':`<button class="small" style="border-color:var(--color-feedback-error-text);color:var(--color-feedback-error-text)" onclick="delGroup(${e.index})">${t('删除')}</button>`}
       </div>
     </div>`;
 }
-function groupEntryRow(i, en, provs){
-  return `<div class="grp-entry">
-    <select aria-label="${t('provider')}" id="grp-pid-${i}">${provs.map(p=>`<option value="${p.id}" ${en&&en.pid===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select>
-    <input class="mono" aria-label="${t('upstream model')}" id="grp-um-${i}" value="${esc(en?en.model:'')}" placeholder="${t('upstream model')}">
-    <button class="small danger" onclick="removeGroupMember(${i})">${t('删除')}</button>
-  </div>`;
-}
-function newGroup(){ S.groupEdit={ isNew:true, id:'', entries:[{pid:(STATUS.providers[0]||{}).id||'', model:''}] }; renderMain(); }
-function editGroup(i){ const g=(MODEL_GROUPS||[])[i]; if(!g) return; S.groupEdit={ isNew:false, id:g.id, index:i, entries:(g.entries||[]).map(e=>({pid:e[0], model:e[1]})) }; if(!S.groupEdit.entries.length) S.groupEdit.entries.push({pid:(STATUS.providers[0]||{}).id||'', model:''}); renderMain(); }
-function addGroupMember(){ const e=S.groupEdit; e.entries.push({pid:(STATUS.providers[0]||{}).id||'', model:''}); renderMain(); }
-function removeGroupMember(i){ S.groupEdit.entries.splice(i,1); renderMain(); }
 function collectGroupEntries(){
   const e=S.groupEdit; const out=[];
-  for (let i=0;i<e.entries.length;i++){
-    const pid=$('grp-pid-'+i), um=$('grp-um-'+i);
-    if (pid&&um){ const p=pid.value.trim(), u=um.value.trim(); if (p&&u) out.push([p,u]); }
-  }
+  (e.entries||[]).forEach(en=>{ if(en.pid && en.model) out.push([en.pid, en.model]); });
   return out;
 }
 async function saveGroup(){
   const e=S.groupEdit; const id=$('grp-id').value.trim();
   if (!id){ toast(t('组名')); return; }
   const entries = collectGroupEntries();
-  let groups = (MODEL_GROUPS||[]).map(g=>({id:g.id, entries:(g.entries||[]).map(x=>[x[0],x[1]])}));
-  if (e.isNew){ if (groups.some(g=>g.id===id)){ toast(t('失败: ')+'duplicate'); return; } groups.push({id, entries}); }
-  else { groups[e.index] = {id, entries}; }
-  try { await api('PUT', '/api/model-groups', { groups }); MODEL_GROUPS = await api('GET', '/api/model-groups'); S.groupEdit=null; toast(t('已保存')); renderMain(); }
-  catch(err){ toast(t('失败: ')+err.message); }
+  let groups = (MODEL_GROUPS||[]).map(g=>({ id:g.id, entries:(g.entries||[]).map(x=>[x[0],x[1]]) }));
+  if (e.isNew){ if (groups.some(g=>g.id===id)){ toast(t('失败: ')+'duplicate'); return; } groups.push({ id, entries }); }
+  else { groups[e.index] = { id, entries }; }
+  try { await api('PUT', '/api/model-groups', { groups }); MODEL_GROUPS = await api('GET', '/api/model-groups') || []; adaptAll(); S.groupEdit=null; toast(t('已保存')); renderMain(); }
+  catch(err){ console.error('saveGroup', err); toast(t('失败: ')+err.message); }
 }
 async function delGroup(i){
   if (!confirm(t('删除该模型组？'))) return;
-  let groups = (MODEL_GROUPS||[]).map(g=>({id:g.id, entries:(g.entries||[]).map(x=>[x[0],x[1]])}));
+  let groups = (MODEL_GROUPS||[]).map(g=>({ id:g.id, entries:(g.entries||[]).map(x=>[x[0],x[1]]) }));
   groups.splice(i,1);
-  try { await api('PUT', '/api/model-groups', { groups }); MODEL_GROUPS = await api('GET', '/api/model-groups'); toast(t('已保存')); renderMain(); }
-  catch(err){ toast(t('失败: ')+err.message); }
+  try { await api('PUT', '/api/model-groups', { groups }); MODEL_GROUPS = await api('GET', '/api/model-groups') || []; adaptAll(); S.groupEdit=null; toast(t('已删除')); renderMain(); }
+  catch(err){ console.error('delGroup', err); toast(t('失败: ')+err.message); }
 }
 
-/* ============ api keys (global table) ============ */
-function renderApiKeys(m){
-  const provs = STATUS.providers || [];
-  const allKeys = [];
-  provs.forEach(p => (p.keys||[]).forEach(k => allKeys.push({ pid:p.id, k })));
-  const chips = [['all',t('全部')],['ok',t('可用')],['cool',t('冷却中')],['off',t('异常')]];
-  const f = S.keyFilter;
-  const list = allKeys.filter(x => f==='all' || (f==='ok'&&!x.k.invalid&&!x.k.cooling) || (f==='cool'&&x.k.cooling) || (f==='off'&&x.k.invalid));
-  const invCount = allKeys.filter(x=>x.k.invalid).length;
-  m.innerHTML = `
-    <h2 class="board-title">${t('API Key')}</h2>
-    <div class="board-note">${t('全局状态总览 · 跨所有提供商一张表')}</div>
-    <div class="card card-pad" style="margin-bottom:1rem">
-      <div class="ak-add">
-        <select id="ak-prov" aria-label="${t('提供商')}">${provs.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
-        <span class="ak-input-wrap">
-          <input id="ak-key-input" class="ak-key-input" aria-label="${t('API Key')}" placeholder="${t('粘贴 API Key，多个每行一个可批量添加')}">
-          <button class="ak-paste" type="button" aria-label="${t('从剪贴板粘贴')}" title="${t('从剪贴板粘贴')}" onclick="akPaste(this)">${CLIP}</button>
-        </span>
-        <button class="primary small" type="button" onclick="akAdd(false)">${t('添加')}</button>
-        <button class="small" type="button" onclick="akAdd(true)">${t('批量添加')}</button>
-      </div>
-      <div class="ak-recycle" style="margin-top:0.75rem"><button class="small danger" type="button" onclick="akDelInvalid()" ${invCount?'':'disabled'}>${t('删除所有无效 Key')}</button></div>
-    </div>
-    <div class="chips" style="margin-bottom:0.875rem">
-      ${chips.map(c=>`<span class="chip ${f===c[0]?'active':''}" onclick="S.keyFilter='${c[0]}';renderMain()" role="button" tabindex="0">${c[1]}</span>`).join('')}
-    </div>
-    <div class="card"><div class="tbl-scroll"><table>
-      <tr><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('状态')}</th><th>${t('token余额')}</th><th>${t('账单')}</th><th>${t('成功率')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
-      ${list.length ? list.map(({pid,k})=>`
-      <tr>
-        <td><span class="keytag" data-key-id="${esc(k.id)}" data-revealed="0">${esc(k.key)}</span></td>
-        <td>${esc(PNAME(pid))}</td>
-        <td>${keyStatus(k)}</td>
-        <td class="num">${fmtTok(k.metrics?k.metrics.token_balance:null)}</td>
-        <td class="num">${fmtBill(k.metrics?k.metrics.bill_balance:null)}</td>
-        <td class="num">${(((k.metrics&&k.metrics.success_rate)||0)*100).toFixed(1)}%</td>
-        <td class="num">${k.requests||0}</td>
-        <td class="faint"><span class="ak-err" title="${esc(k.last_error||'')}">${esc(k.last_error||'-')}</span></td>
-        <td class="ak-actions">
-          <button class="small" type="button" onclick="toggleKey('${k.id}', this)">${t('显示')}</button>
-          <button class="small" type="button" onclick="copyKey('${k.id}', this)">${t('复制')}</button>
-          ${(k.cooling||k.invalid)?`<button class="small" type="button" onclick="clearCooldown('${k.id}')">${k.invalid?t('解除无效'):t('解除冷却')}</button>`:''}
-          <button class="small danger" type="button" onclick="delKey('${pid}','${k.id}')">${t('删除')}</button>
-        </td>
-      </tr>`).join('') : `<tr><td colspan="9" class="faint">${t('暂无数据')}</td></tr>`}
-    </table></div></div>`;
-}
-async function akAdd(batch){
-  const sel=document.getElementById('ak-prov'), inp=document.getElementById('ak-key-input');
-  if(!sel||!inp) return;
-  const pid=sel.value, raw=inp.value.trim(); if(!raw) return;
-  const keys = batch ? raw.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean) : [raw];
-  for (const k of keys){ try { await api('POST', '/api/providers/'+pid+'/keys', { key:k, label:'' }); } catch(e){ toast(t('部分 Key 添加失败: ')+e.message); } }
-  inp.value=''; await refresh();
-}
-async function akDelInvalid(){
-  const provs = STATUS.providers || [];
-  for (const p of provs) for (const k of (p.keys||[])) if (k.invalid){ try { await api('DELETE', '/api/providers/'+p.id+'/keys/'+k.id); } catch(e){} }
+/* ---------- upstream model fetch → auto-import all ---------- */
+/* Click reads the mf-row provider select's current value, fetches every upstream
+   model, bulk-imports the not-yet-managed ones (idempotent /models/import), then
+   refreshes and toasts the count actually added. No modal — direct fetch-all. */
+async function fetchUpstreamModels(btn){
+  const sel = document.querySelector('.mf-row select');
+  const pid = sel ? sel.value : '';
+  if (!pid){ toast(t('请先选择提供商')); return; }
+  const old = btn.textContent; btn.disabled = true; btn.textContent = t('拉取中…');
+  let models;
+  try { const r = await api('GET', '/api/providers/'+pid+'/upstream-models'); models = r.models || []; }
+  catch(e){ btn.disabled=false; btn.textContent=old; toast(t('拉取失败: ')+e.message); return; }
+  btn.disabled = false; btn.textContent = old;
+  if (!models.length){ toast(t('上游未返回任何模型')); return; }
+  let n = 0;
+  try { const r = await api('POST', '/api/providers/'+pid+'/models/import', { models }); n = r.imported || 0; }
+  catch(e){ toast(t('失败: ')+e.message); return; }
   await refresh();
+  toast(t('新添加 {n} 个模型').replace('{n}', n));
 }
 
-/* ============ strategy (filters + sort + dry-run via API) ============ */
-function modeName(){
-  const { groupLock, provLock } = S;
-  if (groupLock && provLock)  return t('精确 (provider,model) 轮换 Key - 当前行为，零惊喜');
-  if (groupLock && !provLock) return t('模型优先 - 跨提供商同模型');
-  if (!groupLock && provLock) return t('提供商优先 - 换模型');
-  return t('可用优先 - 所有候选');
-}
+/* ---------- strategy board ---------- */
 function modeShort(){
   const { groupLock, provLock } = S;
   if (groupLock && provLock)  return t('精确轮换');
@@ -1151,10 +771,8 @@ function modeShort(){
   return t('可用优先');
 }
 function renderStrategy(m){
-  const models = [];
-  (STATUS.providers||[]).forEach(p => { (p.models||[]).forEach(mm => { if (!models.includes(mm.id)) models.push(mm.id); }); (p.aliases||{}) && Object.keys(p.aliases||{}).forEach(a => { if (!models.includes(a)) models.push(a); }); });
-  if (!S.reqModel && models.length) S.reqModel = models[0];
-  const res = DRY;
+  const res = computeRoute();
+  const models = [...new Set(MODELS.map(mo=>mo.id))];
   m.innerHTML = `
     <h2 class="board-title">${t('策略管理')}</h2>
     <div class="section">
@@ -1168,7 +786,7 @@ function renderStrategy(m){
           <span class="tlbl">${t('不改变提供商')}</span>
           <label class="toggle"><input type="checkbox" aria-label="${t('不改变提供商')}" ${S.provLock?'checked':''} onchange="onFilterChange()"><span class="track"></span></label>
         </div>
-        <div class="faint" style="margin-top:0.25rem">${t('当前：')}${modeShort()}</div>
+        <div class="faint" style="font-size:0.75rem;margin-top:0.25rem">${t('当前：')}${modeShort()}</div>
       </div>
     </div>
     <div class="section">
@@ -1188,40 +806,37 @@ function renderStrategy(m){
       <div class="section-title">${t('演示')} <span class="note">${t('dry-run 实时')}</span></div>
       <div class="mf-row" style="margin:0 0 0.875rem">
         <div class="mf-left">
-          <span class="faint">${t('模拟请求')}</span>
+          <span class="faint" style="font-size:0.75rem">${t('模拟请求')}</span>
           <select aria-label="${t('请求模型')}" onchange="onReqModelChange(this.value)">${models.map(id=>`<option ${S.reqModel===id?'selected':''}>${esc(id)}</option>`).join('')}</select>
           <span class="faint">@</span>
-          <select aria-label="${t('请求提供商')}" onchange="onReqProvChange(this.value)">
-            <option value="不限" ${S.reqProv==='不限'?'selected':''}>${t('不限')}</option>
-            ${(STATUS.providers||[]).map(p=>`<option value="${esc(p.name)}" ${S.reqProv===p.name?'selected':''}>${esc(p.name)}</option>`).join('')}
-          </select>
+          <select aria-label="${t('请求提供商')}" onchange="onReqProvChange(this.value)">${PROVIDERS.map(p=>`<option value="${p.id}" ${S.reqProv===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select>
         </div>
       </div>
-      ${res ? resultBanner(res) : `<div class="result-banner"><span class="big">${t('候选为空')}</span></div>`}
-      <div class="card"><div class="tbl-scroll"><table>
+      ${resultBanner(res)}
+      <div class="card"><table>
         <tr><th>${t('#')}</th><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('模型')}</th><th>${t('valid')}</th><th>${t('cool')}</th><th>${t('单价')}</th><th>${t('TPS')}</th><th>${t('成功率')}</th></tr>
-        ${(res&&res.candidates&&res.candidates.length) ? res.candidates.map((k,i)=>`
-        <tr class="${k.routed?'row-winner':''}">
+        ${res.cand.map((k,i)=>`
+        <tr class="${res.winner===k?'row-winner':''}">
           <td class="num faint">${i+1}</td>
-          <td><span class="keytag">${esc(k.api_key_id)}</span></td>
-          <td>${esc(PNAME(k.provider_id))}</td>
-          <td><span class="keytag">${esc(k.upstream_model)}</span></td>
+          <td><span class="keytag">${esc(k.kid)}</span></td>
+          <td>${esc(PNAME(k.prov))}</td>
+          <td><span class="keytag">${esc(k.model)}</span></td>
           <td>${k.valid?`<span class="st ok">${t('是')}</span>`:`<span class="st off">${t('否')}</span>`}</td>
-          <td>${k.non_cooled?`<span class="faint">-</span>`:`<span class="st cool">${k.remaining_secs}s</span>`}</td>
-          <td class="num">${(k.price||0).toFixed(4)}</td>
-          <td class="num">${Math.round(k.tps||0)}</td>
-          <td class="num">${((k.success_rate||0)*100).toFixed(1)}%</td>
-        </tr>`).join('') : `<tr><td colspan="9" class="faint">${t('候选为空')}</td></tr>`}
-      </table></div></div>
+          <td>${k.cool?`<span class="st cool">${k.cd}s</span>`:`<span class="faint">-</span>`}</td>
+          <td class="num">${k.price.toFixed(4)}</td>
+          <td class="num">${k.tps}</td>
+          <td class="num">${(k.sr*100).toFixed(1)}%</td>
+        </tr>`).join('') || `<tr><td colspan="9" class="faint">${t('候选为空')}</td></tr>`}
+      </table></div>
     </div>`;
 }
 function resultBanner(res){
-  if (res.result==='routed' && res.routed)
-    return `<div class="result-banner routed"><span class="big">${t('路由命中')}</span> <span class="keytag">${esc(res.routed.api_key_id)}</span> · ${esc(PNAME(res.routed.provider_id))} / ${esc(res.routed.upstream_model)}</div>`;
-  if (res.result==='all_cooling')
-    return `<div class="result-banner err429"><span class="big">${t('429 全冷却')}</span> ${t('返回')} <code>Retry-After: ${res.retry_after!=null?res.retry_after+'s':'-'}</code></div>`;
-  if (res.result==='no_valid')
-    return `<div class="result-banner err429"><span class="big">${t('429 无可用')}</span> ${t('候选 {n} 条均无效').replace('{n}', (res.candidates||[]).length)}</div>`;
+  if (res.state==='routed')
+    return `<div class="result-banner routed"><span class="big">${t('路由命中')}</span> <span class="keytag">${esc(res.winner.kid)}</span> · ${esc(PNAME(res.winner.prov))} / ${esc(res.winner.model)}</div>`;
+  if (res.state==='429-retry')
+    return `<div class="result-banner err429"><span class="big">${t('429 全冷却')}</span> ${t('返回')} <code>Retry-After: ${res.retry!=null?res.retry+'s':'-'}</code></div>`;
+  if (res.state==='429-novalid')
+    return `<div class="result-banner err429"><span class="big">${t('429 无可用')}</span> ${t('候选 {n} 条均无效').replace('{n}',res.cand.length)}</div>`;
   return `<div class="result-banner err429"><span class="big">${t('429 候选为空')}</span> ${t('当前过滤下无候选')}</div>`;
 }
 async function onFilterChange(){
@@ -1239,20 +854,290 @@ async function putStrategy(){
     STRATEGY = await api('GET', '/api/strategy');
     S.groupLock = STRATEGY.filter.lock_model_group; S.provLock = STRATEGY.filter.lock_provider;
     S.sorts = [STRATEGY.sort[0]||'', STRATEGY.sort[1]||'', STRATEGY.sort[2]||''];
-  } catch(e){ toast(t('失败: ')+e.message); }
+  } catch(e){ console.error('putStrategy', e); toast(t('失败: ')+e.message); }
 }
 async function runDryRun(){
   if (!S.reqModel) return;
   try {
-    DRY = await api('POST', '/api/strategy/dry-run', {
+    const d = await api('POST', '/api/strategy/dry-run', {
       model: S.reqModel,
-      provider: S.reqProv && S.reqProv!=='不限' ? S.reqProv : undefined,
+      provider: S.reqProv || undefined,
       sorts: S.sorts.filter(Boolean)
     });
-  } catch(e){ DRY=null; toast(t('失败: ')+e.message); }
+    DRY = d;
+    // map the server terminal + candidates into the prototype's computeRoute shape
+    const cand = (d.candidates||[]).map(k => ({
+      routed: k.routed,
+      kid: k.api_key_id, prov: k.provider_id, model: k.upstream_model,
+      valid: k.valid, cool: !k.non_cooled, cd: k.remaining_secs||0,
+      price: k.price||0, tps: k.tps||0, sr: k.success_rate||0
+    }));
+    let winner = null;
+    for (const k of cand) if (k.routed) winner = k;
+    let state, retry;
+    if (d.result==='routed') state='routed';
+    else if (d.result==='all_cooling'){ state='429-retry'; retry=d.retry_after; }
+    else if (d.result==='no_valid') state='429-novalid';
+    else state='429-empty';
+    RES = { state, winner, cand, retry };
+  } catch(e){ RES = null; console.error('runDryRun', e); }
 }
 
-/* ============ settings ============ */
+/* ---------- api keys global table ---------- */
+/* ---------- api key actions ---------- */
+const CLIP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>';
+function akPaste(btn){ try { navigator.clipboard.readText().then(t=>{ const i=btn.parentElement.querySelector('input'); if(i) i.value=t; }).catch(()=>{}); } catch(e){} }
+async function akShow(kid, btn){
+  const el=document.querySelector('span.keytag[data-ak="'+kid+'"]'); if(!el) return;
+  if (el.dataset.shown==='1'){ el.textContent='••••••••'; el.dataset.shown='0'; btn.textContent=t('显示'); return; }
+  try {
+    const real = await findRealKey(kid);
+    if (!real){ toast(t('未找到该 Key')); return; }
+    el.textContent=real; el.dataset.shown='1'; btn.textContent=t('隐藏');
+  } catch(e){ console.error('akShow', e); toast(t('失败: ')+e.message); }
+}
+async function akCopy(kid, btn){
+  const ok=()=>{ const o=btn.textContent; btn.textContent=t('已复制'); setTimeout(()=>btn.textContent=o,1200); };
+  try {
+    const real = await findRealKey(kid);
+    if (!real){ toast(t('未找到该 Key')); return; }
+    if (navigator.clipboard) navigator.clipboard.writeText(real).then(ok).catch(()=>{});
+    else { copyText(real); ok(); }
+  } catch(e){ console.error('akCopy', e); toast(t('失败: ')+e.message); }
+}
+async function akDel(kid){
+  if (!confirm(t('删除该 Key？'))) return;
+  const k = KEYS.find(x=>x.kid===kid); if(!k) return;
+  try { await api('DELETE', '/api/providers/'+k.prov+'/keys/'+encodeURIComponent(kid)); await refresh(); toast(t('已删除')); }
+  catch(e){ console.error('akDel', e); toast(t('失败: ')+e.message); }
+}
+async function akRecycle(){
+  const inv = KEYS.filter(k=>!k.valid);
+  if (!inv.length) return;
+  for (const k of inv){ try { await api('DELETE', '/api/providers/'+k.prov+'/keys/'+encodeURIComponent(k.kid)); } catch(e){ console.error('akRecycle', e); } }
+  S.recycled = (S.recycled||0) + inv.length;
+  await refresh(); toast(t('已删除'));
+}
+async function akAdd(batch){
+  const sel=document.getElementById('ak-prov'), inp=document.getElementById('ak-key-input');
+  if(!sel||!inp) return;
+  const prov=sel.value, raw=inp.value.trim(); if(!raw) return;
+  const keys=batch?raw.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean):[raw];
+  let failed=0;
+  for (const k of keys){ try { await api('POST', '/api/providers/'+prov+'/keys', { key:k, label:'' }); } catch(e){ failed++; console.error('akAdd', e); } }
+  inp.value=''; await refresh();
+  if (failed) toast(t('失败: ')+failed);
+}
+async function findRealKey(keyId){
+  const cfg = await api('GET', '/api/config/export');
+  for (const p of (cfg.providers||[])) for (const k of (p.keys||[])) if (k.id === keyId) return k.key;
+  return null;
+}
+function renderApiKeys(m){
+  const chips = [['all',t('全部')],['ok',t('可用')],['cool',t('冷却中')],['off',t('异常')]];
+  const f = S.keyFilter;
+  const list = KEYS.filter(k => f==='all' || (f==='ok'&&k.valid&&!k.cool) || (f==='cool'&&k.cool) || (f==='off'&&!k.valid));
+  const invCount = KEYS.filter(k=>!k.valid).length;
+  m.innerHTML = `
+    <h2 class="board-title">${t('API Key')}</h2>
+    <div class="board-note">${t('全局状态总览 · 跨所有提供商一张表')}${S.recycled?` · ${t('已回收 {n} 把').replace('{n}',S.recycled)}`:''}</div>
+    ${S.akEdit ? renderAkSeedCard(S.akEdit) : ''}
+    <div class="card card-pad" style="margin-bottom:1.25rem">
+      <div class="ak-add">
+        <select id="ak-prov" aria-label="${t('提供商')}">${PROVIDERS.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
+        <span class="ak-input-wrap">
+          <input id="ak-key-input" class="ak-key-input" aria-label="${t('API Key')}" placeholder="${t('粘贴 API Key，多个每行一个可批量添加')}">
+          <button class="ak-paste" type="button" aria-label="${t('从剪贴板粘贴')}" title="${t('从剪贴板粘贴')}" onclick="akPaste(this)">${CLIP}</button>
+        </span>
+        <button class="primary small" type="button" onclick="akAdd(false)">${t('添加')}</button>
+        <button class="small" type="button" onclick="akAdd(true)">${t('批量添加')}</button>
+      </div>
+      <div class="ak-recycle" style="margin-top:0.875rem"><button class="small" type="button" onclick="akRecycle()" ${invCount?'':'disabled'}>${t('移动所有无效Key至回收站')}</button></div>
+    </div>
+    <div class="chips" style="margin-bottom:0.875rem">
+      ${chips.map(c=>`<span class="chip ${f===c[0]?'active':''}" onclick="S.keyFilter='${c[0]}';renderMain()">${c[1]}</span>`).join('')}
+    </div>
+    <div class="card"><div class="tbl-scroll"><table>
+      <tr><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('智能冷却时长')}</th><th>${t('状态')}</th><th>${t('token 余额')}</th><th>${t('账单')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
+      ${list.map(k=>`
+      <tr>
+        <td><span class="keytag" data-ak="${esc(k.kid)}" data-shown="0">••••••••</span></td>
+        <td>${esc(PNAME(k.prov))}</td>
+        <td class="num">${k.cdDur}s</td>
+        <td>${keyStatus(k)}</td>
+        <td class="num">${k.tb===Infinity?`<span class="faint">${t('不限')}</span>`:k.tb.toLocaleString()}</td>
+        <td class="num">${k.bb===Infinity?`<span class="faint">${t('不限')}</span>`:'¥'+k.bb}</td>
+        <td class="num">${k.req||0}</td>
+        <td class="faint"><span class="ak-err" title="${esc(k.lastErr||'-')}">${esc(k.lastErr||'-')}</span></td>
+        <td class="ak-actions">
+          <button class="small" type="button" onclick="akShow('${esc(k.kid)}', this)">${t('显示')}</button>
+          <button class="small" type="button" onclick="akCopy('${esc(k.kid)}', this)">${t('复制')}</button>
+          <button class="small" type="button" onclick="akEditSeed('${esc(k.kid)}')">${t('Seed')}</button>
+          <button class="small" type="button" onclick="akDel('${esc(k.kid)}')" style="border-color:var(--color-feedback-error-text);color:var(--color-feedback-error-text)">${t('删除')}</button>
+        </td>
+      </tr>`).join('') || `<tr><td colspan="9" class="faint">${t('无')}</td></tr>`}
+    </table></div></div>`;
+}
+
+/* ---------- api key metric seed editor (spec §2.2 手动 seed) ---------- */
+function renderAkSeedCard(kid){
+  const k = KEYS.find(x=>x.kid===kid); if(!k) return '';
+  const sv = f => (k[f]==null||k[f]===undefined)?'':k[f];
+  return `
+    <div class="card card-pad" style="margin-bottom:1.25rem">
+      <div class="edit-card">
+        <div class="edit-name grp-sans">${t('指标预置')} · <span class="keytag">${esc(k.masked||'••••')}</span></div>
+        <div class="board-note" style="margin-bottom:1.5rem">${t('无实测史时的预置初值，有实测后自动覆盖；留空 = 清除')}</div>
+        <div class="pd-field pd-row"><span class="lbl">RPM</span><input class="val mono" id="ak-seed-rpm" type="number" min="0" step="1" aria-label="${t('预置')} RPM" value="${sv('seedRpm')}"></div>
+        <div class="pd-field pd-row"><span class="lbl">TPM</span><input class="val mono" id="ak-seed-tpm" type="number" min="0" step="1" aria-label="${t('预置')} TPM" value="${sv('seedTpm')}"></div>
+        <div class="pd-field pd-row"><span class="lbl">${t('成功率')}</span><input class="val mono" id="ak-seed-sr" type="number" min="0" max="1" step="0.01" aria-label="${t('预置')} ${t('成功率')}" value="${sv('seedSr')}"></div>
+        <div class="pd-field pd-row"><span class="lbl">TFTT (ms)</span><input class="val mono" id="ak-seed-tftt" type="number" min="0" step="1" aria-label="${t('预置')} TFTT" value="${sv('seedTftt')}"></div>
+        <div class="pd-field pd-row"><span class="lbl">TPS</span><input class="val mono" id="ak-seed-tps" type="number" min="0" step="0.1" aria-label="${t('预置')} TPS" value="${sv('seedTps')}"></div>
+        <div class="ak-actions" style="margin-top:1.5rem"><button class="primary small" type="button" onclick="saveAkSeed('${esc(kid)}')">${t('保存')}</button><button class="small" type="button" onclick="cancelAkEdit()">${t('取消')}</button></div>
+      </div>
+    </div>`;
+}
+function akEditSeed(kid){ S.akEdit = kid; renderMain(); }
+function cancelAkEdit(){ S.akEdit = null; renderMain(); }
+async function saveAkSeed(kid){
+  const k = KEYS.find(x=>x.kid===kid); if(!k) return;
+  const num = (id, isFloat) => { const v=$(id).value.trim(); if(v==='')return null; const n=isFloat?parseFloat(v):parseInt(v,10); return Number.isFinite(n)?n:null; };
+  const body = {
+    seed_rpm: num('ak-seed-rpm', false),
+    seed_tpm: num('ak-seed-tpm', false),
+    seed_success_rate: num('ak-seed-sr', true),
+    seed_avg_tftt_ms: num('ak-seed-tftt', false),
+    seed_tps: num('ak-seed-tps', true)
+  };
+  try {
+    await api('PUT', '/api/providers/'+k.prov+'/keys/'+encodeURIComponent(kid), body);
+    S.akEdit = null; await refresh(); toast(t('已保存'));
+  } catch(e){ console.error('saveAkSeed', e); toast(t('失败: ')+e.message); }
+}
+
+/* ---------- api key live status (per-second poll, spec: 实时状态) ---------- */
+// A full refresh() every second would re-render the whole page, reset the key
+// show/hide toggles, and disrupt the seed editor / add-key input mid-typing.
+// Instead: fetch only /api/status, re-adapt KEYS, then surgically patch the
+// changing cells of each row — never touching the Key cell (preserves the
+// 显示/隐藏 toggle), the seed card, or any input. Filter-membership changes
+// (a key cooling/recovering) are re-synced on the next full render (any
+// action) or by re-clicking a filter chip.
+async function refreshAkStatus(){
+  if (S.tab !== 'apikeys' || document.hidden) return;
+  try {
+    STATUS = await api('GET', '/api/status');
+    adaptAll();
+    updateAkCells();
+  } catch(e){ /* transient; next tick retries */ }
+}
+function updateAkCells(){
+  document.querySelectorAll('span[data-ak]').forEach(span => {
+    const k = KEYS.find(x => x.kid === span.dataset.ak);
+    if (!k) return;
+    const tr = span.closest('tr'); if (!tr) return;
+    const c = tr.children;
+    // cols: 0 Key(untouched) 1 提供商 2 智能冷却时长 3 状态 4 token余额 5 账单 6 请求数 7 最近错误 8 操作
+    if (c[2]) c[2].innerHTML = k.cdDur + 's';
+    if (c[3]) c[3].innerHTML = keyStatus(k);
+    if (c[4]) c[4].innerHTML = k.tb===Infinity ? `<span class="faint">${t('不限')}</span>` : k.tb.toLocaleString();
+    if (c[5]) c[5].innerHTML = k.bb===Infinity ? `<span class="faint">${t('不限')}</span>` : '¥'+k.bb;
+    if (c[6]) c[6].textContent = String(k.req||0);
+    if (c[7]) c[7].innerHTML = `<span class="ak-err" title="${esc(k.lastErr||'-')}">${esc(k.lastErr||'-')}</span>`;
+  });
+}
+
+/* ---------- provider actions ---------- */
+async function saveProvider(id){
+  try {
+    const rpmAuto = $('pe-rpm-auto-'+id).checked, tpmAuto = $('pe-tpm-auto-'+id).checked;
+    await api('PUT', '/api/providers/'+id, {
+      name: $('pe-name-'+id).value,
+      base_url: $('pe-url-'+id).value,
+      protocol: $('pe-proto-'+id).value
+    });
+    await api('PUT', '/api/providers/'+id+'/rate-limits', {
+      rpm_limit: rpmAuto ? null : Number($('pe-rpm-'+id).value),
+      tpm_limit: tpmAuto ? null : Number($('pe-tpm-'+id).value)
+    });
+    await refresh(); toast(t('已保存'));
+  } catch(e){ console.error('saveProvider', e); toast(t('失败: ')+e.message); }
+}
+async function delProvider(id){
+  if (!confirm(t('删除该提供商及其所有 Key？'))) return;
+  try { await api('DELETE', '/api/providers/'+id); S.localProv=null; await refresh(); toast(t('已删除')); }
+  catch(e){ console.error('delProvider', e); toast(t('失败: ')+e.message); }
+}
+
+/* ---------- stats (rewired: prototype's mock HOURS/rng → real /api/stats) ----------
+   Token counts come from the upstream's reported `usage` (non-stream: always
+   exact; stream: only when the upstream emits a usage chunk, e.g. OpenAI
+   stream_options.include_usage). Requests whose usage is absent contribute 0. */
+function renderStats(m){
+  const tot = (STATS && STATS.total) || { success:0, fail:0, tokens:0 };
+  const rot = (STATS && STATS.rotations_total) || 0;
+  const allreq = tot.success + tot.fail;
+  const rate = allreq ? (tot.success/allreq*100).toFixed(1)+'%' : '-';
+  const totTok = (tot.tokens||0);
+  const hist = (STATS && STATS.histogram) || [];
+  const peakReq = Math.max(1, ...hist.map(h => h.success + h.fail));
+  const peakTok = Math.max(1, ...hist.map(h => h.tokens||0));
+  const provStats = Object.entries((STATS && STATS.providers) || {});
+  const modelStats = Object.entries((STATS && STATS.models) || {});
+  const keyStats = Object.entries((STATS && STATS.keys) || {});
+  const statRow = (entries, cols, render) => entries.length ? entries.map(render).join('') : `<tr><td colspan="${cols}" class="faint">${t('暂无数据')}</td></tr>`;
+  const hh = h => { try { return new Date(h.hour_ms).getHours(); } catch(_){ return 0; } };
+  m.innerHTML = `
+    <h2 class="board-title">${t('统计')}</h2>
+    <div class="board-note">${t('请求与 Token 用量 · 数据持久化，重启不丢失')}</div>
+    <div class="section">
+      <div class="section-title">${t('总览')}</div>
+      <div class="stat-grid">
+        <div class="stat-box ok"><div class="num">${tot.success.toLocaleString()}</div><div class="label">${t('成功请求')}</div></div>
+        <div class="stat-box err"><div class="num">${tot.fail.toLocaleString()}</div><div class="label">${t('失败请求')}</div></div>
+        <div class="stat-box warn"><div class="num">${rot}</div><div class="label">${t('换 Key 次数')}</div></div>
+        <div class="stat-box"><div class="num">${rate}</div><div class="label">${t('成功率')}</div></div>
+        <div class="stat-box"><div class="num">${totTok.toLocaleString()}</div><div class="label">${t('Token 总消耗')}</div></div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">${t('过去 24 小时请求')} <span class="note">${t('每小时一柱 · 绿=成功 红=失败')}</span></div>
+      <div class="card card-pad">
+        ${hist.length ? `<div class="hist">${hist.map(h=>{ const okH=(h.success/peakReq*100).toFixed(2); const failH=(h.fail/peakReq*100).toFixed(2); return `<div class="bar-wrap" title="${t('{h}:00 · 成功 {ok} / 失败 {fail}').replace('{h}',hh(h)).replace('{ok}',h.success).replace('{fail}',h.fail)}">${h.fail?`<div class="bar fail" style="height:${failH}%"></div>`:''}${h.success?`<div class="bar ok" style="height:${okH}%"></div>`:''}</div>`; }).join('')}</div>
+        <div class="hist-x">${hist.map((h,i)=>(i%4===0)?`<span>${hh(h)}:00</span>`:'<span></span>').join('')}</div>` : `<div class="empty">${t('暂无数据')}</div>`}
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">${t('过去 24 小时 Token 用量')} <span class="note">${t('每小时一柱')}</span></div>
+      <div class="card card-pad">
+        ${hist.length ? `<div class="hist">${hist.map(h=>{ const tH=((h.tokens||0)/peakTok*100).toFixed(2); return `<div class="bar-wrap" title="${t('{h}:00 · {n} tok').replace('{h}',hh(h)).replace('{n}',(h.tokens||0).toLocaleString())}">${(h.tokens||0)?`<div class="bar tok" style="height:${tH}%"></div>`:''}</div>`; }).join('')}</div>
+        <div class="hist-x">${hist.map((h,i)=>(i%4===0)?`<span>${hh(h)}:00</span>`:'<span></span>').join('')}</div>` : `<div class="empty">${t('暂无数据')}</div>`}
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">${t('按提供商')}</div>
+      <div class="card"><table>
+        <tr><th>${t('提供商')}</th><th>${t('请求')}</th><th>${t('成功')}</th><th>${t('失败')}</th><th>${t('Token 消耗')}</th></tr>
+        ${statRow(provStats, 5, ([id,p])=>{ const req=p.success+p.fail; return `<tr><td>${esc(p.name)}</td><td class="num">${req.toLocaleString()}</td><td class="num" style="color:var(--color-feedback-success-text)">${p.success.toLocaleString()}</td><td class="num" style="color:var(--color-feedback-error-text)">${p.fail}</td><td class="num">${(p.tokens||0).toLocaleString()}</td></tr>`; })}
+      </table></div>
+    </div>
+    <div class="section">
+      <div class="section-title">${t('按模型')}</div>
+      <div class="card"><table>
+        <tr><th>${t('模型')}</th><th>${t('提供商')}</th><th>${t('请求')}</th><th>${t('成功')}</th><th>${t('失败')}</th><th>${t('Token 消耗')}</th></tr>
+        ${statRow(modelStats, 6, ([mid,s])=>{ const req=s.success+s.fail; return `<tr><td><span class="keytag">${esc(mid)}</span></td><td class="faint">-</td><td class="num">${req.toLocaleString()}</td><td class="num" style="color:var(--color-feedback-success-text)">${s.success.toLocaleString()}</td><td class="num" style="color:var(--color-feedback-error-text)">${s.fail}</td><td class="num">${(s.tokens||0).toLocaleString()}</td></tr>`; })}
+      </table></div>
+    </div>
+    <div class="section">
+      <div class="section-title">${t('按 API Key')}</div>
+      <div class="card"><table>
+        <tr><th>${t('API Key')}</th><th>${t('请求')}</th><th>${t('成功')}</th><th>${t('失败')}</th><th>${t('Token 消耗')}</th></tr>
+        ${statRow(keyStats, 5, ([id,k])=>{ const req=k.success+k.fail; return `<tr><td>${esc(k.name)}</td><td class="num">${req.toLocaleString()}</td><td class="num" style="color:var(--color-feedback-success-text)">${k.success.toLocaleString()}</td><td class="num" style="color:var(--color-feedback-error-text)">${k.fail}</td><td class="num">${(k.tokens||0).toLocaleString()}</td></tr>`; })}
+      </table></div>
+    </div>`;
+}
+
+/* ---------- settings ---------- */
 function renderSettings(m){
   const s = STATUS || {};
   m.innerHTML = `
@@ -1262,13 +1147,13 @@ function renderSettings(m){
       <div class="section-title">${t('基本')}</div>
       <div class="card card-pad">
         <div class="form-grid">
-          <label class="field"><span>${t('默认冷却时间（秒）')}</span><input id="s-cooldown" type="number" min="1" value="${s.default_cooldown_secs||60}"></label>
-          <label class="field"><span>${t('每请求最大尝试次数')}</span><input id="s-attempts" type="number" min="1" max="10" value="${s.max_attempts||3}"></label>
+          <label class="field"><span>${t('默认冷却时间（秒）')}</span><input id="s-cooldown" type="number" value="${s.default_cooldown_secs!=null?s.default_cooldown_secs:60}"></label>
+          <label class="field"><span>${t('每请求最大尝试次数')}</span><input id="s-attempts" type="number" value="${s.max_attempts!=null?s.max_attempts:3}"></label>
           <label class="field"><span>${t('API 端口')}</span><input id="s-apiport" type="number" value="${s.api_port||8000}"></label>
           <label class="field"><span>${t('UI 端口')}</span><input id="s-uiport" type="number" value="${s.ui_port||8001}"></label>
         </div>
         <div class="row" style="margin-top:0.875rem">
-          <label class="row" style="gap:0.375rem"><input type="checkbox" id="s-auth" ${s.auth&&s.auth.enabled?'checked':''}> <span>${t('启用本地 API 鉴权')}</span></label>
+          <label class="row" style="gap:0.375rem"><input type="checkbox" id="s-auth" ${s.auth&&s.auth.enabled?'checked':''}> <span class="muted" style="font-size:0.8125rem">${t('启用本地 API 鉴权')}</span></label>
           <input id="s-authkeys" placeholder="${t('鉴权 Key，逗号分隔')}" value="${(s.auth&&s.auth.keys||[]).join(',')}" style="flex:1;min-width:15rem">
           <button class="primary" onclick="saveSettings()">${t('保存设置')}</button>
         </div>
@@ -1276,15 +1161,7 @@ function renderSettings(m){
     </div>
     <div class="section">
       <div class="section-title">${t('配置文件')}</div>
-      <div class="card card-pad">
-        <div class="row">
-          <button onclick="exportConfig()">${t('导出配置')}</button>
-          <button onclick="document.getElementById('import-file').click()">${t('导入配置')}</button>
-          <input type="file" id="import-file" accept=".json,application/json" style="display:none" onchange="importConfig(event)">
-          <span class="faint">${t('gateway.json · 导入即时热生效')}</span>
-        </div>
-        <div class="faint" style="margin-top:0.5rem">${t('导入会整体替换当前配置（含端口与鉴权），文件无效则整体拒绝')}</div>
-      </div>
+      <div class="card card-pad"><div class="row"><button onclick="exportConfig()">${t('导出配置')}</button><button onclick="document.getElementById('import-file').click()">${t('导入配置')}</button><input type="file" id="import-file" accept=".json,application/json" style="display:none" onchange="importConfig(event)"><span class="faint" style="font-size:0.75rem">${t('gateway.json · 导入即时热生效')}</span></div></div>
     </div>`;
 }
 async function saveSettings(){
@@ -1296,8 +1173,8 @@ async function saveSettings(){
       ui_port: +$('s-uiport').value || 8001,
       auth: { enabled: $('s-auth').checked, keys: $('s-authkeys').value.split(',').map(s=>s.trim()).filter(Boolean) }
     });
-    toast(t('已保存')); await refresh();
-  } catch(e){ toast(t('失败: ')+e.message); }
+    await refresh(); toast(t('已保存'));
+  } catch(e){ console.error('saveSettings', e); toast(t('失败: ')+e.message); }
 }
 function exportConfig(){ window.open('/api/config/export', '_blank'); toast(t('已触发下载')); }
 async function importConfig(ev){
@@ -1306,60 +1183,105 @@ async function importConfig(ev){
   try {
     const content = await file.text(); JSON.parse(content);
     await api('POST', '/api/config/import', { content });
-    toast(t('导入成功，已热生效')); await refresh();
-  } catch(e){ toast(t('导入失败: ')+e.message); }
+    await refresh(); toast(t('导入成功'));
+  } catch(e){ console.error('importConfig', e); toast(t('导入失败: ')+e.message); }
 }
 
-/* ============ refresh loop ============ */
+/* ============ adapters: real API responses → prototype mock shapes ============ */
+function adaptAll(){
+  const provs = (STATUS && STATUS.providers) || [];
+  PROVIDERS = provs.map(p => ({
+    id: p.id, name: p.name, base: p.base_url, proto: p.protocol || 'openai',
+    // no per-provider token/bill/quota backend: unlimited / 0 / empty (not faked)
+    tb: Infinity, bb: Infinity, rpm: 0, tpm: 0, resetAt: '', resetQuota: 0,
+    rpmLimit: (p.rpm_limit!=null) ? p.rpm_limit : null,
+    tpmLimit: (p.tpm_limit!=null) ? p.tpm_limit : null,
+    dot: 'var(--color-action-primary)'
+  }));
+  MODELS = []; KEYS = [];
+  provs.forEach(p => {
+    (p.models || []).forEach(m => {
+      const aliases = Object.keys(p.aliases || {}).filter(a => (p.aliases || {})[a] === m.id);
+      const price = (p.price_table && p.price_table[m.id] != null) ? p.price_table[m.id] : 0;
+      // single `price` → 输入价格; 输出价格 split + 上下文长度 have no backend → 0
+      const tftt = (STATS && STATS.models && STATS.models[m.id]) ? (STATS.models[m.id].avg_tftt_ms || 0) : 0;
+      MODELS.push({ id: m.id, prov: p.id, up: m.id, pIn: price, pOut: 0, ctx: (m.context_length||0), on: m.enabled, alias: aliases, tftt });
+    });
+    (p.keys || []).forEach(k => {
+      const mt = k.metrics || {};
+      const now = STATUS.now_ms || 0;
+      const cd = k.cooling ? Math.max(0, Math.ceil((k.cooling.until_ms - now) / 1000)) : 0;
+      KEYS.push({
+        kid: k.id, prov: p.id, model: '-',
+        valid: !k.invalid, cool: !!k.cooling, cd,
+        // 智能冷却时长 (生效值, spec §7 + 偏离②保留链): learned → per-key
+        // cooldown_secs → global default. Always a number (default always set).
+        cdDur: k.learned_cooldown != null ? k.learned_cooldown
+             : (k.cooldown_secs != null ? k.cooldown_secs
+             : (STATUS.default_cooldown_secs != null ? STATUS.default_cooldown_secs : 0)),
+        // masked key (status exposes mask(&k.key) = prefix+••••+suffix); shown
+        // in the seed-edit card title and (later) the table's hidden state.
+        masked: k.key || '••••',
+        sr: mt.success_rate || 0, rpm: mt.rpm || 0, tpm: mt.tpm || 0, tftt: mt.avg_tftt_ms || 0,
+        tb: mt.token_balance == null ? Infinity : mt.token_balance,
+        bb: mt.bill_balance == null ? Infinity : mt.bill_balance,
+        price: 0, tps: mt.tps || 0, lastErr: k.last_error || '',
+        req: k.requests || 0,
+        // spec §2.2 seed: preset initial values (null = none / clear).
+        seedRpm: k.seed_rpm, seedTpm: k.seed_tpm, seedSr: k.seed_success_rate,
+        seedTftt: k.seed_avg_tftt_ms, seedTps: k.seed_tps
+      });
+    });
+  });
+  // RPM/TPM display value: a manual cap if set, else the live aggregate of
+  // this provider's key metrics (auto, read-only in the detail panel).
+  PROVIDERS.forEach(pr => {
+    const ks = KEYS.filter(k=>k.prov===pr.id);
+    const liveR = ks.reduce((s,k)=>s+(k.rpm||0),0);
+    const liveT = ks.reduce((s,k)=>s+(k.tpm||0),0);
+    pr.rpm = (pr.rpmLimit!=null) ? pr.rpmLimit : liveR;
+    pr.tpm = (pr.tpmLimit!=null) ? pr.tpmLimit : liveT;
+  });
+  GROUPS = (MODEL_GROUPS || []).map(g => ({ name: g.id, members: (g.entries || []).map(e => ({ prov: e[0], model: e[1] })) }));
+}
+
+/* ============ refresh: load real data + adapt + dry-run + render ============ */
 async function refresh(){
   try {
     STATUS = await api('GET', '/api/status');
     STATS = await api('GET', '/api/stats');
-    CATALOG = await api('GET', '/api/free-catalog');
+    const cat = await api('GET', '/api/free-catalog'); CATALOG = (cat && cat.providers) || [];
     STRATEGY = await api('GET', '/api/strategy');
-    MODEL_GROUPS = await api('GET', '/api/model-groups');
-    // mirror the saved strategy into the UI state (edits PUT immediately, so this stays in sync)
+    MODEL_GROUPS = await api('GET', '/api/model-groups') || [];
+    adaptAll();
+    // mirror the saved strategy into the UI state (edits PUT immediately)
     S.groupLock = STRATEGY.filter.lock_model_group;
     S.provLock = STRATEGY.filter.lock_provider;
     S.sorts = [STRATEGY.sort[0]||'', STRATEGY.sort[1]||'', STRATEGY.sort[2]||''];
+    if (!S.reqModel && MODELS.length) S.reqModel = MODELS[0].id;
+    if (!S.reqProv && PROVIDERS.length) S.reqProv = PROVIDERS[0].id;
+    await runDryRun();
     renderTopbar(); renderSideFoot(); renderMain();
-    // keep the dry-run candidate table live while viewing the strategy board
-    if (S.tab==='strategy' && DRY) runDryRun().then(()=>renderMain());
   } catch(e){ console.error('refresh failed', e); }
 }
 
-/* sidebar collapse */
-$('hamburger').addEventListener('click', ()=>{
+/* ============ theme + collapse ============ */
+function applyTheme(t){ document.documentElement.dataset.theme=t; try{ localStorage.setItem('theme', t); }catch(_){} $('theme-toggle').innerHTML = t==='light'?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>'; }
+$('theme-toggle').addEventListener('click',()=>applyTheme(document.documentElement.dataset.theme==='light'?'dark':'light'));
+$('hamburger').addEventListener('click',()=>{
   S.collapsed = !S.collapsed;
   $('sidebar').classList.toggle('collapsed', S.collapsed);
 });
 
-/* boot - lang + theme init deferred to here so the data globals (STATUS / S /
-   NAV …) are declared before applyLang/applyTheme trigger the first render
-   (the inline IIFEs that used to run mid-script hit a temporal-dead-zone error
-   on STATUS). */
-(function boot(){
-  let sl = null; try { sl = localStorage.getItem(LANG_KEY); } catch(e){}
-  applyLang(sl || (navigator.language && navigator.language.startsWith('zh') ? 'zh' : 'en'));
-  let st = null; try { st = localStorage.getItem(THEME_KEY); } catch(e){}
-  applyTheme(st === 'light' ? 'light' : 'dark');
-  // applyLang/applyTheme above already render the shell (STATUS==null → main
-  // empty); refresh() loads the data and re-renders.
-  refresh();
-  setInterval(refresh, 5000);
-})();
-// 1s countdown keeps cooling/invalid remaining-secs live between refreshes.
-setInterval(()=>{
-  if (!STATUS) return;
-  const now = Date.now();
-  let expire = false;
-  document.querySelectorAll('.st.cool[data-until], .st.off[data-until]').forEach(el => {
-    const remain = Math.ceil((+el.dataset.until - now)/1000);
-    if (remain <= 0){ expire = true; return; }
-    el.textContent = (el.dataset.kind==='invalid' ? t('无效 · 剩 ') : t('冷却 · 剩 ')) + remain + 's';
-  });
-  if (expire) refresh();
-}, 1000);
+/* ============ boot ============ */
+S.lang = localStorage.getItem('lang')==='en' ? 'en' : 'zh';
+applyTheme(localStorage.getItem('theme')==='light' ? 'light' : 'dark');
+renderTopbar(); renderSidebar(); renderMain();
+refresh();
+// per-second live status on the API Key page (cooldown countdown, 可用↔冷却,
+// request/error tallies). Self-guards: only fetches on the API Key tab and
+// when the page is visible; patches cells surgically (no full re-render).
+setInterval(refreshAkStatus, 1000);
 </script>
 </body>
 </html>

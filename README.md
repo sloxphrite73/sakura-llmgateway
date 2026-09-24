@@ -46,6 +46,10 @@ T ──── 429 ──▶ [T, 2T]          success ──▶ [T/2, T]
 - 🧹 **Stream interruption handling** - a mid-stream failure emits an OpenAI-style SSE
   error chunk followed by `data: [DONE]`, so clients end cleanly with no duplicated or
   truncated text
+- 🖼️ **Large context & image input** - the `/v1` proxy lifted axum's default 2 MiB
+  request body limit, so ~1M-token context requests and base64 image inputs go
+  through (when the upstream supports them). Image content blocks pass through
+  same-protocol (OpenAI→OpenAI) and translate cross-protocol (OpenAI↔Anthropic)
 - 📦 **Managed models** - per-provider model catalog (`{ id, enabled }`), one-click
   import from the provider's `/v1/models` (with checkboxes), and an optional allowlist
   mode that rejects models not in the list
@@ -59,12 +63,40 @@ T ──── 429 ──▶ [T, 2T]          success ──▶ [T/2, T]
   The catalog is embedded in the binary and can also be refreshed from GitHub
 - 🎯 **Model routing** - request models as `provider/model` (e.g. `openai/gpt-4o`), or
   set up short **aliases** in the UI (e.g. `fast` → `gpt-4o-mini`)
+- 🧭 **Routing strategy** - a `(provider, model, api_key_id)` triple table; two
+  filter toggles (`lock_model_group` / `lock_provider`, both ON by default = exact
+  provider+model, only rotate keys = the long-standing behavior, zero-surprise
+  upgrade) shrink candidates into four modes — exact / model-first (same logical
+  model across all providers) / provider-first (all that provider's models) /
+  available-first (whole table). Sort = fixed leading `valid ↓` + `non-cooled ↓`
+  (always on, no toggle) + a user stack of 0–3 of 10 keys (A–J: success_rate,
+  rpm, tpm, avg_tftt, token_balance×2, bill_balance×2, price, tps), tiebreak =
+  table-order (D1 cursor rotation → round-robin). Walks to the first valid +
+  non-cooled row; if all valid rows are cooling → `429` + `Retry-After:
+  min(remaining_secs)` (precise seconds from the measured `learned_cooldown`,
+  not a fixed value). `learned_cooldown` feeds `cold`/`remaining_secs`
+  orthogonally; `model_groups` enable cross-provider same-model fallback. The
+  策略 / Strategy tab has a dry-run preview
+- 🌱 **Per-key metric seed** - a brand-new key has no live metrics (rpm/tpm = 0,
+  success_rate = 1.0), so B/C/D/J sorts rank it last and it never gets picked
+  until it accrues traffic. Set `seed_rpm` / `seed_tpm` / `seed_success_rate` /
+  `seed_avg_tftt_ms` / `seed_tps` to preset initial values, automatically
+  overridden once the key serves real traffic (the cooldown prober does not
+  count as traffic). Edited per-key in the API Key page
 - 📊 **Status & statistics** - persistent request stats (`stats.json`): totals, a 24h
   hourly histogram, and success/fail counters per API key, per provider and per model —
   all visible in the web console and queryable via `GET /api/stats`
-- 🖥️ **Web console** - `http://127.0.0.1:8001/` with **Status** and **Config** tabs:
-  manage providers, the key pool (add/remove, per-key cooldown, live status, show/copy
-  key buttons), models, aliases, and settings
+- 📈 **Measured metrics** - per-model avg_TFTT (time to first content token in
+  streaming responses; non-streaming = 0/not shown) on the model card and in
+  `/api/stats`; per-provider RPM/TPM limits are editable + persisted
+  (`rpm_limit` / `tpm_limit`, optional; null = no manual cap, and the console
+  shows the live aggregate of that provider's keys' measured rpm/tpm)
+- 🖥️ **Web console** - `http://127.0.0.1:8001/`, a single-page sakura-themed console
+  rebuilt 1:1 from a token-driven design system (dark/light + EN/中文, persisted):
+  统计/Stats, 提供商/Providers, 模型/Models, 策略/Strategy (filter+sort+dry-run),
+  API Key (live per-second status, smart-cooldown column, per-key metric seed
+  editor, show/copy), and 设置/Settings — manage providers, the key pool, models,
+  aliases, model groups, routing strategy, and settings
 - 💾 **JSON config** - human-readable `gateway.json`, saved atomically on every change
 - 📤 **Config export/import** - download `gateway.json` as a browser file, or import one
   with validate-then-swap semantics: the whole file is rejected on any error, and a valid
@@ -207,15 +239,26 @@ per-provider / per-model success and failure counters. Stats persist to `stats.j
   "default_cooldown_secs": 60,
   "max_attempts": 3,
   "auth": { "enabled": false, "keys": [] },
+  "strategy": {
+    "filter": { "lock_model_group": true, "lock_provider": true },
+    "sort": ["I", "J"]
+  },
+  "model_groups": [
+    { "id": "gpt-4o", "entries": [["openai", "gpt-4o"], ["azure", "gpt-4o"]] }
+  ],
   "providers": [
     {
       "id": "p-xxx",
       "name": "openai",
       "base_url": "https://api.openai.com/v1",
       "model_allowlist_only": false,
+      "rpm_limit": null,
+      "tpm_limit": null,
       "keys": [
         { "id": "k-xxx", "key": "sk-...", "label": "main", "cooldown_secs": null,
-          "learned_cooldown": null }
+          "learned_cooldown": null,
+          "seed_rpm": null, "seed_tpm": null, "seed_success_rate": null,
+          "seed_avg_tftt_ms": null, "seed_tps": null }
       ],
       "models": [
         { "id": "gpt-4o", "enabled": true }
@@ -231,6 +274,16 @@ Notes:
 - `cooldown_secs: null` on a key = use global default
 - `learned_cooldown` is machine-written by the binary-search prober (bracket
   midpoint, ±1s accuracy) and beats `cooldown_secs`
+- `strategy.filter` both ON (default) = exact `(provider, model)`, only rotate
+  keys; `strategy.sort` is 0–3 of A–J (ordered, no dups) — the user sort stack
+- `model_groups` declares the same logical model across providers (entries are
+  `[provider_id, upstream_model]`) for cross-provider fallback; each model
+  belongs to exactly one group
+- `rpm_limit` / `tpm_limit` on a provider = manual RPM/TPM cap (`null` = no cap;
+  the console then shows the live auto-detected aggregate of the provider's keys)
+- `seed_*` on a key = preset initial metrics, auto-overridden once the key serves
+  real traffic (all optional; omitted = built-in defaults, so old configs load
+  unchanged)
 - `models` empty = unmanaged (all models pass through, backward compatible)
 - the file is rewritten (atomically) whenever you change something in the UI
 
@@ -255,8 +308,10 @@ Notes:
 | `/api/config/import` | POST | Validate-then-swap config hot reload |
 | `/api/providers` | GET / POST | List / create providers |
 | `/api/providers/{id}` | PUT / DELETE | Update / delete provider |
+| `/api/providers/{id}/rate-limits` | PUT | Set provider RPM/TPM limits (`{rpm_limit, tpm_limit}`, null = clear) |
 | `/api/providers/{id}/keys` | POST | Add key |
-| `/api/providers/{id}/keys/{key_id}` | DELETE | Delete key |
+| `/api/providers/{id}/keys/{key_id}` | DELETE / PUT | Delete key / update metric seeds |
+| `/api/strategy/dry-run` | POST | Preview routing for a model (routed key + candidates) |
 | `/api/keys/{key_id}/cooldown` | DELETE | Clear key cooldown |
 | `/api/providers/{id}/models` | POST | Add managed model |
 | `/api/providers/{id}/models/import` | POST | Import models from upstream `/v1/models` |

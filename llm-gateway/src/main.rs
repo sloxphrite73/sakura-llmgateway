@@ -55,6 +55,10 @@ async fn main() {
         .route("/v1/messages", post(proxy::anthropic_messages))
         .route("/v1/messages/count_tokens", post(proxy::anthropic_count_tokens))
         .route("/v1/models", get(proxy::list_models))
+        // axum's `Json` extractor caps bodies at 2 MiB by default — that rejects
+        // long-context requests (≈500 K tokens already overflows) and any request
+        // carrying a base64 image. Lift it: the upstream enforces its own limits.
+        .layer(axum::extract::DefaultBodyLimit::disable())
         .with_state(app.clone());
 
     // Admin REST API + Web UI
@@ -67,6 +71,7 @@ async fn main() {
             put(admin::update_provider).delete(admin::delete_provider),
         )
         .route("/api/providers/{id}/price-table", put(admin::update_price_table))
+        .route("/api/providers/{id}/rate-limits", put(admin::set_rate_limits))
         .route("/api/providers/{id}/models", post(admin::add_model))
         .route(
             "/api/providers/{id}/models/{model_id}",
@@ -74,11 +79,15 @@ async fn main() {
         )
         .route("/api/providers/{id}/models/import", post(admin::import_models))
         .route(
+            "/api/providers/{id}/models/{model_id}/context-length",
+            put(admin::set_model_context),
+        )
+        .route(
             "/api/providers/{id}/upstream-models",
             get(admin::upstream_models),
         )
         .route("/api/providers/{id}/keys", post(admin::add_key))
-        .route("/api/providers/{id}/keys/{key_id}", delete(admin::delete_key))
+        .route("/api/providers/{id}/keys/{key_id}", delete(admin::delete_key).put(admin::update_key_seed))
         .route("/api/keys/{key_id}/cooldown", delete(admin::clear_key_cooldown))
         .route("/api/providers/{id}/aliases", post(admin::set_alias))
         .route(

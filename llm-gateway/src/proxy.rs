@@ -179,8 +179,8 @@ pub async fn chat_completions(
         app,
         body,
         Protocol::OpenAi,
-        |app, payload, provider_id, client_model, is_stream| {
-            finish_openai(app, payload, provider_id, client_model, is_stream)
+        |app, payload, provider_id, key_id, client_model, is_stream| {
+            finish_openai(app, payload, provider_id, key_id, client_model, is_stream)
         },
     )
     .await
@@ -203,8 +203,8 @@ pub async fn anthropic_messages(
         app,
         body,
         Protocol::Anthropic,
-        |app, payload, provider_id, client_model, is_stream| {
-            finish_anthropic(app, payload, provider_id, client_model, is_stream)
+        |app, payload, provider_id, key_id, client_model, is_stream| {
+            finish_anthropic(app, payload, provider_id, key_id, client_model, is_stream)
         },
     )
     .await
@@ -326,7 +326,7 @@ async fn forward<F, Fut>(
     finish: F,
 ) -> Response
 where
-    F: FnOnce(Arc<App>, reqwest::Response, String, String, bool) -> Fut,
+    F: FnOnce(Arc<App>, reqwest::Response, String, String, String, bool) -> Fut,
     Fut: std::future::Future<Output = Response>,
 {
     use crate::strategy::{build_candidates, SelectResult};
@@ -462,7 +462,11 @@ where
         let status = resp.status();
         if status.is_success() {
             app.clear_error(&row.api_key_id);
-            return finish(app, resp, row.provider_id, row.api_key_id, is_stream).await;
+            // The `client_model` param of finish_generic is the per-model stats key —
+            // pass the upstream model id (= the managed model id the UI's model card
+            // shows) so per-model request/token/tftt buckets key on mo.id, not the
+            // raw client string (which may be "provider/model" or an alias).
+            return finish(app, resp, row.provider_id, row.api_key_id, row.upstream_model.clone(), is_stream).await;
         }
 
         // Error before first byte. Rotate to the next key for key-scoped failures
@@ -551,6 +555,7 @@ fn finish_openai(
     resp: reqwest::Response,
     provider_id: String,
     key_id: String,
+    client_model: String,
     is_stream: bool,
 ) -> impl std::future::Future<Output = Response> {
     finish_generic(
@@ -558,6 +563,7 @@ fn finish_openai(
         resp,
         provider_id,
         key_id,
+        client_model,
         is_stream,
         /*client_is_anthropic*/ false,
     )
@@ -572,6 +578,7 @@ fn finish_anthropic(
     resp: reqwest::Response,
     provider_id: String,
     key_id: String,
+    client_model: String,
     is_stream: bool,
 ) -> impl std::future::Future<Output = Response> {
     finish_generic(
@@ -579,6 +586,7 @@ fn finish_anthropic(
         resp,
         provider_id,
         key_id,
+        client_model,
         is_stream,
         /*client_is_anthropic*/ true,
     )
@@ -592,6 +600,7 @@ fn finish_generic(
     resp: reqwest::Response,
     provider_id: String,
     key_id: String,
+    client_model: String,
     client_wants_stream: bool,
     client_is_anthropic: bool,
 ) -> impl std::future::Future<Output = Response> {
@@ -617,7 +626,7 @@ fn finish_generic(
                 Ok(bytes) => {
                     let parsed: Result<serde_json::Value, _> = serde_json::from_slice(&bytes);
                     let ok = parsed.as_ref().map(|v| v.get("error").is_none()).unwrap_or(true);
-                    app.record_stat(ok, Some(&key_id), &provider_id, "");
+                    app.record_stat(ok, Some(&key_id), &provider_id, &client_model);
                     if !ok {
                         return error_response_for(
                             StatusCode::BAD_GATEWAY,
@@ -645,6 +654,7 @@ fn finish_generic(
                             None => protocol::estimate_response_tokens(&body),
                         };
                         app.record_token_count(&key_id, total);
+                        app.record_tokens(total, Some(&key_id), &provider_id, &client_model);
                     }
                     // Translate only when the upstream protocol differs from the client's.
                     // The upstream response is in the *upstream's* format; the client
@@ -674,7 +684,7 @@ fn finish_generic(
                 Err(e) => {
                     // Connection dropped before the client saw anything: counted as a
                     // failed request.
-                    app.record_stat(false, Some(&key_id), &provider_id, "");
+                    app.record_stat(false, Some(&key_id), &provider_id, &client_model);
                     return error_response_for(
                         StatusCode::BAD_GATEWAY,
                         format!("upstream connection failed mid-body: {e}"),
@@ -688,14 +698,14 @@ fn finish_generic(
         // (the key served the request); a mid-stream interruption after bytes were
         // sent to the client cannot be retried, so we append an error event in the
         // client's protocol and end the stream cleanly.
-        app.record_stat(true, Some(&key_id), &provider_id, "");
+        app.record_stat(true, Some(&key_id), &provider_id, &client_model);
 
         let up_proto = upstream_proto_of(&app, &provider_id);
         let needs_translation = client_is_anthropic != (up_proto == Protocol::Anthropic);
         if !needs_translation {
             // Same protocol both sides: raw byte passthrough (the old fast path),
             // wrapped in MetricsStream so tftt / usage / tps are still measured.
-            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), up_proto);
+            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto);
             let stream = upstream.map(move |r| match r {
                 Ok(chunk) => Ok::<_, std::io::Error>(chunk),
                 Err(e) => Ok(openai_stream_error_chunk(&e).into_bytes().into()),
@@ -713,7 +723,7 @@ fn finish_generic(
                 .map(|_| "gateway".to_string())
                 .unwrap_or_else(|| "gateway".to_string());
             let mut state = OpenAiToAnthropicStream::new(model);
-            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), up_proto);
+            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto);
             let stream = upstream
                 .map(move |r| -> Result<axum::body::Bytes, std::io::Error> {
                     match r {
@@ -734,7 +744,7 @@ fn finish_generic(
         // Anthropic upstream -> OpenAI client: parse Anthropic SSE events, emit chunks.
         let mut state = AnthropicToOpenAiStream::new();
         let mut buffer: Vec<u8> = Vec::new();
-        let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), up_proto);
+        let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto);
         let stream = upstream.map(move |r| -> Result<axum::body::Bytes, std::io::Error> {
             match r {
                 Ok(chunk) => Ok(translate_anthropic_chunk(&mut state, &mut buffer, &chunk).into_bytes().into()),
@@ -787,6 +797,46 @@ fn scan_usage(chunk: &axum::body::Bytes, proto: Protocol) -> Option<(u64, u64)> 
     None
 }
 
+/// Best-effort SSE first-token scanner: true when a `data:` line in this chunk
+/// carries the first piece of *generated content* — OpenAI `choices[0].delta.content`
+/// (non-empty) or Anthropic `delta.text` (content_block_delta). Distinguishes the
+/// "首字延迟"/TFTT metric from the role/usage/stop chunks (which arrive immediately
+/// or at the end and carry no text). Same split-across-chunks caveat as `scan_usage`.
+fn scan_has_content(chunk: &axum::body::Bytes, proto: Protocol) -> bool {
+    let text = match std::str::from_utf8(chunk) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    if !text.contains("content") && !text.contains("\"text\"") {
+        return false; // pre-filter: role/usage/stop chunks carry neither
+    }
+    for line in text.split_inclusive('\n') {
+        let payload = match line.trim().strip_prefix("data:") {
+            Some(p) => p.trim(),
+            None => continue,
+        };
+        if payload == "[DONE]" || payload.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
+            let has = match proto {
+                Protocol::OpenAi => v
+                    .pointer("/choices/0/delta/content")
+                    .and_then(|c| c.as_str())
+                    .map_or(false, |s| !s.is_empty()),
+                Protocol::Anthropic => v
+                    .pointer("/delta/text")
+                    .and_then(|c| c.as_str())
+                    .map_or(false, |s| !s.is_empty()),
+            };
+            if has {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Transparent wrapper over an upstream `bytes_stream()`: yields each item
 /// unchanged while recording tftt (first chunk), scanning for usage, and on
 /// stream end recording token count + tps. The downstream `.map()` (translation
@@ -795,6 +845,8 @@ struct MetricsStream<S> {
     inner: S,
     app: std::sync::Arc<App>,
     key_id: String,
+    provider_id: String,
+    model: String,
     start: std::time::Instant,
     first: bool,
     usage: Option<(u64, u64)>,
@@ -805,11 +857,13 @@ impl<S> MetricsStream<S>
 where
     S: futures_util::Stream<Item = Result<axum::body::Bytes, reqwest::Error>> + Unpin,
 {
-    fn new(inner: S, app: std::sync::Arc<App>, key_id: String, proto: Protocol) -> Self {
+    fn new(inner: S, app: std::sync::Arc<App>, key_id: String, provider_id: String, model: String, proto: Protocol) -> Self {
         Self {
             inner,
             app,
             key_id,
+            provider_id,
+            model,
             start: std::time::Instant::now(),
             first: true,
             usage: None,
@@ -833,10 +887,15 @@ where
         let this = self.get_mut(); // safe: Self: Unpin
         match this.inner.poll_next_unpin(cx) {
             Poll::Ready(Some(Ok(chunk))) => {
-                if this.first {
+                // TFTT = time to the first *generated content* token (首字延迟),
+                // not the first chunk — OpenAI's role chunk and Anthropic's
+                // message_start arrive immediately and would read ~0. So wait for
+                // the first chunk whose data: line carries actual text.
+                if this.first && scan_has_content(&chunk, this.proto) {
                     this.first = false;
                     let ms = this.start.elapsed().as_millis() as u32;
                     this.app.record_tftt(&this.key_id, ms);
+                    this.app.record_model_tftt(&this.model, ms);
                 }
                 if let Some(u) = scan_usage(&chunk, this.proto) {
                     this.usage = Some(u);
@@ -849,6 +908,7 @@ where
                 if let Some((i, o)) = this.usage.take() {
                     let total = i + o;
                     this.app.record_token_count(&this.key_id, total);
+                    this.app.record_tokens(total, Some(&this.key_id), &this.provider_id, &this.model);
                     let dur = this.start.elapsed().as_secs_f32();
                     if dur > 0.0 && o > 0 {
                         this.app.record_tps(&this.key_id, o as f32 / dur);

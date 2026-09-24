@@ -265,11 +265,15 @@ pub fn build_candidates(cfg: &Config, client_model: &str) -> Result<CandidateSet
                 valid: true,
                 non_cooled: true,
                 remaining_secs: 0,
-                success_rate: 1.0,
-                rpm: 0,
-                tpm: 0,
-                avg_tftt_ms: 0,
-                tps: 0.0,
+                // Spec §2.2 "手动 seed + 自动覆盖": skeleton carries the key's
+                // seed values (fallback to built-in defaults). fill_rows leaves
+                // these untouched when the key has no live history (None branch)
+                // and overwrites them once any request populates pool.metrics.
+                success_rate: k.seed_success_rate.unwrap_or(1.0),
+                rpm: k.seed_rpm.unwrap_or(0),
+                tpm: k.seed_tpm.unwrap_or(0),
+                avg_tftt_ms: k.seed_avg_tftt_ms.unwrap_or(0),
+                tps: k.seed_tps.unwrap_or(0.0),
                 token_balance: None,
                 bill_balance: None,
                 price,
@@ -662,8 +666,13 @@ mod tests {
             label: id.into(),
             cooldown_secs: None,
             learned_cooldown: None,
+            seed_rpm: None,
+            seed_tpm: None,
+            seed_success_rate: None,
+            seed_avg_tftt_ms: None,
+            seed_tps: None,
         };
-        let model = |id: &str| ManagedModel { id: id.into(), enabled: true };
+        let model = |id: &str| ManagedModel { id: id.into(), enabled: true, context_length: None };
         let mut pa_price = BTreeMap::new();
         pa_price.insert("gpt-4o".to_string(), 5.0);
         let pa = Provider {
@@ -678,6 +687,8 @@ mod tests {
             has_token_balance_api: false,
             has_bill_balance_api: false,
             price_table: pa_price,
+            rpm_limit: None,
+            tpm_limit: None,
         };
         let pb = Provider {
             id: "pb".into(),
@@ -691,6 +702,8 @@ mod tests {
             has_token_balance_api: false,
             has_bill_balance_api: false,
             price_table: BTreeMap::new(),
+            rpm_limit: None,
+            tpm_limit: None,
         };
         let groups = vec![ModelGroup {
             id: "gpt-4o".into(),
@@ -788,5 +801,61 @@ mod tests {
         // bare model with no group, no alias, no provider → resolve_model Err.
         let cfg = cfg_two_providers();
         assert!(build_candidates(&cfg, "no-such-model").is_err());
+    }
+
+    #[test]
+    fn build_carries_seed_metrics_in_skeleton() {
+        // spec §2.2 "手动 seed": a brand-new key's candidate row carries the
+        // key's seed values (fallback to built-in defaults) so sort keys work
+        // before any request populates pool.metrics (fill_rows `None` branch).
+        let seeded = ApiKey {
+            id: "s1".into(),
+            key: "sk-s1".into(),
+            label: "s1".into(),
+            cooldown_secs: None,
+            learned_cooldown: None,
+            seed_rpm: Some(60),
+            seed_tpm: Some(240_000),
+            seed_success_rate: Some(0.85),
+            seed_avg_tftt_ms: Some(420),
+            seed_tps: Some(48.0),
+        };
+        let p = Provider {
+            id: "ps".into(),
+            name: "PS".into(),
+            base_url: "http://ps/v1".into(),
+            keys: vec![seeded],
+            models: vec![ManagedModel { id: "m".into(), enabled: true, context_length: None }],
+            model_allowlist_only: false,
+            aliases: BTreeMap::new(),
+            protocol: String::new(),
+            has_token_balance_api: false,
+            has_bill_balance_api: false,
+            price_table: BTreeMap::new(),
+            rpm_limit: None,
+            tpm_limit: None,
+        };
+        let cfg = Config { providers: vec![p], model_groups: vec![], ..Default::default() };
+        let set = build_candidates(&cfg, "ps/m").unwrap();
+        assert_eq!(set.rows.len(), 1);
+        let r = &set.rows[0];
+        assert_eq!(r.rpm, 60, "seed_rpm in skeleton");
+        assert_eq!(r.tpm, 240_000, "seed_tpm in skeleton");
+        assert!((r.success_rate - 0.85).abs() < 1e-9, "seed_success_rate in skeleton");
+        assert_eq!(r.avg_tftt_ms, 420, "seed_avg_tftt_ms in skeleton");
+        assert!((r.tps - 48.0).abs() < 1e-3, "seed_tps in skeleton");
+    }
+
+    #[test]
+    fn build_falls_back_to_defaults_without_seed() {
+        // No seed fields → built-in defaults (success_rate 1.0, others 0).
+        let cfg = cfg_two_providers();
+        let set = build_candidates(&cfg, "pa/gpt-4o").unwrap();
+        let r = set.rows.iter().find(|r| r.api_key_id == "a1").unwrap();
+        assert_eq!(r.rpm, 0);
+        assert_eq!(r.tpm, 0);
+        assert!((r.success_rate - 1.0).abs() < 1e-9);
+        assert_eq!(r.avg_tftt_ms, 0);
+        assert!((r.tps - 0.0).abs() < 1e-3);
     }
 }

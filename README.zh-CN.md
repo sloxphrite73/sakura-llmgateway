@@ -42,6 +42,9 @@ T ──── 429 ──▶ [T, 2T]          成功 ──▶ [T/2, T]
   `max_attempts` × Key 数，默认 3×）；首字节发出后流原样透传，绝不重试
 - 🧹 **流中断处理** - 流式传输中途出错时，追加一个 OpenAI 风格的 SSE 错误块并以
   `data: [DONE]` 干净收尾，客户端不会看到重复或截断的文本
+- 🖼️ **大上下文与图片输入** - `/v1` 代理解除了 axum 默认 2 MiB 请求体限制，约 1M
+  token 的上下文请求与 base64 图片输入均可放行（需上游支持）。图片内容块同协议
+  透传（OpenAI→OpenAI）、跨协议翻译（OpenAI↔Anthropic）
 - 📦 **托管模型** - 每个提供商维护模型目录（`{ id, enabled }`），支持从上游
   `/v1/models` 一键导入（带勾选），可选白名单模式拒绝列表外的模型
 - 🆓 **免费供应商目录** - 控制台「现有提供商」面板内置 19 家免费/有免费额度的
@@ -53,10 +56,31 @@ T ──── 429 ──▶ [T, 2T]          成功 ──▶ [T/2, T]
   目录随二进制内嵌发布，也支持从 GitHub 一键更新
 - 🎯 **模型路由** - 以 `provider/model` 形式请求（如 `openai/gpt-4o`），或在控制台
   配置短**别名**（如 `fast` → `gpt-4o-mini`）
+- 🧭 **路由策略** - 一张 `(provider, model, api_key_id)` 三元组表；两个过滤开关
+  （`lock_model_group` / `lock_provider`，默认都开 = 精确 provider+model、只轮换
+  Key = 长期以来的行为，升级零意外）把候选缩成四种模式——精确 / 模型优先（同一
+  逻辑模型跨所有提供商）/ 提供商优先（该提供商所有模型）/ 可用优先（全表）。排序
+  = 固定前导 `valid ↓` + `non-cooled ↓`（恒开、无开关）+ 用户可堆 0–3 个的 10 种
+  sort key（A–J：success_rate、rpm、tpm、avg_tftt、token_balance×2、
+  bill_balance×2、price、tps），末位 table-order 平局（D1 游标轮转 → 轮询）。从上
+  往下取第一个 valid + 非冷却行；全部 valid 行都在冷却 → `429` + `Retry-After:
+  min(remaining_secs)`（由实测 `learned_cooldown` 推出的精确秒数，非固定值）。
+  `learned_cooldown` 正交地灌入 `cold`/`remaining_secs`；`model_groups` 让"跨提供商
+  同模型 fallback"成立。策略 / Strategy 页有 dry-run 预览
+- 🌱 **每 Key 指标 seed** - 全新 Key 没有实测指标（rpm/tpm = 0、success_rate =
+  1.0），B/C/D/J 排序会把它排最后、攒到流量前永远轮不到。设置 `seed_rpm` /
+  `seed_tpm` / `seed_success_rate` / `seed_avg_tftt_ms` / `seed_tps` 预置初值，
+  Key 一旦服务真实流量即自动覆盖（冷却探测器不计为流量）。在 API Key 页逐 Key 编辑
 - 📊 **状态与统计** - 请求统计持久化到 `stats.json`：总量、24 小时逐时柱状图，以及
   按 Key / 提供商 / 模型的成功失败计数——控制台可视化，也可 `GET /api/stats` 查询
-- 🖥️ **Web 控制台** - `http://127.0.0.1:8001/`，含**状态**与**配置**两个页签：
-  管理提供商、Key 池（增删、每 Key 冷却、实时状态、显示/复制按钮）、模型、别名与设置
+- 📈 **实测指标** - 每模型 avg_TFTT（流式响应首字内容 token 时延；非流式 = 0/不
+  显示）显示在模型卡与 `/api/stats`；每提供商 RPM/TPM 限额可编辑且持久化
+  （`rpm_limit` / `tpm_limit`，可选；null = 无手动上限，控制台显示该提供商各 Key
+  实测 rpm/tpm 的实时聚合）
+- 🖥️ **Web 控制台** - `http://127.0.0.1:8001/`，单页樱花主题控制台，按令牌驱动设计系统
+  1:1 重建（深/浅色 + EN/中文，本地持久）：统计、提供商、模型、策略（filter+sort+dry-run）、
+  API Key（每秒实时状态、智能冷却时长列、每 Key 指标 seed 编辑器、显示/复制）、设置——
+  管理提供商、Key 池、模型、别名、模型组、路由策略与设置
 - 💾 **JSON 配置** - 人类可读的 `gateway.json`，每次修改原子写入
 - 📤 **配置导出/导入** - 浏览器直接下载 `gateway.json`；导入采用"先验证后切换"：
   任何错误整份拒绝，合法文件**热切换无需重启**（进行中的请求在旧状态上完成）
@@ -191,15 +215,26 @@ client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="anything")
   "default_cooldown_secs": 60,
   "max_attempts": 3,
   "auth": { "enabled": false, "keys": [] },
+  "strategy": {
+    "filter": { "lock_model_group": true, "lock_provider": true },
+    "sort": ["I", "J"]
+  },
+  "model_groups": [
+    { "id": "gpt-4o", "entries": [["openai", "gpt-4o"], ["azure", "gpt-4o"]] }
+  ],
   "providers": [
     {
       "id": "p-xxx",
       "name": "openai",
       "base_url": "https://api.openai.com/v1",
       "model_allowlist_only": false,
+      "rpm_limit": null,
+      "tpm_limit": null,
       "keys": [
         { "id": "k-xxx", "key": "sk-...", "label": "main", "cooldown_secs": null,
-          "learned_cooldown": null }
+          "learned_cooldown": null,
+          "seed_rpm": null, "seed_tpm": null, "seed_success_rate": null,
+          "seed_avg_tftt_ms": null, "seed_tps": null }
       ],
       "models": [
         { "id": "gpt-4o", "enabled": true }
@@ -215,6 +250,14 @@ client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="anything")
 - Key 的 `cooldown_secs: null` 表示使用全局默认值
 - `learned_cooldown` 由二分探测器自动写入（区间中点，±1 秒精度），优先级高于
   `cooldown_secs`
+- `strategy.filter` 都开（默认）= 精确 `(provider, model)`、只轮换 Key；
+  `strategy.sort` 为 0–3 个 A–J（有序、不重复）—— 用户排序栈
+- `model_groups` 声明同一逻辑模型跨提供商（条目为 `[provider_id, upstream_model]`）
+  用于跨提供商 fallback；每个模型只属一组
+- 提供商上的 `rpm_limit` / `tpm_limit` = 手动 RPM/TPM 上限（`null` = 无上限；
+  此时控制台显示该提供商各 Key 的实时自动检测聚合）
+- Key 上的 `seed_*` = 预置初始指标，Key 服务真实流量后自动覆盖（均可选；省略 =
+  内置默认值，旧配置无感加载）
 - `models` 为空时视为"未托管"，所有请求照常放行（向后兼容旧配置）
 - 在控制台里做任何修改后，该文件都会被原子性地重写
 
@@ -239,8 +282,10 @@ client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="anything")
 | `/api/config/import` | POST | 配置热重载（先验证后切换） |
 | `/api/providers` | GET / POST | 列出 / 创建提供商 |
 | `/api/providers/{id}` | PUT / DELETE | 更新 / 删除提供商 |
+| `/api/providers/{id}/rate-limits` | PUT | 设置提供商 RPM/TPM 限额（`{rpm_limit, tpm_limit}`，null = 清除） |
 | `/api/providers/{id}/keys` | POST | 添加 Key |
-| `/api/providers/{id}/keys/{key_id}` | DELETE | 删除 Key |
+| `/api/providers/{id}/keys/{key_id}` | DELETE / PUT | 删除 Key / 更新指标 seed |
+| `/api/strategy/dry-run` | POST | 预览某模型的路由（命中的 Key + 候选） |
 | `/api/keys/{key_id}/cooldown` | DELETE | 清除 Key 冷却 |
 | `/api/providers/{id}/models` | POST | 添加托管模型 |
 | `/api/providers/{id}/models/import` | POST | 从上游 `/v1/models` 导入模型 |

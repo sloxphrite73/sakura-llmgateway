@@ -65,6 +65,11 @@ pub(crate) struct PoolRuntime {
     probing: std::collections::HashSet<String>,
     /// Per-key rolling metrics (success_rate / rpm now; tpm/tps/tftt/balance later).
     metrics: HashMap<String, KeyMetrics>,
+    /// Per-model time-to-first-token samples (ms), last `METRIC_SAMPLE_CAP`; the
+    /// model page's avg-TFTT card reads the mean. Keyed by the upstream model id
+    /// (= the managed model id the UI shows). Streaming only (non-stream has no
+    /// "first token"); 0 until the first streamed chunk of a request for that model.
+    model_tftt: HashMap<String, VecDeque<u32>>,
     /// Strategy-layer D1 cursor map (impl-spec §1, §4.1). Keyed by the
     /// candidate-set identifier (D3: `"{group_id}\x1f{provider_or_any}"`); the
     /// value is the round-robin cursor. Replaces the old per-provider
@@ -123,13 +128,10 @@ fn fill_rows(pool: &mut PoolRuntime, rows: &mut [crate::strategy::Row], now: Ins
         // fetcher (None = +∞).
         match pool.metrics.get(&r.api_key_id) {
             None => {
-                r.success_rate = 1.0; // no history = don't penalize new keys
-                r.rpm = 0;
-                r.tpm = 0;
-                r.avg_tftt_ms = 0;
-                r.tps = 0.0;
-                r.token_balance = None;
-                r.bill_balance = None;
+                // No live history: keep the skeleton's seed values (spec §2.2
+                // "手动 seed" — set in build_candidates) for the measured
+                // metrics. Balances are already None (no provider-reported
+                // data for an untouched key). Nothing to overwrite.
             }
             Some(m) => {
                 let total = m.success.len();
@@ -156,6 +158,71 @@ fn fill_rows(pool: &mut PoolRuntime, rows: &mut [crate::strategy::Row], now: Ins
                 r.bill_balance = m.bill_balance;
             }
         }
+        // spec §2.3 quota gate: valid = not-banned AND (when a balance is
+        // measurable) at least one measurable balance > 0. See valid_with_quota.
+        r.valid = valid_with_quota(r.valid, r.token_balance, r.bill_balance);
+    }
+}
+
+/// spec §2.3 `valid` gate (pure, for unit testing). A key is valid iff it is
+/// not-banned AND has available quota. A balance is "measurable" (the provider
+/// reports it via `has_*_balance_api`) exactly when it is `Some` here; `None` =
+/// unmeasurable = +∞ (the keyless case, where not-banned alone suffices). The
+/// spec rule "token_balance>0 OR bill_balance>0" means: if any balance is
+/// measurable, at least one must be positive — exhaust every measurable balance
+/// and the key is not valid (skip it proactively instead of routing then 429'ing).
+fn valid_with_quota(
+    not_banned: bool,
+    token_balance: Option<u64>,
+    bill_balance: Option<f64>,
+) -> bool {
+    if !not_banned {
+        return false;
+    }
+    let measurable = token_balance.is_some() || bill_balance.is_some();
+    if !measurable {
+        return true; // keyless / unmeasured → not-banned suffices
+    }
+    matches!(token_balance, Some(t) if t > 0) || matches!(bill_balance, Some(b) if b > 0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keyless_unmeasured_is_valid_when_not_banned() {
+        // sensenova-style: no balance API → both None → not-banned alone.
+        assert!(valid_with_quota(true, None, None));
+        assert!(!valid_with_quota(false, None, None));
+    }
+
+    #[test]
+    fn exhausted_bill_balance_is_not_valid() {
+        // has_bill_balance_api provider, balance measured at 0 → not valid.
+        assert!(!valid_with_quota(true, None, Some(0.0)));
+    }
+
+    #[test]
+    fn positive_bill_balance_is_valid() {
+        assert!(valid_with_quota(true, None, Some(2.5)));
+    }
+
+    #[test]
+    fn exhausted_token_balance_is_not_valid() {
+        assert!(!valid_with_quota(true, Some(0), None));
+    }
+
+    #[test]
+    fn one_positive_balance_rescues_the_other() {
+        // spec "token_balance>0 OR bill_balance>0": either positive is enough.
+        assert!(valid_with_quota(true, Some(0), Some(1.0)));
+        assert!(valid_with_quota(true, Some(5), Some(0.0)));
+    }
+
+    #[test]
+    fn both_balances_zero_is_not_valid() {
+        assert!(!valid_with_quota(true, Some(0), Some(0.0)));
     }
 }
 
@@ -217,6 +284,14 @@ impl App {
     pub fn record_rotation(&self, provider_id: &str) {
         let mut stats = self.stats.lock().unwrap();
         stats.record_rotation(provider_id);
+    }
+
+    /// Attribute `tokens` (input+output) to the total, current hour, key, provider
+    /// and model stats buckets. Called from the proxy once the upstream's `usage` is
+    /// known (non-stream: from the buffered body; stream: from the usage chunk).
+    pub fn record_tokens(&self, tokens: u64, key_id: Option<&str>, provider_id: &str, model: &str) {
+        let mut stats = self.stats.lock().unwrap();
+        stats.add_tokens(tokens, key_id, provider_id, model, now_ms());
     }
 
     /// Save stats.json (call from the periodic flusher). Prunes the histogram first.
@@ -368,6 +443,27 @@ impl App {
         m.tftt_samples.push_back(ms);
         while m.tftt_samples.len() > METRIC_SAMPLE_CAP {
             m.tftt_samples.pop_front();
+        }
+    }
+
+    /// Record a per-model time-to-first-token sample (ms) — streaming only. Keys
+    /// the model-page avg-TFTT card by the upstream model id (= managed model id).
+    pub(crate) fn record_model_tftt(&self, model: &str, ms: u32) {
+        let mut pool = self.pool.lock().unwrap();
+        let s = pool.model_tftt.entry(model.to_string()).or_default();
+        s.push_back(ms);
+        while s.len() > METRIC_SAMPLE_CAP {
+            s.pop_front();
+        }
+    }
+
+    /// Mean per-model TFTT (ms), or 0 when no streamed sample yet.
+    pub fn model_avg_tftt(&self, model: &str) -> u32 {
+        let pool = self.pool.lock().unwrap();
+        match pool.model_tftt.get(model) {
+            None => 0,
+            Some(s) if s.is_empty() => 0,
+            Some(s) => (s.iter().map(|&v| v as u64).sum::<u64>() / s.len() as u64) as u32,
         }
     }
 

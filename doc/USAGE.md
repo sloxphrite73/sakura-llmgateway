@@ -98,7 +98,9 @@ ABIs into a universal APK, and a foreground service runs and supervises it.
 ---
 ## 3. Web console
 
-Open `http://127.0.0.1:8001/`. From top to bottom:
+Open `http://127.0.0.1:8001/`. The console is a multi-tab single page
+(统计/Stats · 提供商/Providers · 模型/Models · 策略/Strategy · API Key · 设置/Settings;
+dark/light + EN/中文, persisted to localStorage). By section:
 
 ### Global settings
 
@@ -149,6 +151,35 @@ Each provider card manages one upstream:
 | 🟡 冷却 · 剩余 Xs / Cooling | Temporarily benched (429 or 5xx); auto-recovers at 0s |
 | 🔴 无效 · 剩余 Xs / Invalid | Auth was rejected (401/403) — quarantined for 30 min because retrying cannot succeed. Click **解除无效 / Clear** after fixing the key to restore it immediately. |
 
+### Strategy
+
+The **策略 / Strategy** tab configures the routing strategy (see §4.2):
+
+- **Two filter toggles** — `lock_model_group` and `lock_provider` (both ON by
+  default = exact provider+model, only rotate keys). The combination picks one of
+  four candidate modes (exact / model-first / provider-first / available-first).
+- **Sort stack** — three slots for the A–J sort keys (success_rate, rpm, tpm,
+  avg_tftt, token/bill balance ×2, price, tps); the fixed `valid ↓` + `non-cooled ↓`
+  leads are always on and not shown.
+- **Dry-run preview** — pick a model (+ optional provider) and run a simulated
+  route: it shows the routed key and the full candidate list with each key's
+  valid/cooling/remaining state and metrics.
+
+### API Key page
+
+A global table of every key across all providers (one row per key):
+
+- **智能冷却时长 / Smart cooldown** column — each key's effective cooldown
+  (`learned_cooldown` → per-key `cooldown_secs` → global default).
+- **状态 / Status** column — 可用 / 冷却 · 剩 Xs / 无效; the page polls
+  `/api/status` **once per second** and surgically updates the status, cooldown
+  countdown, request count and error cells, so the countdown ticks down live and
+  keys flip 可用↔冷却 as they recover. The key show/hide toggle and any open
+  editor are not disrupted.
+- **Seed** — a `Seed` button per key opens an edit card for the five metric seeds
+  (RPM / TPM / success_rate / avg_tftt / TPS; empty = clear), see §4.3.
+- **显示 / 复制 / 删除** — reveal (masked → full), copy, or delete a key.
+
 ### Theme & language
 
 - The ☀️/🌙 button in the masthead switches between light and dark mode; the adjacent 「EN / 中」 button switches the whole interface between English and Chinese — every string, including tables, buttons, dialogs and input placeholders. Both choices are remembered per browser (localStorage); the language defaults to the browser's setting (added in v0.3.2).
@@ -195,6 +226,70 @@ hour (`RELEARN_AFTER_SECS = 3600`); only one prober per key at a time.
    through untouched — no mid-stream key switching (it would corrupt output).
 8. Every failed request in an agent conversation is just another
    `/v1/chat/completions` call: one client request → one key per attempt.
+
+### 4.2 Routing strategy
+
+On top of the round-robin + cooldown behavior above sits a configurable strategy
+layer (the 策略 / Strategy tab). It treats the pool as a `(provider, model,
+api_key_id)` triple table and, per request:
+
+1. **Resolve** the request model → `(provider, model)` + model group. A bare
+   model name (no `provider/` prefix, no alias) leaves the provider unresolved,
+   which auto-degrades `lock_provider` to OFF (you can't lock a provider the
+   request didn't name).
+2. **Filter** — two toggles shrink the table to a candidate set:
+
+   | `lock_model_group` | `lock_provider` | Candidate set |
+   |---|---|---|
+   | ON | ON | exact `(provider, model)` — only rotate keys (default) |
+   | ON | OFF | the model's group across all providers (model-first) |
+   | OFF | ON | every model of the resolved provider (provider-first) |
+   | OFF | OFF | the whole table (available-first) |
+
+3. **Sort** — comparator = fixed leading `valid ↓` + `non-cooled ↓` (always on,
+   no toggle) + the user's 0–3 sort keys (A–J), then table-order (D1 cursor
+   rotation → round-robin load balancing):
+
+   | ID | Attribute | Dir | ID | Attribute | Dir |
+   |---|---|---|---|---|---|
+   | A | success_rate | ↓ | G | bill_balance | ↓ |
+   | B | rpm | ↓ | H | bill_balance | ↑ |
+   | C | tpm | ↓ | I | price | ↑ |
+   | D | avg_tftt | ↑ | J | tps | ↓ |
+   | E | token_balance | ↓ | | | |
+   | F | token_balance | ↑ | | | |
+
+   `token_balance` / `bill_balance` use `+∞` when the provider doesn't report
+   them (`None`); `∞` sorts first under `↓` (best) and last under `↑`. The
+   measured attributes (rpm/tpm/success_rate/avg_tftt/tps) are always finite.
+4. **Walk** — scan top-down, take the first `valid + non-cooled` row; route it.
+5. **Terminal**:
+   - routed → serve that `(provider, model, api_key_id)`;
+   - no valid+non-cooled but valid rows exist (all cooling) → `429` +
+     `Retry-After: min(remaining_secs)` (precise seconds from the measured
+     `learned_cooldown` — the differentiator vs fixed-cooldown routers);
+   - no valid row → `429` (no Retry-After; invalid keys don't recover by
+     waiting);
+   - empty candidate set → `429`.
+
+`learned_cooldown` (§4.1) feeds `cold`/`remaining_secs` **orthogonally** — the
+strategy layer only reads it. **Model groups** (`model_groups` in the config) let
+"model-first" fall back across providers: a group is the *same* logical model
+offered by one or more providers (e.g. `gpt-4o` = `{openai/gpt-4o, azure/gpt-4o}`);
+each model belongs to exactly one group.
+
+### 4.3 Per-key metric seed (manual seed + auto-override)
+
+A brand-new key has no live metrics — `rpm`/`tpm` = 0, `success_rate` = 1.0,
+`avg_tftt` = 0, `tps` = 0 — so any B/C/D/J sort ranks it last and it never gets
+picked until it accrues traffic. To let new keys participate from the start, set
+a **seed**: `seed_rpm`, `seed_tpm`, `seed_success_rate`, `seed_avg_tftt_ms`,
+`seed_tps`. These preset initial values are used only while the key has no live
+measurement history; the moment the key serves real traffic the live values take
+over (the cooldown prober does **not** count as traffic, so probe-only keys keep
+using their seed). Set/clear them per key in the API Key page (`Seed` button) or
+via `PUT /api/providers/{id}/keys/{key_id}` (null = clear). All optional; omitted
+= built-in defaults, so old configs load unchanged.
 
 ---
 
@@ -299,14 +394,25 @@ through byte-for-byte.
   "default_cooldown_secs": 60,
   "max_attempts": 3,
   "auth": { "enabled": false, "keys": [] },
+  "strategy": {
+    "filter": { "lock_model_group": true, "lock_provider": true },
+    "sort": ["I", "J"]
+  },
+  "model_groups": [
+    { "id": "gpt-4o", "entries": [["openai", "gpt-4o"], ["azure", "gpt-4o"]] }
+  ],
   "providers": [
     {
       "id": "p-xxx",
       "name": "openai",
       "base_url": "https://api.openai.com/v1",
       "protocol": "openai",
+      "rpm_limit": null,
+      "tpm_limit": null,
       "keys": [
-        { "id": "k-xxx", "key": "sk-...", "label": "main", "cooldown_secs": null }
+        { "id": "k-xxx", "key": "sk-...", "label": "main", "cooldown_secs": null,
+          "seed_rpm": null, "seed_tpm": null, "seed_success_rate": null,
+          "seed_avg_tftt_ms": null, "seed_tps": null }
       ],
       "models": [ { "id": "gpt-4o", "enabled": true } ],
       "model_allowlist_only": false,
@@ -323,6 +429,11 @@ through byte-for-byte.
 | `max_attempts` | Retry budget multiplier (effective budget = × key count) |
 | `auth` | Optional Bearer auth for the local `/v1` API |
 | `keys[].cooldown_secs` | Per-key cooldown override; `null` = global default |
+| `keys[].seed_*` | Preset initial metrics (`seed_rpm`/`seed_tpm`/`seed_success_rate`/`seed_avg_tftt_ms`/`seed_tps`); auto-overridden once the key serves traffic. All optional, see §4.3 |
+| `providers[].rpm_limit` / `tpm_limit` | Manual RPM/TPM cap; `null` = no cap (console shows the live auto-detected aggregate) |
+| `strategy.filter` | `lock_model_group` + `lock_provider` (both ON = exact provider+model); see §4.2 |
+| `strategy.sort` | 0–3 of A–J (ordered, no dups) — the user sort stack |
+| `model_groups` | Same logical model across providers (entries `[provider_id, upstream_model]`); see §4.2 |
 | `models` | Managed catalog; empty = unmanaged |
 | `model_allowlist_only` | Reject models not in the (non-empty) list |
 | `aliases` | Client-visible name → upstream model |
@@ -371,7 +482,9 @@ All on `http://127.0.0.1:8001`:
 | `GET /api/status` | Full snapshot: settings + per-provider keys (masked) with cooling/invalid/requests/last_error |
 | `GET/POST /api/providers` | List / create providers |
 | `PUT/DELETE /api/providers/{id}` | Update / delete a provider |
-| `POST /api/providers/{id}/keys` · `DELETE /api/providers/{id}/keys/{key_id}` | Add / remove keys |
+| `POST /api/providers/{id}/keys` · `DELETE /api/providers/{id}/keys/{key_id}` · `PUT /api/providers/{id}/keys/{key_id}` | Add / remove keys / update a key's metric seeds |
+| `PUT /api/providers/{id}/rate-limits` | Set provider RPM/TPM limits (`{rpm_limit, tpm_limit}`, null = clear) |
+| `POST /api/strategy/dry-run` | Preview routing for a model (routed key + candidates) |
 | `DELETE /api/keys/{key_id}/cooldown` | Clear a key's cooldown **or** invalid quarantine |
 | `POST /api/providers/{id}/models` · `DELETE .../models/{model_id}` · `PUT .../models/{model_id}` | Add / remove / toggle a managed model |
 | `GET /api/providers/{id}/upstream-models` | Fetch the provider's live `/v1/models` |
