@@ -104,6 +104,7 @@ async fn main() {
         .route("/api/stats", get(admin::get_stats))
         .route("/api/config/export", get(admin::export_config))
         .route("/api/config/import", post(admin::import_config))
+        .route("/api/config/import-legacy", post(admin::import_legacy_config))
         .route("/api/free-catalog", get(free_catalog::get_catalog))
         .route("/api/free-catalog/refresh", post(free_catalog::refresh_catalog))
         .with_state(app.clone());

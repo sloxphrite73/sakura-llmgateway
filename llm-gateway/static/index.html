@@ -177,7 +177,7 @@ const EN = {
   '全局设置 · 端口修改后重启生效':'Global settings · port changes need restart', '基本':'Basic',
   '默认冷却时间（秒）':'Default cooldown (s)', '每请求最大尝试次数':'Max attempts per request', 'API 端口':'API port', 'UI 端口':'UI port',
   '启用本地 API 鉴权':'Enable local API auth', '鉴权 Key，逗号分隔':'Auth keys, comma-separated', '保存设置':'Save settings',
-  '配置文件':'Config file', '导出配置':'Export config', '导入配置':'Import config', 'gateway.json · 导入即时热生效':'gateway.json · import hot-reloads',
+  '配置文件':'Config file', '导出配置':'Export config', '导入配置':'Import config', '导入旧版配置':'Import legacy config', 'gateway.json · 导入即时热生效':'gateway.json · import hot-reloads', '旧版导入：仅采纳提供商/Key/模型/智能冷却，保留当前全局设置':'Legacy import: adopts only providers/keys/models/learned-cooldown; keeps current global settings', '导入旧版配置 {n}？仅采纳提供商/Key/模型/智能冷却，保留当前全局设置。':'Import legacy config {n}? Adopts only providers/keys/models/learned-cooldown; keeps current global settings.',
   '添加提供商':'Add provider', '从免费目录选一家，或自定义填入':'Pick from the free catalog, or fill in custom',
   '自定义提供商':'Custom provider', '手动填写 base_url、协议与模型':'Manually fill base_url, protocol, models',
   '已有的提供商':'Existing providers', '从免费目录选一家，预填 base_url / 协议 / 模型':'Pick from the free catalog; prefill base_url / protocol / models',
@@ -196,7 +196,7 @@ const EN = {
   '删除该 Key？':'Delete this key?',
   '删除模型 {m}？指向它的别名将无法使用。':'Delete model {m}? Aliases pointing to it will stop working.',
   '导入 {n} 将整体替换当前配置（含端口与鉴权设置），确定继续？':'Importing {n} will fully replace the current config (ports & auth included). Continue?',
-  '暂无数据':'No data yet',
+  '暂无数据':'No data yet', '暂无提供商，点击「+ 添加」创建':'No providers yet — click "+ Add" to create one',
   /* toast feedback strings for wired (real-API) mutations */
   '已保存':'Saved', '已删除':'Deleted', '添加成功':'Added', '添加失败: ':'Add failed: ',
   '导入成功':'Imported', '导入失败: ':'Import failed: ', '已触发下载':'Download started',
@@ -313,23 +313,25 @@ function renderOverview(m){
 
 /* ---------- providers (internal master-detail, 限额 folded in) ---------- */
 function renderProviders(m){
-  if (!PROVIDERS.length){ m.innerHTML = `<h2 class="board-title">${t('提供商')}</h2><div class="board-note">${t('暂无数据')}</div>`; return; }
-  const sel = (S.localProv && PROVIDERS.find(p=>p.id===S.localProv)) ? S.localProv : PROVIDERS[0].id;
+  // Always render the prov-board (with the "+ 添加" head) — even when there are
+  // no providers yet (fresh install / empty config). The old early-return here
+  // showed only "暂无数据" with no way to add the first provider.
+  const sel = (S.localProv && PROVIDERS.find(p=>p.id===S.localProv)) ? S.localProv : (PROVIDERS[0] ? PROVIDERS[0].id : null);
   S.localProv = sel;
-  const p = PROVIDERS.find(x=>x.id===sel) || PROVIDERS[0];
+  const p = PROVIDERS.find(x=>x.id===sel);
   m.innerHTML = `
     <div class="prov-board">
       <div class="prov-list-col">
         <div class="pl-head"><span>${t('提供商')}</span><span class="add" onclick="enterAdd()">${t('+ 添加')}</span></div>
-        ${PROVIDERS.map(p=>{ const kc=KEYS.filter(k=>k.prov===p.id).length; return `
+        ${PROVIDERS.length ? PROVIDERS.map(p=>{ const kc=KEYS.filter(k=>k.prov===p.id).length; return `
         <div class="pl-item ${sel===p.id?'active':''}" onclick="setLocalProv('${p.id}')">
           <span class="pdot" style="background:${p.dot}"></span>
           <span class="pl-name">${esc(p.name)}</span>
           <span class="pl-badge">${kc}</span>
-        </div>`; }).join('')}
+        </div>`; }).join('') : `<div class="faint" style="padding:0.75rem 1rem">${t('暂无数据')}</div>`}
       </div>
       <div class="prov-detail-col">
-        ${S.addState ? renderAddView() : `<h2 class="board-title">${esc(p.name)}</h2><div class="board-note">${t('基本信息 + 限额（已归并到提供商下）')}</div>${providerDetail(p)}`}
+        ${S.addState ? renderAddView() : (p ? `<h2 class="board-title">${esc(p.name)}</h2><div class="board-note">${t('基本信息 + 限额（已归并到提供商下）')}</div>${providerDetail(p)}` : `<h2 class="board-title">${t('提供商')}</h2><div class="board-note">${t('暂无提供商，点击「+ 添加」创建')}</div>`)}
       </div>
     </div>`;
 }
@@ -1161,7 +1163,17 @@ function renderSettings(m){
     </div>
     <div class="section">
       <div class="section-title">${t('配置文件')}</div>
-      <div class="card card-pad"><div class="row"><button onclick="exportConfig()">${t('导出配置')}</button><button onclick="document.getElementById('import-file').click()">${t('导入配置')}</button><input type="file" id="import-file" accept=".json,application/json" style="display:none" onchange="importConfig(event)"><span class="faint" style="font-size:0.75rem">${t('gateway.json · 导入即时热生效')}</span></div></div>
+      <div class="card card-pad">
+        <div class="row">
+          <button onclick="exportConfig()">${t('导出配置')}</button>
+          <button onclick="document.getElementById('import-file').click()">${t('导入配置')}</button>
+          <button onclick="document.getElementById('import-legacy-file').click()">${t('导入旧版配置')}</button>
+          <input type="file" id="import-file" accept=".json,application/json" style="display:none" onchange="importConfig(event)">
+          <input type="file" id="import-legacy-file" accept=".json,application/json" style="display:none" onchange="importLegacyConfig(event)">
+        </div>
+        <div class="faint" style="font-size:0.75rem;margin-top:0.625rem">${t('gateway.json · 导入即时热生效')}</div>
+        <div class="faint" style="font-size:0.75rem">${t('旧版导入：仅采纳提供商/Key/模型/智能冷却，保留当前全局设置')}</div>
+      </div>
     </div>`;
 }
 async function saveSettings(){
@@ -1185,6 +1197,19 @@ async function importConfig(ev){
     await api('POST', '/api/config/import', { content });
     await refresh(); toast(t('导入成功'));
   } catch(e){ console.error('importConfig', e); toast(t('导入失败: ')+e.message); }
+}
+async function importLegacyConfig(ev){
+  // Selective merge: adopt only the imported config's providers (which carry
+  // keys + models + learned_cooldown). Keep the current global settings (ports/
+  // auth/cooldown/strategy/model_groups) untouched. For migrating a pre-UI-refactor
+  // gateway config into the current one without clobbering local settings.
+  const file = ev.target.files[0]; ev.target.value=''; if (!file) return;
+  if (!confirm(t('导入旧版配置 {n}？仅采纳提供商/Key/模型/智能冷却，保留当前全局设置。').replace('{n}', file.name))) return;
+  try {
+    const content = await file.text(); JSON.parse(content);
+    await api('POST', '/api/config/import-legacy', { content });
+    await refresh(); toast(t('导入成功'));
+  } catch(e){ console.error('importLegacyConfig', e); toast(t('导入失败: ')+e.message); }
 }
 
 /* ============ adapters: real API responses → prototype mock shapes ============ */

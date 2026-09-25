@@ -595,6 +595,26 @@ pub async fn import_config(
     ok(cfg)
 }
 
+/// POST /api/config/import-legacy — selective merge for migrating a pre-UI-refactor
+/// gateway config into the current one. Parses the imported config (lenient — serde
+/// defaults fill the new fields the old config lacks), then adopts ONLY its
+/// `providers` (which carry keys + models + `learned_cooldown`). The current global
+/// settings (ports/auth/cooldown/max_attempts/strategy/model_groups/currency_rates)
+/// are kept untouched — only provider data is replaced.
+pub async fn import_legacy_config(
+    State(app): State<std::sync::Arc<App>>,
+    Json(input): Json<ImportConfigInput>,
+) -> Response {
+    let parsed = match crate::config::Config::parse_str(&input.content) {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+    let snapshot = app.write_config(|c| {
+        c.providers = parsed.providers;
+    });
+    ok(snapshot)
+}
+
 // ---------- strategy ----------
 
 /// GET /api/strategy — the current routing strategy (filter toggles + sort
