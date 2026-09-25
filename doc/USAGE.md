@@ -117,9 +117,10 @@ dark/light + EN/中文, persisted to localStorage). By section:
 
 The "Provider catalog" panel at the top of the Config page ships a curated set of
 **free / free-tier OpenAI-compatible upstreams** — SiliconFlow, Z.AI GLM, OpenRouter
-`:free`, Pollinations (keyless), Cerebras, NVIDIA NIM, Groq, Mistral, Cloudflare
+`:free`, Pollinations (keyless), NVIDIA NIM, Groq, Mistral, Cloudflare
 Workers AI, Google Gemini, SambaNova, Hugging Face, Fireworks, Novita, Requesty,
-Cohere, Alibaba DashScope, Volcengine Doubao, Moonshot Kimi:
+Cohere, Alibaba DashScope, Volcengine Doubao, Moonshot Kimi, AI21, Baidu Qianfan,
+Stepfun, iFlyTek Spark, Tencent Hunyuan, ModelScope, Infermatic:
 
 - Each card shows free-tier notes, the preset free model list (expandable), a
   **setup guide** link (pointing at step-by-step docs in this repo under

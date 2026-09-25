@@ -31,5 +31,5 @@
 ## 5. 注意事项
 
 - base_url 以 `/v1beta/openai/` 结尾（不是 `/v1`），网关已按官方文档原样配置，勿改
-- 重度突发会触发 429，建议与 SiliconFlow / Cerebras / Groq 组成多供应商池
+- 重度突发会触发 429，建议与 SiliconFlow / SambaNova / Groq 组成多供应商池
 - 模型版本会轮换，以 [ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models) 为准

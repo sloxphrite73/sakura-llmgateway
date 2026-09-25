@@ -31,5 +31,5 @@
 
 ## 5. 注意事项
 
-- 免费层日请求量有限，超过后返回 429，建议与 SiliconFlow / Cerebras 组成多供应商池
+- 免费层日请求量有限，超过后返回 429，建议与 SiliconFlow / SambaNova 组成多供应商池
 - 模型列表以 [console.groq.com/docs/models](https://console.groq.com/docs/models) 为准

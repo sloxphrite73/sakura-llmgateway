@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-09-17",
+  "updated": "2026-09-25",
   "providers": [
     {
       "id": "siliconflow",
@@ -10,8 +10,8 @@
       "keyless": false,
       "signup_url": "https://cloud.siliconflow.cn/account/ak",
       "guide_url": "doc/free-providers/siliconflow.md",
-      "notes_zh": "注册即送额度；DeepSeek / Qwen 等多款小模型永久免费",
-      "notes_en": "Free credits on signup; several small models (DeepSeek/Qwen) free forever",
+      "notes_zh": "注册即送额度；DeepSeek / Qwen 等多款小模型永久免费（免费 SKU 列表高频轮换，以价格页为准）",
+      "notes_en": "Free credits on signup; several small models (DeepSeek/Qwen) free forever (the free-SKU list rotates often — confirm on the pricing page)",
       "free_models": [
         "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
         "deepseek-ai/DeepSeek-V3",
@@ -28,12 +28,11 @@
       "keyless": false,
       "signup_url": "https://z.ai/manage-apikey/apikey-list",
       "guide_url": "doc/free-providers/zai.md",
-      "notes_zh": "GLM-4-Flash 系列免费；新用户赠翻译/体验额度",
-      "notes_en": "GLM-4-Flash series is free; new users get trial credits",
+      "notes_zh": "GLM-4.5-Flash / GLM-4.7-Flash 免费；新用户赠翻译/体验额度（旗舰 GLM-5.3-Flash 为付费）",
+      "notes_en": "GLM-4.5-Flash and GLM-4.7-Flash are free; new users get trial credits (flagship GLM-5.3-Flash is paid)",
       "free_models": [
-        "glm-4-flash",
-        "glm-4-flashx",
-        "glm-4.5-flash"
+        "glm-4.5-flash",
+        "glm-4.7-flash"
       ]
     },
     {
@@ -44,15 +43,12 @@
       "keyless": false,
       "signup_url": "https://openrouter.ai/keys",
       "guide_url": "doc/free-providers/openrouter.md",
-      "notes_zh": "带 :free 后缀的模型免费（有每日请求数限制）；充 $10 可提升限额",
-      "notes_en": "Models with a :free suffix are free (daily request caps); $10 top-up raises limits",
+      "notes_zh": "带 :free 后缀的模型免费（有每日请求数限制，且列表高频轮换）；充 $10 可提升限额。建议添加后从上游 /v1/models 重新拉取当前 :free 列表",
+      "notes_en": "Models with a :free suffix are free (daily request caps; the list rotates fast); $10 top-up raises limits. Re-import the current :free list from upstream /v1/models after adding",
       "free_models": [
-        "deepseek/deepseek-chat-v3.1:free",
-        "deepseek/deepseek-r1:free",
-        "qwen/qwen3-coder:free",
-        "moonshotai/kimi-k2:free",
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "google/gemini-2.0-flash-exp:free"
+        "inclusionai/ling-3.0-flash-fin:free",
+        "inclusionai/ling-3.0-flash-sante:free",
+        "stealth/space-bunny-alpha"
       ]
     },
     {
@@ -67,25 +63,7 @@
       "notes_en": "Works without a key (anonymous rate limits); a free token raises the caps",
       "free_models": [
         "openai",
-        "openai-fast",
-        "openai-large"
-      ]
-    },
-    {
-      "id": "cerebras",
-      "name": "Cerebras",
-      "base_url": "https://api.cerebras.ai/v1",
-      "protocol": "openai",
-      "keyless": false,
-      "signup_url": "https://cloud.cerebras.ai",
-      "guide_url": "doc/free-providers/cerebras.md",
-      "notes_zh": "免费层每天约 100 万 tokens，速度极快（专用推理芯片）",
-      "notes_en": "Free tier ~1M tokens/day, extremely fast (dedicated inference silicon)",
-      "free_models": [
-        "llama3.1-8b",
-        "llama-3.3-70b",
-        "qwen-3-32b",
-        "gpt-oss-120b"
+        "openai-fast"
       ]
     },
     {
@@ -113,14 +91,13 @@
       "keyless": false,
       "signup_url": "https://console.groq.com/keys",
       "guide_url": "doc/free-providers/groq.md",
-      "notes_zh": "免费层有每日/每分钟限额，Llama 系列速度业界最快之一",
-      "notes_en": "Free tier with daily/per-minute caps; fastest Llama hosting around",
+      "notes_zh": "免费层（无需绑卡）有每日/每分钟限额，区别于付费 Developer 档；gpt-oss 系列为当前免费主力（preview 模型可能随时下线）",
+      "notes_en": "Free tier (no card) with daily/per-minute caps, distinct from the paid Developer tier; gpt-oss models are the current free mainstay (preview models may be discontinued at short notice)",
       "free_models": [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
         "openai/gpt-oss-120b",
-        "qwen/qwen3-32b",
-        "moonshotai/kimi-k2-instruct"
+        "openai/gpt-oss-20b",
+        "qwen/qwen3.8-27b",
+        "openai/gpt-oss-safeguard-20b"
       ]
     },
     {
@@ -293,11 +270,11 @@
       "keyless": false,
       "signup_url": "https://console.volcengine.com/ark",
       "guide_url": "doc/free-providers/volcengine-ark.md",
-      "notes_zh": "新用户实名认证后享安心体验模式免费额度（无需绑卡）；doubao-seed 模型 id 带日期后缀且频繁轮换，请在控制台模型列表确认当前可用 id",
-      "notes_en": "New users get free quota via safe-experience mode after real-name auth (no card); doubao-seed model IDs are date-suffixed and rotate — confirm current IDs in the console model list",
+      "notes_zh": "新用户实名认证后享安心体验模式免费额度（每模型约 50 万 token，无需绑卡）；doubao-seed 模型 id 带日期后缀且频繁轮换，请在控制台模型列表确认当前可用 id",
+      "notes_en": "New users get ~500K-token free quota per model via safe-experience mode after real-name auth (no card); doubao-seed model IDs are date-suffixed and rotate — confirm current IDs in the console model list",
       "free_models": [
-        "doubao-seed-2-1-pro-260628",
-        "doubao-seed-2-0-lite-260428"
+        "doubao-seed-2-1-pro-260915",
+        "doubao-seed-2-1-turbo-260628"
       ]
     },
     {
@@ -313,6 +290,117 @@
       "free_models": [
         "kimi-k2.6",
         "kimi-k2.7-code"
+      ]
+    },
+    {
+      "id": "ai21",
+      "name": "AI21",
+      "base_url": "https://api.ai21.com/studio/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://studio.ai21.com/",
+      "guide_url": "doc/free-providers/ai21.md",
+      "notes_zh": "新账号赠 $10 免费额度（3 个月有效，无需绑卡即可开始），可用于 Jamba Large/Mini（Mamba-Transformer 混合架构，256K 上下文）；到期或用尽后才需绑定支付方式",
+      "notes_en": "New accounts get a $10 free credit valid 3 months (no card to start), usable on Jamba Large/Mini (Mamba-Transformer hybrid, 256K context); billing info required only after the trial expires/exceeds",
+      "free_models": [
+        "jamba-large",
+        "jamba-mini"
+      ]
+    },
+    {
+      "id": "baidu-qianfan",
+      "name": "Baidu ERNIE / Qianfan (百度千帆)",
+      "base_url": "https://qianfan.baidubce.com/v2",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://cloud.baidu.com/product-s/qianfan_home",
+      "guide_url": "doc/free-providers/baidu-qianfan.md",
+      "notes_zh": "百度千帆 ModelBuilder，OpenAI 兼容；新用户实名认证后赠 20 元代金券（全平台无门槛、1 个月有效、无需绑卡），可免费调用 ernie-4.5/ernie-5.0/deepseek-v4.1-flash 等；代金券到期按量付费",
+      "notes_en": "Baidu Qianfan ModelBuilder, OpenAI-compatible; new users get a ¥20 voucher after real-name auth (platform-wide, 1 month, no card) usable on ernie-4.5/ernie-5.0/deepseek-v4.1-flash; pay-as-you-go after the voucher expires",
+      "free_models": [
+        "ernie-4.5-turbo-32k",
+        "ernie-5.0",
+        "deepseek-v4.1-flash"
+      ]
+    },
+    {
+      "id": "stepfun",
+      "name": "Stepfun (阶跃星辰)",
+      "base_url": "https://api.stepfun.com/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://platform.stepfun.com/",
+      "guide_url": "doc/free-providers/stepfun.md",
+      "notes_zh": "阶跃星辰开放平台，OpenAI 兼容；新用户赠送额度（实名认证无需绑卡，有有效期），可用 step-5-preview / step-3.7-flash / step-3.5-flash；仅赠送额度时为 V0 速率档（5 并发 / 100 RPM / 500K TPM）",
+      "notes_en": "Stepfun open platform, OpenAI-compatible; new users get gifted credits (real-name auth, no card, expires) usable on step-5-preview / step-3.7-flash / step-3.5-flash; free-only users sit at rate tier V0 (5 concurrency / 100 RPM / 500K TPM)",
+      "free_models": [
+        "step-5-preview",
+        "step-3.7-flash",
+        "step-3.5-flash"
+      ]
+    },
+    {
+      "id": "iflytek-spark",
+      "name": "iFlyTek Spark (讯飞星火)",
+      "base_url": "https://spark-api-open.xf-yun.com/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://xinghuo.xfyun.cn/sparkapi",
+      "guide_url": "doc/free-providers/iflytek-spark.md",
+      "notes_zh": "科大讯飞星火，OpenAI 兼容（用控制台 APIPassword 作 Bearer token）；lite 版永久免费，另可在产品页领取免费额度（实名认证无需绑卡）；模型 id 含 lite / generalv3 / generalv3.5 / 4.0Ultra",
+      "notes_en": "iFlyTek Spark, OpenAI-compatible (uses the console APIPassword as a Bearer token); the lite model is perpetually free, plus a claimable free quota on the product page (real-name auth, no card); model IDs include lite / generalv3 / generalv3.5 / 4.0Ultra",
+      "free_models": [
+        "lite",
+        "generalv3",
+        "generalv3.5"
+      ]
+    },
+    {
+      "id": "tencent-hunyuan",
+      "name": "Tencent Hunyuan (腾讯混元)",
+      "base_url": "https://api.hunyuan.cloud.tencent.com/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://cloud.tencent.com/document/product/1729",
+      "guide_url": "doc/free-providers/tencent-hunyuan.md",
+      "notes_zh": "腾讯混元，OpenAI 兼容；首次开通（腾讯云实名认证，无需绑卡）即赠免费资源包：生文模型共享 100 万 tokens（1 年有效）；模型含 hunyuan-a13b / hunyuan-role-latest / hunyuan-translation 等。注意官方公告功能正逐步迁移至 TokenHub，免费额度以首次开通为准",
+      "notes_en": "Tencent Hunyuan, OpenAI-compatible; first activation (Tencent Cloud real-name auth, no card) grants a free resource package: 1M shared tokens for text models (valid 1 year); models include hunyuan-a13b / hunyuan-role-latest / hunyuan-translation. Note: an official notice says features are migrating to TokenHub; the free quota is granted on first activation",
+      "free_models": [
+        "hunyuan-a13b",
+        "hunyuan-role-latest",
+        "hunyuan-translation",
+        "hunyuan-translation-lite"
+      ]
+    },
+    {
+      "id": "modelscope",
+      "name": "ModelScope (魔搭社区)",
+      "base_url": "https://api-inference.modelscope.cn/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://www.modelscope.cn/",
+      "guide_url": "doc/free-providers/modelscope.md",
+      "notes_zh": "阿里达摩院开源 MaaS 平台，API-Inference 免费提供 1000+ 开源模型推理（注册送 200 Magicubes，每日续赠，无需绑卡）；与已收录的 DashScope/Bailian 是不同服务（免费开源模型 vs 官方付费 API）。模型 id 为 org/model 格式，建议运行时拉取 /v1/models",
+      "notes_en": "Alibaba DAMO open-source MaaS hub; API-Inference serves 1000+ open-source models free (200 Magicubes on signup + daily top-up, no card); distinct from the cataloged DashScope/Bailian (free open-source inference vs official paid API). Model IDs use org/model form; enumerate via /v1/models at runtime",
+      "free_models": [
+        "deepseek-ai/DeepSeek-R1",
+        "Qwen/Qwen2.5-72B-Instruct",
+        "deepseek-ai/DeepSeek-V3"
+      ]
+    },
+    {
+      "id": "infermatic",
+      "name": "Infermatic",
+      "base_url": "https://api.totalgpt.ai/v1",
+      "protocol": "openai",
+      "keyless": false,
+      "signup_url": "https://infermatic.ai/",
+      "guide_url": "doc/free-providers/infermatic.md",
+      "notes_zh": "Infermatic（域名 infermatic.ai，API 域名 api.totalgpt.ai），OpenAI 兼容（vLLM 后端）；有免费计划及专属 Free 模型档，另有 $9/$20 付费档；鉴权 Bearer API Key",
+      "notes_en": "Infermatic (domain infermatic.ai; API host api.totalgpt.ai), OpenAI-compatible (vLLM backend); has a free plan with a dedicated Free-models tier plus paid $9/$20 tiers; Bearer API key auth",
+      "free_models": [
+        "TheDrummer-Rocinante-12B-v1.1",
+        "Sao10K-L3.3-70B-Euryale-v2.3-FP8-Dynamic"
       ]
     }
   ]

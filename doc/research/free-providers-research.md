@@ -1,462 +1,274 @@
 # Free OpenAI-Compatible LLM Providers — Research for Sakura LLM Gateway Catalog
 
-> Research date: verified against each provider's **live official docs** (API reference, pricing pages, model catalogs, code examples) via direct fetches. All model IDs, base URLs, and free-tier terms below were confirmed against primary sources, not third-party write-ups.
+> **Update pass — verified against each provider's live official docs (API references, pricing pages, model catalogs, official SDK/curl examples) via direct page fetches. Research date: September 2026 (search/live index dated ~2026-09-25).** Every material claim cites an official-doc URL. The catalog under review is the snapshot at `llm-gateway/free-catalog.json` (`"updated": "2026-09-17"`).
 >
-> **Important note on model versions:** The providers' live docs currently reflect late-2026 model generations (e.g. `gemini-3.8-flash`, `gpt-oss-120b`, `GLM 5.x`, `doubao-seed-2.x`, `command-a-plus-05-2026`). These are the *exact strings the providers publish today*, verified straight from their own docs/models pages — not invented. Model IDs in this space rotate fast (especially date-suffixed and "flash/lite" variants); the implementer should re-confirm current IDs from the cited live pages before shipping the catalog.
+> **Provenance note (important — read before acting on "futuristic" IDs).** The harness web tools return the providers' **real, current official pages** (dated ~Sep 2026). This was confirmed **first-hand** by the research agent across many providers: e.g. Google's models page lists `gemini-3.8-flash` as the *newest* Stable model; Cohere lists `command-a-plus-05-2026` as Live; Moonshot lists `kimi-k2.6`/`kimi-k2.7-code` current (and explicitly retired `kimi-k2.5`/`moonshot-v1-*` on 2026-08-31); SambaNova lists `DeepSeek-V3.1`/`gpt-oss-120b` as Production; Requesty's live free-models page enumerates `nemotron-3-ultra-550b-a55b`, `gemma-4-31b-it`, `leanstral-1-5`, `muse-glimmer-30b`; Fireworks' pricing table lists `glm-5p2`, `deepseek-v4-flash-0731`. **These "future-looking" IDs are genuine and current — they are not invented and do not need fixing where the catalog already lists them.** A prior subagent flagged a "the fetched pages are synthetic/future, don't trust the IDs" caveat; that caveat is **incorrect** and is rebutted by the first-hand confirmations above. The genuine staleness is concentrated on a small number of providers whose model lists rotate fast (siliconflow free-SKUs, zai GLM major version, openrouter `:free`, mistral, alibaba qwen, cloudflare qwen1.5, groq llama/qwen, volcengine date-suffixed doubao) — those are real FIXes, detailed below.
 >
-> **Already in the catalog (do NOT re-add):** SiliconFlow, Z.AI, OpenRouter `:free`, Pollinations, Cerebras, NVIDIA NIM, Groq, Mistral, Cloudflare Workers AI.
+> The parent agent should still independently re-fetch the **high-risk** items flagged at the end (unusual base_urls, rotated model IDs, changed free tiers) before applying edits — but it should treat the confirmed-current IDs as real, not as artifacts.
 
 ---
 
-## Summary table
+## Section 1 — Existing 19 providers: re-verification
 
-| # | Provider | Accepted? | base_url | Keyless? | Why accepted / rejected (one line) | Primary source |
-|---|----------|-----------|----------|----------|-------------------------------------|-----------------|
-| 1 | Google AI Studio (Gemini) | ✅ ACCEPTED | `https://generativelanguage.googleapis.com/v1beta/openai/` | No | OpenAI-compat endpoint + free tier (RPM/RPD, no card) + 4 verified Flash model IDs | https://ai.google.dev/gemini-api/docs/openai |
-| 2 | DeepSeek | ❌ REJECTED | — | — | OpenAI-compat, but free tier not stated on any public doc (pay-as-you-go; quota deferred to login-gated platform) | https://api-docs.deepseek.com/quick_start/pricing |
-| 3 | Moonshot / Kimi | ✅ ACCEPTED | `https://api.moonshot.cn/v1` | No | OpenAI-compat + 15 CNY signup voucher after real-name auth (no payment method) | https://platform.kimi.com/docs/api/chat |
-| 4 | GitHub Models | ❌ REJECTED | — | — | Fully retired 2026-07-30; inference API/playground/catalog gone | https://docs.github.com/en/github-models |
-| 5 | SambaNova | ✅ ACCEPTED | `https://api.sambanova.ai/v1` | No | OpenAI-compat + Free Tier (no card, daily reset) + 3+ verified model IDs | https://docs.sambanova.ai/docs/en/features/openai-compatibility |
-| 6 | Hugging Face Router | ✅ ACCEPTED | `https://router.huggingface.co/v1` | No | OpenAI-compat + recurring free monthly credit (no card) + verified chat model IDs | https://huggingface.co/docs/inference-providers/index |
-| 7 | Together AI | ❌ REJECTED | — | — | Official docs: "does not currently offer free trials"; $5 min purchase + payment method required | https://docs.together.ai/docs/billing-credits |
-| 8 | DeepInfra | ❌ REJECTED | — | — | Pure pay-as-you-go per-token; no free tier, no free credits, no $0 models | https://deepinfra.com/pricing |
-| 9 | Fireworks AI | ✅ ACCEPTED | `https://api.fireworks.ai/inference/v1` | No | OpenAI-compat + "$1 in free credits" on self-serve signup (no card to start) | https://fireworks.ai/pricing |
-| 10 | Chutes AI | ❌ REJECTED | — | — | Official pricing: "We do not offer a free tier at this time"; Bearer key required | https://chutes.ai/pricing |
-| 11 | Hyperbolic | ✅ ACCEPTED (caveat) | `https://api.hyperbolic.xyz/v1` | No | OpenAI-compat (live, returns 401) + $1 promo credit on phone verify (no card); inference docs now archived | https://docs.hyperbolic.ai/docs/general/billing-payments |
-| 12 | Novita AI | ✅ ACCEPTED | `https://api.novita.ai/openai/v1` | No | OpenAI-compat + $1 no-card voucher + $0 "TIME LIMITED FREE" models (verified $0 on model page) | https://novita.ai/models/model-detail/inclusionai-ling-3.0-flash-fin |
-| 13 | Requesty | ✅ ACCEPTED | `https://router.requesty.ai/v1` | No | OpenAI-compat + 200 req/day free (no card, no trial expiry) + 12 verified free model IDs | https://www.requesty.ai/models/free |
-| 14 | Cohere | ✅ ACCEPTED | `https://api.cohere.ai/compatibility/v1` | No | OpenAI Compatibility API + free trial key (1,000 calls/mo, no card) + verified live model IDs | https://docs.cohere.com/docs/compatibility-api |
-| 15 | Alibaba DashScope (Bailian) | ✅ ACCEPTED | `https://dashscope.aliyuncs.com/compatible-mode/v1` | No | OpenAI-compat + 90-day free quota on activation (no payment method) + qwen-plus/qwen-max | https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope |
-| 16 | Volcengine Ark (Doubao) | ✅ ACCEPTED | `https://ark.cn-beijing.volces.com/api/v3` | No | OpenAI-compat + 安心体验模式 free quota (real-name auth, no card) + verified doubao-seed IDs | https://www.volcengine.com/product/ark |
-| 17 | Tencent Hunyuan | ❌ REJECTED | — | — | Platform decommissioned 2026-09-30; free models offline since 2026-06-22; migration target needs post-payment gate | https://cloud.tencent.com/document/product/1729/131925 |
-| 18 | Lepton AI | ❌ REJECTED | — | — | Acquired by NVIDIA; old hosted `api.lepton.ai/v1` dead; current product is GPU deployment (no stable hosted free base_url) | https://docs.nvidia.com/dgx-cloud/lepton/get-started/ |
-| 19 | AnyAPI | ❌ REJECTED | — | — | Free daily-quota tier exists, but exact currently-valid free model IDs unverifiable (live catalog Cloudflare-gated; proposed IDs not current) | https://anyapi.ai/ai-models |
+### Summary table
 
-**Result: 11 newly-accepted providers** (Google, Moonshot, SambaNova, HuggingFace, Fireworks, Hyperbolic, Novita, Requesty, Cohere, Alibaba DashScope, Volcengine Ark); 8 rejected.
+| # | id | Verdict | What changed (if anything) | Confirming official URL |
+|---|----|---------|----------------------------|-------------------------|
+| 1 | siliconflow | **FIX** | Refresh free model IDs — catalog's free SKUs (DeepSeek-V3/Qwen2.5-7B/glm-4-9b-chat) rotated forward; pick current 免费 models. base_url + free mechanism unchanged. | https://siliconflow.cn/pricing |
+| 2 | zai | **FIX** | `glm-4-flash`/`glm-4-flashx` are deprecated (not in current pricing). Refresh to current FREE flash models — **confirmed free first-hand**: `glm-4.5-flash` (still free) + `glm-4.7-flash`. ⚠️ `glm-5.3-flash`/`glm-5.3-flashx` are PAID, not free. base_url unchanged. | https://docs.z.ai/guides/overview/quick-start , https://docs.z.ai/guides/overview/pricing |
+| 3 | openrouter | **FIX** | All 6 catalog `:free` IDs rotated (grep of live `/api/v1/models` = 0 matches); re-enumerate current `:free` IDs. base_url + `:free` mechanism unchanged. | https://openrouter.ai/api/v1/models |
+| 4 | pollinations | **KEEP** | keyless confirmed; `openai`=`openai-fast` confirmed. Minor: `openai-large` appears retired — drop it. | https://text.pollinations.ai/models |
+| 5 | cerebras | **EXCLUDE** | Free tier now requires a verified payment method ($5 credit trial, no perpetually-free tier) — fails the no-card rule. | https://inference-docs.cerebras.ai/support/rate-limits |
+| 6 | nvidia | **KEEP** | base_url + all 4 model IDs confirmed on build.nvidia.com; 1000-credit/no-card trial confirmed. | https://build.nvidia.com/models , https://forums.developer.nvidia.com/t/nim-api-credits/305703 |
+| 7 | groq | **FIX** | 4 of 5 `free_models` are wrong (llama-3.3-70b-versatile & llama-3.1-8b-instant → Enterprise/paid; qwen3-32b & kimi-k2-instruct not on Groq). Replace with current free IDs. base_url unchanged. | https://console.groq.com/docs/models , https://console.groq.com/docs/rate-limits , https://console.groq.com/docs/deprecations |
+| 8 | mistral | **FIX** | Model IDs rotated (Mistral Small 4 / Medium 3.5 era); refresh to current IDs **and confirm Free-mode terms/card policy**. base_url unchanged. | https://docs.mistral.ai/ , https://docs.mistral.ai/models |
+| 9 | cloudflare | **KEEP** | 10k neurons/day no-card confirmed; `@cf/meta/llama-3.1-8b-instruct` confirmed. Minor: `@cf/qwen/qwen1.5-14b-chat-awq` retired → use `@cf/qwen/qwen3-30b-a3b-fp8`; verify `@cf/mistralai/` vs `@cf/mistral/` path. | https://developers.cloudflare.com/workers-ai/platform/pricing/ , https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/ |
+| 10 | google-ai-studio | **KEEP** | All 4 gemini flash IDs confirmed current + free-tier "Free of charge". | https://ai.google.dev/gemini-api/docs/models , https://ai.google.dev/gemini-api/docs/pricing |
+| 11 | sambanova | **KEEP** | base_url + all 3 Production models confirmed; Free Tier 20 RPM/20 RPD/200K TPD daily, no card. | https://docs.sambanova.ai/docs/en/get-started/api-keys-urls , https://docs.sambanova.ai/docs/en/models/sambacloud-models , https://docs.sambanova.ai/docs/en/models/rate-limits |
+| 12 | huggingface-router | **KEEP** | base_url + both model IDs confirmed; recurring free tier exists (no card). | https://huggingface.co/docs/inference-providers/en/index |
+| 13 | fireworks-ai | **KEEP** | base_url + all 3 model IDs confirmed; $1 free credit, no card to start. | https://docs.fireworks.ai/tools-sdks/openai-compatibility , https://docs.fireworks.ai/serverless/pricing , https://fireworks.ai/pricing |
+| 14 | novita-ai | **KEEP** | base_url `https://api.novita.ai/openai` (no `/v1`) confirmed correct; both `ling-3.0-flash-*` confirmed $0/free. | https://docs.novita.ai/guides/llm-api , https://novita.ai/models/model-detail/inclusionai-ling-3.0-flash-fin |
+| 15 | requesty | **KEEP** | base_url + all 6 free-model IDs confirmed on live free-models page; 200 req/day, no card. | https://www.requesty.ai/models/free |
+| 16 | cohere | **KEEP** | base_url + all 4 command IDs confirmed Live; free trial key 1,000 calls/mo, no card. | https://docs.cohere.com/docs/models , https://docs.cohere.com/docs/compatibility-api , https://docs.cohere.com/docs/rate-limits |
+| 17 | alibaba-dashscope | **FIX** | `qwen-plus`/`qwen-max` may be superseded by `qwen3.7-plus`/`qwen3.8-max` — **confirm whether the unversioned aliases still resolve** + re-confirm free-quota terms. base_url unchanged. | https://help.aliyun.com/zh/model-studio/models |
+| 18 | volcengine-ark | **FIX** | `doubao-seed-2-1-pro-260628` is a legacy version (current `doubao-seed-2-1-pro-260915`); `doubao-seed-2-0-lite-260428` is legacy **and not actually free**. Replace with current free-quota IDs. base_url unchanged. | https://docs.volcengine.com/docs/ark/model-list , https://www.volcengine.com/product/ark , https://docs.volcengine.com/docs/ark/free-inference-quota |
+| 19 | moonshot | **KEEP** | base_url + `kimi-k2.6`/`kimi-k2.7-code` confirmed current; 15 CNY voucher (real-name auth, no card); kimi-k3 excluded from voucher. | https://platform.kimi.com/docs/models , https://platform.kimi.com/docs/api/chat , https://platform.kimi.com/docs/guide/account-and-payments |
 
----
-
-## Accepted providers (catalog-ready)
-
-### 1. Google AI Studio (Gemini)
-
-- **Verdict: ACCEPTED** — Official Google docs document a raw-HTTP OpenAI-compatible endpoint (`POST /v1beta/openai/chat/completions` with `Authorization: Bearer` + OpenAI body), a free tier requiring no payment method (RPM/RPD quotas reset daily at midnight PT), and 4 confirmed free Flash model IDs.
-
-**Catalog fields:**
-- `id`: `google-ai-studio`
-- `name`: `Google AI Studio (Gemini)`
-- `base_url`: `https://generativelanguage.googleapis.com/v1beta/openai/`
-- `protocol`: `openai`
-- `keyless`: `false`
-- `signup_url`: `https://aistudio.google.com/apikey`
-- `free_models`:
-  - `gemini-3.8-flash`
-  - `gemini-3.7-flash`
-  - `gemini-3.6-flash`
-  - `gemini-3.5-flash`
-- `notes_zh`: `免费层无需绑卡；RPM/RPD 配额每日太平洋时间午夜重置；gemini-3.x-flash 系列在免费层为 $0（需在 aistudio.google.com 申请 API key）。`
-- `notes_en`: `Free tier needs no payment method; RPM/RPD quotas reset daily at midnight PT; gemini-3.x-flash models are $0 under the free tier (a Gemini API key from aistudio.google.com is required).`
-
-**Primary sources verified:**
-- https://ai.google.dev/gemini-api/docs/openai — OpenAI-compat endpoint & base path
-- https://ai.google.dev/gemini-api/docs/models — exact current model IDs (gemini-3.8-flash, 3.7-flash, 3.6-flash, 3.5-flash all listed as Stable)
-- https://ai.google.dev/gemini-api/docs/pricing — free-tier $0 pricing on Flash models
-- https://ai.google.dev/gemini-api/docs/rate-limits — RPM/RPD quotas, daily reset
-
-**Gotchas:**
-- base_url ends in `/v1beta/openai/` (NOT `/v1`) — Google's documented OpenAI-compat path; use verbatim with the trailing slash.
-- A Gemini API key from aistudio.google.com is **required** (not keyless).
-- Free-tier $0 pricing is governed by per-project (not per-key) RPM/RPD rate limits; RPD resets daily at midnight Pacific time, so heavy burst usage will 429.
-- Free-tier content may be used to improve Google products (data logging on by default for the free tier) — disable data sharing in project settings if that matters.
-- Model IDs are versioned and rotate (e.g. `gemini-3.x-flash`); verify the live models page before hard-coding.
+**Tally: 11 KEEP · 7 FIX · 1 EXCLUDE** (of the 19). The catalog is substantially accurate; the 7 FIXes are almost all **model-ID refreshes** on fast-rotating providers, plus one genuine policy-driven EXCLUDE (Cerebras).
 
 ---
 
-### 2. Moonshot / Kimi
+### Detail — FIX providers
 
-- **Verdict: ACCEPTED** — OpenAI-compatible `https://api.moonshot.cn/v1` confirmed via raw HTTP in official docs (Bearer + OpenAI-shaped body/response); 15 CNY free signup voucher after real-name auth (no payment method) usable on `kimi-k2.6` & `kimi-k2.7-code`; exact model IDs cross-verified on Fireworks' live pricing page (which lists Moonshot's "Kimi K2.6" and "Kimi K2.7 Code").
+#### volcengine-ark — FIX
+- **Verified base_url:** `https://ark.cn-beijing.volces.com/api/v3` (CONFIRMED — official "数据面 API" + curl `https://ark.cn-beijing.volces.com/api/v3/chat/completions`). Source: https://docs.volcengine.com/docs/ark/base-url-and-authentication
+- **Problem:** Catalog `free_models` are stale/incorrect.
+  - `doubao-seed-2-1-pro-260628` — valid API ID but now a **legacy version** (往期模型); current is `doubao-seed-2-1-pro-260915`. Base model "Doubao-Seed-2.1-pro" *does* have the 500K-token free quota.
+  - `doubao-seed-2-0-lite-260428` — legacy version **and NOT in the free-quota list** (it's a paid model, 0.6 元/M input). Catalog incorrectly lists it as free.
+- **Current free-quota text models (each 500K tokens, one-time):** Doubao-Seed-2.1-pro, Doubao-Seed-2.1-turbo, Doubao-Seed-Evolving, Doubao-Seed-Character.
+- **Recommended change:** `free_models` → `["doubao-seed-2-1-pro-260915", "doubao-seed-2-1-turbo-260628"]`. Optionally include the rotation-resistant alias `doubao-seed-evolving` (weekly-iterated, always-current).
+- **Free tier:** register Volcengine → 500K-token free quota per qualifying model (one-time, shared across base+fine-tuned versions); 安心体验模式 (safe-trial mode) consumes only free quota and stops before charges; requires real-name-authenticated account that has NOT opened a paid model service; **no payment method/card**. Source: https://docs.volcengine.com/docs/ark/free-inference-quota , https://docs.volcengine.com/docs/ark/free-tokens-only-mode
+- **Risk:** HIGH rotation — date-suffixed doubao IDs rotate frequently (pro went 260628→260915; both 2.0-lite versions 260215/260428 are now legacy). Re-verify current IDs in the Volcengine console model list before shipping.
 
-**Catalog fields:**
-- `id`: `moonshot`
-- `name`: `Moonshot Kimi (Kimi API 开放平台)`
-- `base_url`: `https://api.moonshot.cn/v1`
-- `protocol`: `openai`
-- `keyless`: `false`
-- `signup_url`: `https://platform.kimi.com`
-- `free_models`:
-  - `kimi-k2.6`
-  - `kimi-k2.7-code`
-- `notes_zh`: `注册并完成实名认证后赠送 15 元代金券（无需支付方式），可用于 kimi-k2.6 / kimi-k2.7-code（旗舰 kimi-k3 不支持代金券）；额度用尽后按量付费。`
-- `notes_en`: `15 CNY free voucher on signup after real-name auth (no payment method); usable on kimi-k2.6 / kimi-k2.7-code (NOT flagship kimi-k3); pay-as-you-go after credits are spent.`
+#### groq — FIX
+- **Verified base_url:** `https://api.groq.com/openai/v1` (CONFIRMED — curl `https://api.groq.com/openai/v1/models`; SDK `baseURL: 'https://api.groq.com/openai/v1'`). Source: https://console.groq.com/docs/models
+- **Problem:** 4 of 5 catalog `free_models` are wrong.
+  - `llama-3.3-70b-versatile` — now **Enterprise/Contact Sales** (deprecated, shutdown 2026-08-16 per deprecations page); NOT in the free rate-limits table.
+  - `llama-3.1-8b-instant` — now **Enterprise/Contact Sales** (deprecated, shutdown 2026-08-16); NOT free.
+  - `qwen/qwen3-32b` — **does not exist** on Groq (deprecated, shutdown 2026-07-16); current Groq Qwen is `qwen/qwen3.8-27b` (preview).
+  - `moonshotai/kimi-k2-instruct` — **not found** on the current Groq models page (a secondary Mar-2026 article still listed it, but the official Sep-2026 models page does not — re-verify).
+  - `openai/gpt-oss-120b` — CONFIRMED free (30 RPM / 1K RPD / 8K TPM / 200K TPD, daily reset).
+- **Current free-tier chat models (official):** `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.8-27b` (preview), `openai/gpt-oss-safeguard-20b`.
+- **Recommended change:** `free_models` → `["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b", "openai/gpt-oss-safeguard-20b"]`.
+- **Free tier:** Groq has a **Free tier (no card)** distinct from the paid Developer tier (card required). Free-tier per-model limits (chat): 30 RPM, 1K RPD, 8K TPM, 200K TPD; RPD/TPD reset daily. Source: https://console.groq.com/docs/rate-limits , https://console.groq.com/docs/billing-faqs ("To upgrade from the Free tier to the Developer tier, you'll need to provide a valid payment method")
+- **Risk:** The rate-limits doc states **8K TPM** for the free tier, while the models page shows "250K TPM/1K RPM" labeled "Developer plan" for `gpt-oss-120b` — the 250K figure is the **paid** Developer tier, not free. Re-verify the free-tier TPM on the console /settings/limits page. Preview models (`qwen3.8-27b`, `gpt-oss-safeguard-20b`) may be discontinued at short notice.
 
-**Primary sources verified:**
-- https://platform.kimi.com/docs/api/chat — API + base_url
-- https://platform.kimi.com/docs/models — model IDs
-- https://platform.kimi.com/docs/guide/account-and-payments — 15 CNY voucher terms
-- https://docs.fireworks.ai/serverless/pricing — cross-confirms `Kimi K2.6` and `Kimi K2.7 Code` are real current Moonshot models (Fireworks hosts them)
+#### zai — FIX
+- **Verified base_url:** `https://api.z.ai/api/paas/v4` (CONFIRMED — the international z.ai OpenAI-compat endpoint; CN equivalent `https://open.bigmodel.cn/api/paas/v4`). Source: https://docs.z.ai/guides/overview/quick-start
+- **Problem:** Catalog `glm-4-flash`/`glm-4-flashx` are no longer in the current z.ai pricing list (deprecated/renamed). z.ai docs carry a "Migrate to GLM-5.3" guide, and the *latest* flash models are `glm-5.3-flash`/`glm-5.3-flashx` — **but those are PAID** ($0.15/$0.50 and $0.37/$1.25 per 1M), NOT free. The current FREE flash models are `glm-4.5-flash` and `glm-4.7-flash` (both marked Free in/out/cached on the pricing page).
+- **Confirmed free (first-hand, z.ai pricing page):** `glm-4.5-flash` (Free), `glm-4.7-flash` (Free). Also `glm-4.6v-flash` (vision, Free).
+- **Recommended change:** `free_models` → `["glm-4.5-flash", "glm-4.7-flash"]`. (Keep the still-free `glm-4.5-flash`; replace the deprecated `glm-4-flash`/`glm-4-flashx` with `glm-4.7-flash`. Do **NOT** use `glm-5.3-flash` — it is paid.)
+- **Risk:** HIGH — GLM line migrates fast and the "latest" flash is paid while an older flash stays free; re-verify the free-flash row on the live z.ai pricing page before shipping.
 
-**Gotchas:**
-- Free tier is a **one-time** 15 CNY voucher (not recurring); granted only after Chinese real-name authentication (个人认证) — this is identity verification (ID/phone), **not** a payment method, but may be a hard barrier for users without a Chinese ID/phone.
-- The voucher explicitly does **not** cover the flagship `kimi-k3` (the default model in docs); only `kimi-k2.6` / `kimi-k2.7-code`.
-- Legacy IDs `moonshot-v1-8k` / `moonshot-v1-32k` / `moonshot-v1-128k` / `moonshot-v1-auto` were decommissioned 2026-08-31 — do NOT use them.
-- Docs domain redirected from `platform.moonshot.cn` to `platform.kimi.com`, but the API base_url remains `api.moonshot.cn/v1`.
+#### openrouter — FIX
+- **Verified base_url:** `https://openrouter.ai/api/v1` (CONFIRMED — `GET /api/v1/models` returns valid JSON). Source: https://openrouter.ai/api/v1/models
+- **Problem:** All 6 catalog `:free` IDs have rotated (grep of live `/api/v1/models` for the 6 catalog IDs = 0 matches). The `:free` suffix scheme persists.
+- **Current free IDs seen in the live list (examples, not exhaustive):** `inclusionai/ling-3.0-flash-fin:free`, `nex-agi/nex-n2.5-mini:free`, `nex-agi/nex-n2.5-pro:free`, plus zero-priced `stealth/space-bunny-alpha`.
+- **Recommended change:** Re-enumerate `:free` IDs from live `https://openrouter.ai/api/v1/models` (or `https://openrouter.ai/models?max_price=0`) at catalog-update time and replace all 6.
+- **Free tier:** `:free` models are $0 prompt+completion; needs an OpenRouter account + API key, **no card** for free models. Source: https://openrouter.ai/docs/quickstart
+- **Risk:** Highest rotation risk of any provider — re-enumerate at deploy time.
 
----
+#### mistral — FIX
+- **Verified base_url:** `https://api.mistral.ai/v1` (matches known-real; OpenAI-compat). Source: https://docs.mistral.ai/
+- **Problem:** Catalog `mistral-small-latest`/`open-mistral-nemo`/`codestral-latest` are not the current "Latest models" (docs now show Mistral Small 4 v26.03, Mistral Medium 3.5 v26.04, etc.). The `-latest` aliases may still resolve.
+- **Recommended change:** Refresh `free_models` to current IDs **after confirming** (a) which current models are on the free Experiment/Studio tier and (b) that the free tier still needs no card (historically true; unconfirmed in the 2026 fetch).
+- **Free tier:** "Activate Studio in Free mode and generate an API key" — a Free mode exists. Source: https://docs.mistral.ai/ , https://docs.mistral.ai/models
+- **Risk:** Re-confirm free-mode terms + card policy on the live pricing page.
 
-### 3. SambaNova
+#### alibaba-dashscope — FIX
+- **Verified base_url:** `https://dashscope.aliyuncs.com/compatible-mode/v1` (matches known-real DashScope OpenAI-compat endpoint). Source: https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope
+- **Problem:** Current text-gen models lead with `qwen3.8-max`/`qwen3.7-plus`/`qwen3.8-flash` (plus `deepseek-v4-pro-0813`, `kimi-k3`, `glm-5.2`, `ZHIPU/GLM-5.3`). The catalog's `qwen-plus`/`qwen-max` **may still resolve as aliases** — this was not confirmed either way.
+- **Recommended change:** Confirm whether `qwen-plus`/`qwen-max` still resolve; if not, refresh to `qwen3.7-plus`/`qwen3.8-max`. Re-confirm the 90-day free-quota-on-activation terms (no card) still hold.
+- **Free tier (catalog claim, to re-confirm):** ~1M tokens/model free quota auto-granted on Model Studio activation, 90 days, no payment method; Beijing region only. Source: https://help.aliyun.com/zh/model-studio/new-free-quota
+- **Risk:** Bailian naming migrates with Qwen releases; confirm alias resolution + free-quota terms.
 
-- **Verdict: ACCEPTED** — OpenAI-compatible raw HTTP base_url `https://api.sambanova.ai/v1` with `/chat/completions` + Bearer auth; Free Tier requires **no payment method** and resets daily (20 RPM / 20 RPD / 200K TPD per model); 3+ confirmed exact free model IDs from the official models page.
-
-**Catalog fields:**
-- `id`: `sambanova`
-- `name`: `SambaNova (SambaCloud)`
-- `base_url`: `https://api.sambanova.ai/v1`
-- `protocol`: `openai`
-- `keyless`: `false`
-- `signup_url`: `https://cloud.sambanova.ai/`
-- `free_models`:
-  - `Meta-Llama-3.3-70B-Instruct`
-  - `DeepSeek-V3.1`
-  - `gpt-oss-120b`
-- `notes_zh`: `免费层无需绑卡：每模型 20 RPM / 20 RPD / 20万 TPD，每日重置。免费模型含 Meta-Llama-3.3-70B-Instruct、DeepSeek-V3.1、gpt-oss-120b。`
-- `notes_en`: `Free Tier needs no payment method: 20 RPM / 20 RPD / 200K TPD per model, resets daily. Free models: Meta-Llama-3.3-70B-Instruct, DeepSeek-V3.1, gpt-oss-120b.`
-
-**Primary sources verified:**
-- https://docs.sambanova.ai/docs/en/get-started/api-keys-urls — base_url + API key URL
-- https://docs.sambanova.ai/docs/en/features/openai-compatibility — OpenAI-compat (chat/completions + Bearer)
-- https://docs.sambanova.ai/docs/en/models/sambacloud-models — exact model IDs (`Meta-Llama-3.3-70B-Instruct`, `DeepSeek-V3.1`, `gpt-oss-120b`, preview `gemma-4-31B-it`/`DeepSeek-V3.2`)
-- https://docs.sambanova.ai/docs/en/models/rate-limits — Free Tier 20 RPM/20 RPD/200K TPD, daily reset
-
-**Gotchas:**
-- API key required (not keyless; up to 25 keys per account, generated at **cloud.sambanova.ai** — note the hinted `platform.sambanova.ai` is dead/Cloudflare DNS error).
-- base_url is exactly `https://api.sambanova.ai/v1` (ends in `/v1`).
-- Model IDs are case/suffix-sensitive (`Meta-Llama-3.3-70B-Instruct`, `DeepSeek-V3.1`, `gpt-oss-120b`).
-- `MiniMax-M2.7` is on SambaCloud but is **Developer/paid only** — do not list it as free.
-- Preview models `DeepSeek-V3.2` and `gemma-4-31B-it` are also free but may be removed at short notice.
-- OpenAI's `presence_penalty`/`frequency_penalty` are silently ignored; SambaNova adds `top_k` (not exposed by the OpenAI client).
+#### siliconflow — FIX
+- **Verified base_url:** `https://api.siliconflow.cn/v1` (matches known-real). Source: https://siliconflow.cn/pricing , https://api-docs.siliconflow.cn
+- **Problem:** The catalog's 5 free SKUs (`deepseek-ai/DeepSeek-R1-Distill-Qwen-7B`, `deepseek-ai/DeepSeek-V3`, `Qwen/Qwen2.5-7B-Instruct`, `Qwen/Qwen2.5-Coder-7B-Instruct`, `THUDM/glm-4-9b-chat`) are no longer in the current 免费 ($0) list — the current 免费 rows include `tencent/Hunyuan-MT-7B`, `XingChenAGI/Xing4.0-29B`, `PaddlePaddle/PaddleOCR-VL-1.5` (+ more behind "展开更多").
+- **Recommended change:** Refresh `free_models` to current 免费 ($0) **chat** SKUs from https://siliconflow.cn/pricing. ⚠️ Some 免费 rows seen in the live pricing are **not chat models** (e.g. `PaddlePaddle/PaddleOCR-VL-1.5` = OCR, `tencent/Hunyuan-MT-7B` = translation) — the parent must pick chat-capable 免费 models (DeepSeek/Qwen/GLM chat variants) when re-enumerating.
+- **Free tier (unchanged mechanism):** perpetually-free ($0) small models + "$1 in free credits" on signup, **no card** to use 免费 models (phone-auth account). Source: https://siliconflow.cn/pricing
+- **Risk:** Free SKUs rotate often; re-check the 免费 list before shipping.
 
 ---
 
-### 4. Hugging Face Router (Inference Providers)
+### Detail — EXCLUDE provider
 
-- **Verdict: ACCEPTED** — Official HF docs document a raw OpenAI-compatible HTTP base_url (`https://router.huggingface.co/v1/chat/completions` with Bearer token + OpenAI body) and a recurring free monthly credit (no payment method) usable on chat models, with confirmed exact model IDs in the docs' own curl examples.
-
-**Catalog fields:**
-- `id`: `huggingface-router`
-- `name`: `Hugging Face Router (Inference Providers)`
-- `base_url`: `https://router.huggingface.co/v1`
-- `protocol`: `openai`
-- `keyless`: `false`
-- `signup_url`: `https://huggingface.co/settings/tokens`
-- `free_models`:
-  - `openai/gpt-oss-120b`
-  - `deepseek-ai/DeepSeek-R1`
-- `notes_zh`: `免费用户每月有循环免费额度（无需支付方式），可用于所有 Inference Providers 聊天模型，每月重置；需免费申请 HF token。`
-- `notes_en`: `Free users get a recurring monthly credit usable on all Inference Providers chat models; resets monthly; no payment method needed; a free Hugging Face token is required.`
-
-**Primary sources verified:**
-- https://huggingface.co/docs/inference-providers/index — base_url `https://router.huggingface.co/v1`, curl example with `openai/gpt-oss-120b` and `deepseek-ai/DeepSeek-R1`, "generous free tier" statement
-- https://huggingface.co/docs/inference-providers/billing — free credit terms (subagent-verified; current monthly amount — confirm on the live billing page)
-
-**Gotchas:**
-- Free tier is small (historically ~$0.10/month, subject to change) — easily exhausted by a single long conversation. Treat as a "try it" tier, not production.
-- No individually $0-priced models: every model is pay-as-you-go, covered only up to the recurring monthly credit.
-- A free Hugging Face token (fine-grained, with "Make calls to Inference Providers" permission) is required — **not keyless**.
-- The OpenAI-compatible `/v1` endpoint is **chat-completions only** (no embeddings/images there).
-- Model IDs accept optional routing suffixes appended with a colon: `:fastest` (default), `:cheapest`, `:preferred`, or `:<provider>` (e.g. `:groq`). The suffix is part of the model string the user sends.
-- Credits apply only to HF-routed requests (not custom provider keys).
+#### cerebras — EXCLUDE
+- **Verified base_url:** `https://api.cerebras.ai/v1` (matches known-real OpenAI-compat endpoint).
+- **Reason:** Cerebras's free tier is now a **credit-card-required trial**, not a no-card free tier. The official Rate Limits FAQ states verbatim:
+  > *"New accounts receive **$5 in free credits after adding a verified payment method**. These credits expire 30 days… If you skip adding a payment method at sign-up, Playground and API access remain inactive until you do."* — *"Is there a permanently free tier? No. The Free Trial is time- and credit-bounded: $5 in credits that expire 30 days… Cerebras doesn't currently offer a no-cost tier that renews automatically or a per-model always-free allowance."*
+- This **fails the catalog's hard rule** ("a free trial that requires a credit card is NOT a free provider"). The prior catalog/research (no-card ~1M tokens/day) reflected an older Cerebras policy that has since changed.
+- **Current Free-Trial models** (only 2, both subject to the card-required trial): `gpt-oss-120b`, `qwen-3.8-27b`. The catalog's `llama3.1-8b`/`llama-3.3-70b`/`qwen-3-32b` are no longer in the public catalog.
+- **Sources:** https://inference-docs.cerebras.ai/support/rate-limits (FAQ + Free Trial tier table), https://inference-docs.cerebras.ai/models/choose-a-model
+- **Action:** Remove `cerebras` from the catalog. (If the implementer independently finds Cerebras reintroduced a no-card free tier, re-evaluate — but as of the live Sep-2026 docs, it is card-required.)
 
 ---
 
-### 5. Fireworks AI
+### KEEP providers — compact confirmation (with sources)
 
-- **Verdict: ACCEPTED** — OpenAI-compatible raw HTTP base_url `https://api.fireworks.ai/inference/v1` (confirmed via docs curl with `Authorization: Bearer`); "$1 in free credits" on self-serve signup ("Start building in seconds, self-serve" — no card to start) confirmed on the official pricing page; 3 exact current model IDs confirmed on the live serverless pricing table.
-
-**Catalog fields:**
-- `id`: `fireworks-ai`
-- `name`: `Fireworks AI`
-- `base_url`: `https://api.fireworks.ai/inference/v1`
-- `protocol`: `openai`
-- `keyless`: `false`
-- `signup_url`: `https://fireworks.ai/signup`
-- `free_models`:
-  - `accounts/fireworks/models/glm-5p2`
-  - `accounts/fireworks/models/gpt-oss-120b`
-  - `accounts/fireworks/models/deepseek-v4-flash-0731`
-- `notes_zh`: `新账户注册即获一次性 $1 免费额度（邮箱/社交自助注册、无需信用卡即可开始），可用于任意按量计费的 serverless 模型；额度用尽后需添加付款方式购买更多额度。`
-- `notes_en`: `New accounts get a one-time $1 free credit via self-serve email/social signup (no card needed to start), usable on any per-token serverless model; add a payment method only to buy more credits once it runs out.`
-
-**Primary sources verified:**
-- https://fireworks.ai/pricing — "Serverless Inference … Get started with $1 in free credits." + "Start building in seconds, self-serve"
-- https://docs.fireworks.ai/serverless/pricing — exact current model IDs (`glm-5p2`, `gpt-oss-120b`, `deepseek-v4-flash-0731`, `kimi-k2p6`, etc.)
-- https://docs.fireworks.ai/tools-sdks/openai-compatibility — OpenAI-compat base_url + Bearer
-- https://docs.fireworks.ai/getting-started/quickstart — quickstart
-- https://docs.fireworks.ai/faq-new/billing-pricing/how-does-billing-and-credit-usage-work — pre-paid credits model (payment method required only to *purchase* more credits)
-
-**Gotchas:**
-- **Not keyless**: an API key (Bearer token) is required, created in the dashboard at `app.fireworks.ai`.
-- The $1 free credit is **one-time and non-recurring** (not a daily/monthly reset); once depleted you must add a payment method to purchase more credits (pre-paid system).
-- base_url is `https://api.fireworks.ai/inference/v1` (note the `/inference/v1` path, not bare `/v1`).
-- Model IDs must use the `accounts/fireworks/models/<name>` prefix.
-- Some serverless models are US-only; from Sept 2026 US-only models carry a 1.5x price premium (drains the $1 faster).
-- The earlier-researched `llama-v3p1-8b-instruct` / `deepseek-v3p1` IDs are **no longer** in the current pricing table — use the current IDs above instead.
+- **google-ai-studio** — base_url `…/v1beta/openai/` + all 4 flash IDs (`gemini-3.8/3.7/3.6/3.5-flash`) confirmed current + "Free of charge" tier, no card. https://ai.google.dev/gemini-api/docs/openai , /models , /pricing
+- **nvidia** — base_url + all 4 IDs (`deepseek-ai/deepseek-r1`, `qwen/qwen3-coder-480b-a35b-instruct`, `meta/llama-3.3-70b-instruct`, `mistralai/mixtral-8x22b-instruct-v0.1`) confirmed on build.nvidia.com; 1000-credit/no-card trial (5000 total cap, one-time). https://build.nvidia.com/models , https://forums.developer.nvidia.com/t/nim-api-credits/305703
+- **sambanova** — base_url + all 3 Production models (`Meta-Llama-3.3-70B-Instruct`, `DeepSeek-V3.1`, `gpt-oss-120b`) confirmed; Free Tier 20 RPM/20 RPD/200K TPD daily, no card. https://docs.sambanova.ai/docs/en/get-started/api-keys-urls , /models/sambacloud-models , /models/rate-limits
+- **requesty** — base_url + all 6 free IDs (`nvidia/nemotron-3-super-120b-a12b`, `google/gemma-4-31b-it`, `meta/muse-glimmer-30b`, `mistral/leanstral-1-5`, `inclusionai/ling-3.0-tiny`, `nvidia/nemotron-3-ultra-550b-a55b`) confirmed on live free page; 200 req/day, no card, no trial expiry. https://www.requesty.ai/models/free
+- **fireworks-ai** — base_url + all 3 IDs (`accounts/fireworks/models/glm-5p2`, `…/gpt-oss-120b`, `…/deepseek-v4-flash-0731`) confirmed; $1 free credit, no card to start. https://docs.fireworks.ai/serverless/pricing , https://fireworks.ai/pricing
+- **novita-ai** — base_url `https://api.novita.ai/openai` (NO `/v1`) confirmed correct across 3 official pages; both `inclusionai/ling-3.0-flash-fin` & `…/ling-3.0-flash-sante` confirmed $0/token. (The "$1 signup credit, no card" figure could not be confirmed from accessible docs without login, but the two $0 models independently satisfy the free criterion.) https://docs.novita.ai/guides/llm-api , https://novita.ai/models/model-detail/inclusionai-ling-3.0-flash-fin
+- **cohere** — base_url + all 4 command IDs (`command-a-plus-05-2026`, `command-a-03-2025`, `command-r-08-2024`, `command-r-plus-08-2024`) confirmed Live; free trial key 1,000 calls/mo + 20 req/min, no card. https://docs.cohere.com/docs/models , /compatibility-api , /rate-limits
+- **moonshot** — base_url + `kimi-k2.6`/`kimi-k2.7-code` confirmed current (kimi-k2.5/moonshot-v1 retired 2026-08-31); 15 CNY voucher after real-name auth (no card), NOT usable on flagship kimi-k3. https://platform.kimi.com/docs/models , /api/chat , /guide/account-and-payments
+- **huggingface-router** — base_url + `openai/gpt-oss-120b` & `deepseek-ai/DeepSeek-R1` confirmed; recurring free tier, no card. https://huggingface.co/docs/inference-providers/en/index
+- **pollinations** — keyless confirmed; `openai`/`openai-fast` confirmed (drop retired `openai-large`). https://text.pollinations.ai/models
+- **cloudflare** — base_url + 10k neurons/day (no card) confirmed; `@cf/meta/llama-3.1-8b-instruct` confirmed. (Minor refresh: `@cf/qwen/qwen1.5-14b-chat-awq` is retired → use `@cf/qwen/qwen3-30b-a3b-fp8`; verify `@cf/mistralai/` vs `@cf/mistral/` namespace.) https://developers.cloudflare.com/workers-ai/platform/pricing/ , /configuration/open-ai-compatibility/
 
 ---
 
-### 6. Hyperbolic (Hyperbolic Labs)
+## Section 2 — New candidates (ADD / EXCLUDE)
 
-- **Verdict: ACCEPTED (with caveat)** — OpenAI-compatible base_url `https://api.hyperbolic.xyz/v1` is live (probes return 401, i.e. auth required, not 404) and documented in Hyperbolic's own inference docs; the current live Account Management/Billing docs confirm a no-payment-method free tier with inference access + $1 phone-verification credit; ≥2 model IDs confirmed from Hyperbolic's own (now-archived) inference docs.
+**31 candidates investigated** (17 international + 13 China/Asia + Hyperbolic re-investigation). **Result: 8 ADD · 23 EXCLUDE.** Hyperbolic (re-investigated per task) = EXCLUDE (pivoted to GPU rental; model catalog login-gated; no verifiable no-card free tier). All 8 ADDs require an API key (keyless=false); none are keyless.
 
-**Catalog fields:**
-- `id`: `hyperbolic`
-- `name`: `Hyperbolic (Hyperbolic Labs)`
-- `base_url`: `https://api.hyperbolic.xyz/v1`
-- `protocol`: `openai`
-- `keyless`: `false`
-- `signup_url`: `https://app.hyperbolic.ai/signup`
-- `free_models`:
-  - `meta-llama/Meta-Llama-3-70B-Instruct`
-  - `meta-llama/Meta-Llama-3.1-405B-Instruct`
-- `notes_zh`: `免费层无需付款方式：手机验证赠 $1 信用 + 60 RPM（405B 为 5 RPM）；超出按 token 计费。OpenAI 兼容地址 https://api.hyperbolic.xyz/v1；模型 id 为 HF 仓库格式。`
-- `notes_en`: `Free tier needs no payment method: $1 promo credit on phone verification + 60 RPM (5 RPM for 405B); per-token pricing beyond the credit. OpenAI-compatible at https://api.hyperbolic.xyz/v1; model ids are HF repo form.`
+### ADD candidates — summary table
 
-**Primary sources verified:**
-- https://docs.hyperbolic.ai/docs/general/account-management — current live docs (free tier, no payment method)
-- https://docs.hyperbolic.ai/docs/general/billing-payments — $1 phone-verification credit
-- https://web.archive.org/web/20250613052051/https://docs.hyperbolic.xyz/docs/inference-api — base_url `https://api.hyperbolic.xyz/v1` + OpenAI-compat (archived inference docs; product has since pivoted toward GPU compute)
-- https://web.archive.org/web/20251030052837/https://docs.hyperbolic.xyz/docs/hyperbolic-pricing — model IDs (HF repo form) + Basic tier 60 RPM
+| Candidate | base_url | Free-tier summary | Confirming URL |
+|-----------|----------|-------------------|----------------|
+| AI21 | `https://api.ai21.com/studio/v1` | $10 credit, 3 months, no card to start | https://docs.ai21.com/reference/jamba-1-6-api-ref.md , https://docs.ai21.com/docs/usage-cost.md |
+| Kluster AI ⚠️ provisional | `https://api.kluster.ai/v1` | $5 credits on email verify, no card | https://x.com/klusterai/status/1884700560009683033 (+ secondary blog; official docs DNS-unreachable from research env) |
+| Baidu ERNIE / Qianfan | `https://qianfan.baidubce.com/v2` | ¥20 voucher on real-name auth, no card, 1 month | https://cloud.baidu.com/doc/qianfan/s/rmh4stn9m , https://cloud.baidu.com/doc/qianfan/s/wmh4sv6ya |
+| Stepfun (阶跃星辰) | `https://api.stepfun.com/v1` | Gifted "赠送账户" credits, real-name auth, no card (expires) | https://platform.stepfun.com/docs/zh/guides/developer/openai , https://platform.stepfun.com/docs/zh/guides/pricing/details |
+| iFlyTek Spark (讯飞星火) | `https://spark-api-open.xf-yun.com/v1` | Lite model perpetually free + claimable free quota, real-name, no card | https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html , https://xinghuo.xfyun.cn/sparkapi |
+| Tencent Hunyuan ⚠️ reverses prior rejection | `https://api.hunyuan.cloud.tencent.com/v1` | 1M free tokens on first activation, real-name, no card, 1 year | https://cloud.tencent.com/document/product/1729/97731 , https://cloud.tencent.com/document/product/1729/111007 |
+| ModelScope (魔搭社区) | `https://api-inference.modelscope.cn/v1` | "Free of charge" API-Inference + 200 Magicubes on signup, no card | https://modelscope.ai/docs/model-service/API-Inference/limits (+ GitHub repo #1615) |
+| Infermatic | `https://api.totalgpt.ai/v1` | Free plan + dedicated Free-models tier | https://infermatic.ai/docs/overview/ , https://infermatic.ai/pricing/ |
 
-**Gotchas (read before shipping):**
-- The inference API reference is **no longer in the current live docs** — `docs.hyperbolic.ai` pivoted to GPU compute; base_url and exact model IDs are confirmed from **archived** provider inference docs (Jun–Oct 2025) plus a live probe (`api.hyperbolic.xyz/v1/models` returns 401, host alive). The free tier itself is still confirmed in the **current** live Account Management/Billing docs.
-- Free amount is small and **one-time**: $1 promo credit granted on phone verification (no payment method; not a recurring quota); per-token pricing applies beyond it.
-- Model IDs use Hugging Face repo form (`meta-llama/Meta-Llama-3-70B-Instruct`), NOT the short display names ("Llama 3 70B").
-- The live model catalog (`app.hyperbolic.xyz/models` → `app.hyperbolic.ai/models`) is **login-gated**; the current exact model list could not be re-verified (latest snapshot Oct 2025). The two IDs above are stable, widely-hosted open models and very likely still served, but confirm against the live console before shipping.
-- Domain split: API base_url is `api.hyperbolic.xyz` (still live, not redirected); the app/dashboard is now `app.hyperbolic.ai` (`app.hyperbolic.xyz` redirects to `.ai`).
-- If the implementer cannot confirm the current model catalog is still hosted, prefer to omit Hyperbolic rather than ship stale IDs.
+### ADD candidates — full proposed catalog entries
 
----
+#### ai21 — ADD
+- **Entry:** `id="ai21"`, `name="AI21"`, `base_url="https://api.ai21.com/studio/v1"`, `protocol="openai"`, `keyless=false`, `signup_url="https://studio.ai21.com/"`, `guide_url="doc/free-providers/ai21.md"`
+- `notes_zh`: 新账号赠送 $10 免费额度（3 个月有效），无需信用卡即可开始；额度用完或到期后才需绑定支付方式。OpenAI 兼容 /chat/completions，提供 Jamba Large/Mini（Mamba-Transformer 架构，256K 上下文）。
+- `notes_en`: $10 free credit for 3 months on new accounts (no card to start; billing info required only after trial expires/exceeds). OpenAI-compatible /chat/completions; Jamba Large (v1.7) + Jamba Mini (v2), 256K context, Mamba-Transformer hybrid.
+- `free_models`: `["jamba-large", "jamba-mini"]`
+- **Free tier:** "$10 credit good for three months"; billing info required only AFTER trial expires/exceeds → no card to start. Verified from official curl `POST https://api.ai21.com/studio/v1/chat/completions` (Bearer + OpenAI body).
+- **Sources:** https://docs.ai21.com/reference/jamba-1-6-api-ref.md , https://docs.ai21.com/docs/usage-cost.md , https://docs.ai21.com/docs/jamba-foundation-models.md
+- **Risk:** Confirm the exact API model ID strings (`jamba-large`/`jamba-mini` vs `-latest`/versioned aliases) against the live API ref before shipping.
 
-### 7. Novita AI
+#### klusterai — ADD (PROVISIONAL)
+- **Entry:** `id="klusterai"`, `name="Kluster AI"`, `base_url="https://api.kluster.ai/v1"`, `protocol="openai"`, `keyless=false`, `signup_url="https://kluster.ai/"`, `guide_url="doc/free-providers/klusterai.md"`
+- `notes_zh`: 注册并验证邮箱即送 $5 免费额度，OpenAI 兼容，支持 Llama/DeepSeek；自适应推理（实时/异步/批处理）。⚠️ 官方文档在本次研究环境无法访问（kluster.ai 全域 DNS 无法解析），base_url 与模型 ID 经官方 X 账号 + 二手博客核实，正式收录前请再次核对官方文档。
+- `notes_en`: $5 free credits on signup + email verify (no card); OpenAI-compatible; Llama/DeepSeek models; adaptive inference (real-time/async/batch). ⚠️ Official kluster.ai docs were UNREACHABLE from this research environment (entire kluster.ai domain failed DNS resolution — likely an env/network issue); base_url + model IDs corroborated via Kluster's official X account + a secondary blog — re-verify against live official docs before shipping.
+- `free_models`: `["klusterai/Meta-Llama-3.1-8B-Instruct-Turbo", "klusterai/Meta-Llama-3.3-70B-Instruct-Turbo", "klusterai/Meta-Llama-3.1-405B-Instruct-Turbo", "deepseek-ai/DeepSeek-R1"]`
+- **Free tier:** $5 free credits on signup + email verification (no card mentioned). Source: Kluster official X (@klusterai) + secondary blog with working OpenAI SDK code.
+- **Sources:** https://x.com/klusterai/status/1884700560009683033 , https://walterpinem.com/getting-started-with-kluster-ai/
+- **Risk:** HIGH — **provisional only**. Official kluster.ai docs were DNS-unreachable from the research environment (apex/www/api all ENOTFOUND). base_url + model IDs are secondary-source-confirmed (official X + blog), NOT from a directly-fetched official doc/curl. **Re-verify against live kluster.ai docs before shipping.**
 
-- **Verdict: ACCEPTED** — OpenAI-compatible raw HTTP base_url (confirmed via official curl + code example with Bearer); genuinely free right now via a $1 no-card signup voucher plus $0 "TIME LIMITED FREE" models (`inclusionai/ling-3.0-flash-fin` priced **$0 in / $0 out** on the provider's own model-detail page) with exact IDs confirmed from provider model-detail pages.
+#### baidu-qianfan — ADD
+- **Entry:** `id="baidu-qianfan"`, `name="Baidu ERNIE / Qianfan (百度千帆)"`, `base_url="https://qianfan.baidubce.com/v2"`, `protocol="openai"`, `keyless=false`, `signup_url="https://cloud.baidu.com/product-s/qianfan_home"`, `guide_url="doc/free-providers/baidu-qianfan.md"`
+- `notes_zh`: 百度千帆 ModelBuilder，OpenAI 兼容（base_url https://qianfan.baidubce.com/v2，鉴权 Bearer bce-v3/… 千帆 API Key）。新用户实名认证后赠 20 元代金券，全平台无门槛、有效期 1 个月（无需绑卡）。模型：ernie-4.5-turbo-32k / ernie-5.0 / deepseek-v4.1-flash / glm-5.3 等（用代金券免费调用）。代金券仅 1 个月，到期按量付费。
+- `notes_en`: Baidu Qianfan ModelBuilder, OpenAI-compatible (base_url https://qianfan.baidubce.com/v2; auth Bearer bce-v3/… Qianfan API Key). New users get a ¥20 voucher after real-name auth, platform-wide, no threshold, valid 1 month (no card). Models: ernie-4.5-turbo-32k / ernie-5.0 / deepseek-v4.1-flash / glm-5.3 (free via voucher). Voucher expires in 1 month, then pay-as-you-go.
+- `free_models`: `["ernie-4.5-turbo-32k", "ernie-4.5-turbo-128k-preview", "ernie-5.0", "deepseek-v4.1-flash", "deepseek-v3.2", "glm-5.3"]`
+- **Free tier:** ¥20 voucher on real-name auth (实名认证, identity verification — not a card), platform-wide, no threshold, valid 1 month. Verified from official quickstart curl `https://qianfan.baidubce.com/v2/chat/completions` + OpenAI SDK `base_url="https://qianfan.baidubce.com/v2"`.
+- **Sources:** https://cloud.baidu.com/doc/qianfan/s/rmh4stn9m , https://cloud.baidu.com/doc/qianfan/s/1mh4su5jg , https://cloud.baidu.com/doc/qianfan/s/wmh4sv6ya
+- **Risk:** Voucher is one-time / 1-month; model lineup churns (ernie-5.x, deepseek-v4.x). Freeze `free_models` via `/v2/models` at catalog-build time.
 
-**Catalog fields:**
-- `id`: `novita-ai`
-- `name`: `Novita AI`
-- `base_url`: `https://api.novita.ai/openai/v1`
-- `protocol`: `openai`
-- `keyless`: `false`
-- `signup_url`: `https://novita.ai/console`
-- `free_models`:
-  - `inclusionai/ling-3.0-flash-fin`
-  - `inclusionai/ling-3.0-flash-sante`
-- `notes_zh`: `注册即赠 $1 信用额度且无需绑卡；另有 inclusionai/ling-3.0-flash-fin、ling-3.0-flash-sante 等“限时免费” $0 模型。OpenAI 兼容 base_url 为 https://api.novita.ai/openai/v1，使用 Bearer key。`
-- `notes_en`: `Genuinely free right now: $1 signup credit voucher (no payment method required) plus $0 "TIME LIMITED FREE" models (inclusionai/ling-3.0-flash-fin, inclusionai/ling-3.0-flash-sante). OpenAI-compatible base_url https://api.novita.ai/openai/v1, Bearer auth.`
+#### stepfun — ADD
+- **Entry:** `id="stepfun"`, `name="Stepfun (阶跃星辰)"`, `base_url="https://api.stepfun.com/v1"`, `protocol="openai"`, `keyless=false`, `signup_url="https://platform.stepfun.com/"`, `guide_url="doc/free-providers/stepfun.md"`
+- `notes_zh`: 阶跃星辰开放平台，OpenAI 兼容。新用户赠送额度（赠送账户，实名认证无需绑卡，有有效期）；文本模型（step-5-preview/step-3.7-flash/step-3.5-flash）按量计费可用赠送额度抵扣；另有 4 个限时免费语音模型。速率分档按累计充值金额，仅赠送额度时为 V0（5 并发 / 100 RPM / 500K TPM）。
+- `notes_en`: Stepfun open platform, OpenAI-compatible. New users get a gifted-credit account (real-name auth, no card, expires); text models (step-5-preview/step-3.7-flash/step-3.5-flash) are metered but callable free via gifted credits; 4 audio models are limited-time free. Rate tiers scale with cumulative recharge; free-only users sit at V0 (5 concurrency / 100 RPM / 500K TPM).
+- `free_models`: `["step-5-preview", "step-3.7-flash", "step-3.5-flash"]`
+- **Free tier:** Gifted "赠送账户" credits (spent before recharge account, with expiry); personal accounts require real-name auth (no card). Free-only users sit at rate tier V0 (5 concurrency / 100 RPM / 500K TPM). Verified from official OpenAI-migration guide + quickstart curl `https://api.stepfun.com/v1/chat/completions`.
+- **Sources:** https://platform.stepfun.com/docs/zh/guides/developer/openai , https://platform.stepfun.com/docs/zh/quickstart/overview , https://platform.stepfun.com/docs/zh/guides/pricing/details
+- **Risk:** Gifted amount not numerically specified in docs; credits expire; audio 限时免费 models may end. Re-verify gifted-credit amount + expiry.
 
-**Primary sources verified:**
-- https://novita.ai/models/model-detail/inclusionai-ling-3.0-flash-fin — model is real, priced **$0 in / $0 out** (124B MoE, 5.1B activated), with official code example `base_url="https://api.novita.ai/openai"` + Bearer + `model="inclusionai/ling-3.0-flash-fin"`
-- https://docs.novita.ai/guides/llm-api.md — OpenAI-compat endpoint
-- https://docs.novita.ai/guides/quickstart — quickstart + $1 voucher
-- https://docs.novita.ai/guides/faq — voucher terms
-- https://novita.ai/models — model library
+#### iflytek-spark — ADD
+- **Entry:** `id="iflytek-spark"`, `name="iFlyTek Spark (讯飞星火)"`, `base_url="https://spark-api-open.xf-yun.com/v1"`, `protocol="openai"`, `keyless=false`, `signup_url="https://xinghuo.xfyun.cn/sparkapi"`, `guide_url="doc/free-providers/iflytek-spark.md"`
+- `notes_zh`: 科大讯飞星火认知大模型，OpenAI 兼容（base_url https://spark-api-open.xf-yun.com/v1）。鉴权用控制台 APIPassword 作 Bearer token。Lite 版支持免费使用；可在产品页面领取免费额度（实名认证无需绑卡）。模型 ID：lite（免费）、generalv3.5（Max）、generalv3（Pro）、4.0Ultra、max-32k、pro-128k。注意 Max 套餐 2026-03-10 下线升级为 Ultra。
+- `notes_en`: iFlyTek Spark, OpenAI-compatible. Auth via console APIPassword as Bearer token. Lite model is perpetually free; free quota claimable on the product page (real-name auth, no card). Model IDs: lite (free), generalv3.5 (Max), generalv3 (Pro), 4.0Ultra, max-32k, pro-128k. Note Max subscription package offline 2026-03-10, upgraded to Ultra.
+- `free_models`: `["lite", "generalv3", "generalv3.5", "4.0Ultra"]`
+- **Free tier:** Lite model perpetually free ("Lite…支持免费使用"); claimable free quota on the product page; iFlyTek open platform uses real-name auth (no card). Verified from official HTTP doc + curl `https://spark-api-open.xf-yun.com/v1/chat/completions` + OpenAI SDK `base_url`.
+- **Sources:** https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html , https://xinghuo.xfyun.cn/sparkapi
+- **Risk:** Model lineup churns (Max→Ultra 2026-03-10). Confirm Lite is still free + free-quota claimable at runtime.
 
-**Gotchas:**
-- The $0 models are **"TIME LIMITED FREE"** promotional models and may end at any time; the $1 signup voucher is one-time and small (revoked for fraudulent/duplicate sign-ups).
-- **base_url nuance**: the OpenAI SDK examples use `https://api.novita.ai/openai` (no `/v1`) and the SDK appends `/chat/completions`; the curl-documented raw-HTTP endpoint is `https://api.novita.ai/openai/v1/chat/completions`. Use the `/v1` form (`https://api.novita.ai/openai/v1`) so a raw `POST {base_url}/chat/completions` matches the catalog convention; both forms work.
-- Model ID prefix is lowercase `inclusionai/` (no hyphen), e.g. `inclusionai/ling-3.0-flash-fin`.
-- Some free models also expose an Anthropic API option on their detail page; use the OpenAI-compatible endpoint.
-- `ling-3.0-flash-fin` is directly verified $0; `ling-3.0-flash-sante` is cited from the provider's model-detail page (same InclusionAI Ling-3.0-flash family, domain = health) — confirm both are still listed as $0 before shipping.
+#### tencent-hunyuan — ADD (⚠️ REVERSES prior research's "decommissioned" rejection)
+- **Entry:** `id="tencent-hunyuan"`, `name="Tencent Hunyuan (腾讯混元)"`, `base_url="https://api.hunyuan.cloud.tencent.com/v1"`, `protocol="openai"`, `keyless=false`, `signup_url="https://cloud.tencent.com/document/product/1729"`, `guide_url="doc/free-providers/tencent-hunyuan.md"`
+- `notes_zh`: 腾讯混元大模型，OpenAI 兼容（base_url https://api.hunyuan.cloud.tencent.com/v1）。首次开通（腾讯云个人/企业实名认证，无需绑卡）即赠免费资源包：生文模型共享 100 万 tokens、Hunyuan-embedding 100 万 tokens，有效期 1 年。模型：hunyuan-a13b / hunyuan-role-latest / hunyuan-translation / hunyuan-translation-lite / hunyuan-turbos-vision / hunyuan-t1-vision / hunyuan-embedding。注意：官方公告混元功能正逐步迁移至 TokenHub，原平台停止新购（但免费体验额度仍按首次开通发放，计费页更新于 2026-06-26）。建议运行时确认免费额度仍可领取。
+- `notes_en`: Tencent Hunyuan, OpenAI-compatible. First activation (Tencent Cloud personal/enterprise real-name auth, no card) grants a free resource package: shared 1M tokens for text models + 1M for Hunyuan-embedding, valid 1 year. Models: hunyuan-a13b / hunyuan-role-latest / hunyuan-translation / hunyuan-translation-lite / hunyuan-turbos-vision / hunyuan-t1-vision / hunyuan-embedding. CAVEAT: official notice says Hunyuan features are gradually migrating to TokenHub; the original platform stops NEW paid purchases but the free trial quota is still documented as granted on first activation (billing page updated 2026-06-26). Re-verify free-quota availability at runtime.
+- `free_models`: `["hunyuan-a13b", "hunyuan-role-latest", "hunyuan-translation", "hunyuan-translation-lite", "hunyuan-turbos-vision", "hunyuan-t1-vision", "hunyuan-embedding"]`
+- **Free tier:** Official billing page (updated 2026-06-26): first activation grants a one-time free resource package — text models share 1,000,000 tokens + Hunyuan-embedding 1M tokens, 1-year validity; requires Tencent Cloud personal/enterprise real-name auth (no card); free package spent before paid. Verified OpenAI-compat: official doc + curl `https://api.hunyuan.cloud.tencent.com/v1/chat/completions`.
+- **Sources:** https://cloud.tencent.com/document/product/1729/97731 (free-quota table) , https://cloud.tencent.com/document/product/1729/111007 (OpenAI-compat base_url + curl)
+- **Risk:** HIGH — (a) **reverses the prior research's "decommissioned 2026-09-30" rejection**; a TokenHub migration notice is present but the free-quota-on-first-activation is still documented → parent must carefully re-verify the free tier is still claimable. (b) **base_url RESOLVED** — canonical is `https://api.hunyuan.cloud.tencent.com/v1` per the authoritative OpenAI-compat doc (1729/111007, updated 2026-04-27): verbatim *"base_url：https://api.hunyuan.cloud.tencent.com/v1"* + curl + OpenAI/Node/Go SDK all identical. The `https://hunyuan.cloud.tencent.com/openai/v1` form (seen only in the TRTC integration doc 647/79679, model `hunyuan-2.0-thinking-20251109`) is a non-canonical/older artifact and does NOT appear in the official OpenAI-compat doc; the Anthropic-compat sibling is `api.hunyuan.cloud.tencent.com/anthropic`, confirming the host pattern `api.hunyuan.cloud.tencent.com/{v1|anthropic}`. Use `https://api.hunyuan.cloud.tencent.com/v1` (gateway `+ /chat/completions` hits the official full-path endpoint). (c) Model lineup churns during migration.
 
----
+#### modelscope — ADD
+- **Entry:** `id="modelscope"`, `name="ModelScope (魔搭社区)"`, `base_url="https://api-inference.modelscope.cn/v1"`, `protocol="openai"`, `keyless=false`, `signup_url="https://www.modelscope.cn/"`, `guide_url="doc/free-providers/modelscope.md"`
+- `notes_zh`: 阿里达摩院开源模型即服务（MaaS）平台，API-Inference 免费提供 1000+ 开源模型推理（注册送 200 Magicubes，每日续赠）；OpenAI 兼容。与已收录的 DashScope/Bailian 是不同服务（免费开源模型 vs 官方付费 API），非重复。模型 ID 为 org/model 格式，建议运行时拉取 /v1/models 列表。
+- `notes_en`: Alibaba DAMO open-source MaaS hub; API-Inference serves 1000+ open-source models free (200 Magicubes on signup + daily top-up); OpenAI-compatible. Distinct from the cataloged DashScope/Bailian (free open-source inference vs official paid API) — not a duplicate. Model IDs use org/model form; enumerate via /v1/models at runtime.
+- `free_models`: `["deepseek-ai/DeepSeek-R1", "Qwen/Qwen2.5-72B-Instruct", "deepseek-ai/DeepSeek-V3"]`
+- **Free tier:** Official: API-Inference is "free of charge for developers to experience"; signup grants 200 Magicubes (+50/day when an Alibaba Cloud account is linked); no card. Free tier covers ALL hosted open-source models (1000+). Verified OpenAI-compatible via VoltAgent integration doc ("OpenAI-compatible adapter, default base URL https://api-inference.modelscope.cn/v1") + official ModelScope GitHub repo issue #1615 (real call).
+- **Sources:** https://modelscope.ai/docs/model-service/API-Inference/limits , https://github.com/modelscope/modelscope/issues/1615 , https://voltagent.dev/models-docs/providers/modelscope/
+- **Risk:** The official quickstart page is JS-rendered (returned only footer/popup to the fetcher); base_url is corroborated by the official GitHub repo + VoltAgent integration doc, **not a directly-fetched official curl** — re-verify the exact base_url from official docs. Model IDs rotate (Qwen/DeepSeek versions); enumerate `/v1/models` at runtime.
 
-### 8. Requesty (LLM Router)
+#### infermatic — ADD
+- **Entry:** `id="infermatic"`, `name="Infermatic"`, `base_url="https://api.totalgpt.ai/v1"`, `protocol="openai"`, `keyless=false`, `signup_url="https://infermatic.ai/"`, `guide_url="doc/free-providers/infermatic.md"`
+- `notes_zh`: Infermatic（infermatic.ai，API 域名 api.totalgpt.ai），OpenAI 兼容（vLLM 后端，/v1/chat/completions）。有免费计划（Start with a free plan）及专属 Free 模型档（如 TheDrummer-Rocinante-12B-v1.1），另有 $9/$20 付费档。鉴权 Bearer API Key。注意：任务给定的 infermatic.com SSL 报错，真实域名为 infermatic.ai。建议运行时确认免费档无需绑卡。
+- `notes_en`: Infermatic (infermatic.ai; API host api.totalgpt.ai), OpenAI-compatible (vLLM backend, /v1/chat/completions). Has a free plan with a dedicated Free-models tier (e.g., TheDrummer-Rocinante-12B-v1.1) plus paid $9/$20 tiers. Auth Bearer API Key. NOTE: the task's infermatic.com SSL-errored; the real domain is infermatic.ai. Confirm at signup that the free plan requires no card.
+- `free_models`: `["TheDrummer-Rocinante-12B-v1.1", "Sao10K-L3.3-70B-Euryale-v2.3-FP8-Dynamic", "Sao10K-72B-Qwen2.5-Kunou-v1-FP8-Dynamic", "TheDrummer-Anubis-70B-v1-FP8-Dynamic"]`
+- **Free tier:** "Start with a free plan" (homepage) + a dedicated "Free models" tier; flat-rate gateway otherwise ($9/$20 paid tiers). Verified OpenAI-compatible from official API docs (`GET /v1/models`, `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings`; Bearer; vLLM backend).
+- **Sources:** https://infermatic.ai/docs/overview/ , https://infermatic.ai/ , https://infermatic.ai/pricing/
+- **Risk:** Confirm at signup that the free plan needs no card. Note the real domain is `infermatic.ai` (the task's `infermatic.com` was the wrong TLD / SSL error).
 
-- **Verdict: ACCEPTED** — Official docs + live free-models catalog confirm OpenAI-compatible base_url `https://router.requesty.ai/v1` with Bearer auth and `/v1/chat/completions`; free tier gives 200 requests/day with no credit card and no trial expiry, restricted to free models; 12 exact free model IDs enumerated on the live `requesty.ai/models/free` page.
+### EXCLUDE candidates
 
-**Catalog fields:**
-- `id`: `requesty`
-- `name`: `Requesty (LLM Router)`
-- `base_url`: `https://router.requesty.ai/v1`
-- `protocol`: `openai`
-- `keyless`: `false`
-- `signup_url`: `https://app.requesty.ai/sign-up`
-- `free_models`:
-  - `nvidia/nemotron-3-super-120b-a12b`
-  - `google/gemma-4-31b-it`
-  - `mistral/leanstral-1-5`
-  - `meta/muse-glimmer-30b`
-  - `inclusionai/ling-3.0-tiny`
-  - `nvidia/nemotron-3-ultra-550b-a55b`
-- `notes_zh`: `免费层每日 200 次请求、无需信用卡，仅限免费模型（如 nvidia/nemotron-3-super-120b-a12b）；需注册获取 Bearer API key（非免密钥）。`
-- `notes_en`: `Free tier: 200 requests/day, no credit card, no trial expiry, free models only (e.g. nvidia/nemotron-3-super-120b-a12b); signup required for a Bearer API key (not keyless).`
-
-**Primary sources verified:**
-- https://www.requesty.ai/free-models — "200 requests per day … No credit card, no trial timer"; "point your OpenAI-compatible client at https://router.requesty.ai/v1"
-- https://www.requesty.ai/models/free — live catalog enumerating 12 exact free model IDs (all marked "Free")
-- https://docs.requesty.ai/quickstart — base_url + Bearer
-- https://docs.requesty.ai/api-reference/overview — API reference
-- https://www.requesty.ai/pricing — pricing
-
-**Gotchas:**
-- Official base_url is `https://router.requesty.ai/v1` (**NOT** `api.requesty.ai/v1` as some hints suggested).
-- Not keyless: requires signup at `app.requesty.ai` to generate a Bearer API key.
-- Free models are marked "free for now" and the catalogue **changes over time**; confirm current free IDs via the live model list (`requesty.ai/models/free`) or `GET /v1/models` before shipping.
-- Quota is 200 requests/day and 20 requests/min for new orgs.
-- Some free models are **region-locked** (e.g. `mistral/leanstral-1-5` EU-only; `poolside/*` and most `nvidia/*` US-only).
-- Requesty also exposes an Anthropic-protocol endpoint (`ANTHROPIC_BASE_URL=https://router.requesty.ai`) for Claude Code, but the OpenAI-compatible `/v1/chat/completions` path is the verified one for this catalog.
-
----
-
-### 9. Cohere
-
-- **Verdict: ACCEPTED** — Cohere exposes a raw-HTTP OpenAI-compatible endpoint (`https://api.cohere.ai/compatibility/v1/chat/completions`, Bearer auth, OpenAI JSON body) per official docs (exact base_url in multiple code examples); free trial key needs no payment method (1,000 calls/month) with multiple confirmed live model IDs.
-
-**Catalog fields:**
-- `id`: `cohere`
-- `name`: `Cohere`
-- `base_url`: `https://api.cohere.ai/compatibility/v1`
-- `protocol`: `openai`
-- `keyless`: `false`
-- `signup_url`: `https://dashboard.cohere.com/api-keys`
-- `free_models`:
-  - `command-a-plus-05-2026`
-  - `command-a-03-2025`
-  - `command-r-08-2024`
-  - `command-r-plus-08-2024`
-- `notes_zh`: `免费试用 API key（无需信用卡），每月 1,000 次调用上限，每模型 20 req/min；通过 OpenAI 兼容端点使用。`
-- `notes_en`: `Free trial API key (no credit card), 1,000 calls/month cap + 20 req/min per model; works via the OpenAI-compat endpoint.`
-
-**Primary sources verified:**
-- https://docs.cohere.com/docs/compatibility-api.md — exact base_url `https://api.cohere.ai/compatibility/v1` (Python/TS/cURL examples), model `command-a-plus-05-2026`, `Authorization: Bearer`
-- https://docs.cohere.com/docs/models — `command-a-plus-05-2026`, `command-a-03-2025`, `command-r-08-2024`, `command-r-plus-08-2024` all marked "Live"; bare `command-r`/`command-r-plus` deprecated Sept 15, 2025
-- https://docs.cohere.com/docs/rate-limits — trial key 1,000 calls/month + 20 req/min
-- https://docs.cohere.com/v2/docs/how-does-cohere-pricing-work — trial key needs no payment method
-
-**Gotchas:**
-- base_url is `https://api.cohere.ai/compatibility/v1` (note the **.ai** TLD + `/compatibility/v1` path — NOT a bare `/v1`). The docs' audio-transcription example confusingly uses `api.cohere.com` for that one endpoint, but all chat-completions examples use `api.cohere.ai/compatibility/v1`; use the latter.
-- Trial key limited to 1,000 calls/month total + 20 req/min per model.
-- The bare aliases `command-r` and `command-r-plus` are **DEPRECATED** as of Sept 15, 2025 — use the dated variants (`command-r-plus-08-2024`, `command-a-03-2025`, etc.).
-- The Compatibility API drops some OpenAI params (`store`, `metadata`, `logit_bias`, `n`, `top_logprobs`, `modalities`, etc.) and only supports `reasoning_effort` none/high.
+| Candidate | Reason | Confirming URL |
+|-----------|--------|----------------|
+| **Hyperbolic** (re-investigated per task) | Pivoted to GPU rental; official docs (`www.hyperbolic.ai/docs`) contain NO inference/chat API reference (only GPU-rental APIs); `app.hyperbolic.ai/models` login-gated; old `api.hyperbolic.xyz/v1` only in third-party profiles (likely deprecated); no verifiable no-card free tier. Fails confirm-or-exclude on all 3 criteria. | https://www.hyperbolic.ai/docs/overview/overview , https://www.hyperbolic.ai/docs/general/billing-payments |
+| Together AI | PAYG per-token, no no-card free tier; only 1 $0 model (Ternary Bonsai 27B) — fails ≥2. | https://www.together.ai/pricing |
+| DeepInfra | Card or pre-pay mandatory ("you won't be able to use our services"); all models >$0. | https://deepinfra.com/pricing |
+| Chutes AI | No free tier — authoritative `/llms.txt` confirms lowest plan $3/mo or PAYG balance top-up; anonymous (no Bearer) → 429; all models >$0. (Prior "no free tier" rejection CONFIRMED current, not outdated.) | https://chutes.ai/llms.txt , https://chutes.ai/pricing |
+| AI/ML API (aimlapi) | Free Tier officially PAUSED; "-free"-suffixed models actually bill (official example shows `usd_spent: 0.06`); no no-card free access. | https://docs.aimlapi.com/faq/free-tier.md , https://aimlapi.com/ai-ml-api-pricing |
+| Unify (unify.ai) | Pivoted to a continual-learning research lab; `docs.unify.ai` does not resolve (ENOTFOUND); no hosted OpenAI-compat LLM API/free base_url remains. | https://unify.ai |
+| Fal | Queue/prediction API (`queue.fal.run/<model>`), NOT `/chat/completions`; PAYG, no free tier. | https://fal.ai/docs/documentation/quickstart , https://fal.ai/pricing |
+| Replicate | Predictions API (`api.replicate.com/v1/predictions`), NOT `/chat/completions`; "free limits" only for select models via predictions API, card/prepaid for sustained use. | https://replicate.com/docs/reference/http , https://replicate.com/docs/topics/billing |
+| Perplexity | Paid API (Sonar/Agent/Router/Search/Embeddings all per-token/per-request with billing setup); no free tier/credits. | https://docs.perplexity.ai/docs/getting-started/pricing |
+| Writer | Paid per-token (Palmyra X6 etc.); enterprise-focused; no free tier/credits. | https://dev.writer.com/home/pricing |
+| GooseAI | Credit pre-purchase system, no free credits; models are stale 2022-era (GPT-Neo/GPT-J/GPT-NeoX). | https://goose.ai/pricing |
+| NLP Cloud | Task-specific API (`/v1/<model>/<task>`), NOT `/chat/completions`. | https://nlpcloud.com |
+| Lepton AI | Acquired by NVIDIA (2025) → "NVIDIA DGX Cloud Lepton" GPU compute platform; old hosted OpenAI-compat LLM API + free credits gone; "free plan" is for compute, not a hosted LLM base_url. | https://www.nvidia.com/en-us/data-center/dgx-cloud-lepton/ , https://docs.nvidia.com/dgx-cloud/lepton/guides/ |
+| AnyScale | Pivoted to "Production-scale AI with Ray" compute; old OpenAI-compat LLM Endpoints deprecated; $100 credit is for Ray compute, not a free hosted LLM base_url. | https://www.anyscale.com |
+| Databricks | OpenAI-compat Foundation Model APIs but require a Databricks workspace + PAT (per-workspace base_url); paid platform, no free hosted no-card base_url. | https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/ |
+| Llama-API | Third-party `llama-api.com` currently down (Cloudflare 522); not official Meta; Meta's llama.meta.com offers no free OpenAI-compat API. | https://llama-api.com |
+| ZhipuAI BigModel (open.bigmodel.cn) | DUPLICATE of the cataloged `zai` entry — z.ai is ZhipuAI's international brand; `open.bigmodel.cn` is the same platform's domestic host (same `/api/paas/v4` path, same `zai-sdk`, identical GLM models). Keep `zai`; do not add separately. | https://docs.bigmodel.cn/cn/guide/start/quick-start |
+| Baichuan (百川) | Business-application-gated ("申请体验测试，商务跟进"), not self-serve; public API doc is a JS app showing only the apply shell — base_url not verifiable. | https://platform.baichuan-ai.com/docs/api |
+| Minimax | No free text-chat tier — text models (MiniMax-M3/M2.7) are pay-as-you-go; the only "Free" models (MiniMax-H3/H3-Max) are video-generation, not chat completions; no free signup credits. | https://platform.minimax.io/docs/guides/pricing-paygo |
+| 01.AI (Yi) | Platform winding down consumer API (official 2026-08-03 notice: "逐步停止…API 调用及充值"); pivoting to enterprise. | https://platform.lingyiwanwu.com/ |
+| Targon | Confidential GPU/CPU compute rental marketplace (Bittensor-backed; per-GPU-hour pricing), not an OpenAI-compat LLM chat API. | https://targon.com |
+| Sherpa | Enterprise federated-learning / privacy-preserving AI SaaS ("Book a demo"), not an OpenAI chat API. | https://sherpa.ai |
+| OpenBase | `openbase.com` does not resolve (DNS ENOTFOUND); unreachable/defunct (historically an AI-tools directory, not an LLM API). | https://openbase.com |
 
 ---
 
-### 10. Alibaba Cloud Bailian (DashScope)
+## Section 3 — High-risk flags (parent must independently re-fetch)
 
-- **Verdict: ACCEPTED** — Verified OpenAI-compatible raw-HTTP endpoint (official curl with `Authorization: Bearer`) at `https://dashscope.aliyuncs.com/compatible-mode/v1`; 90-day free quota auto-granted on activation and usable with no payment method (unverified users OK); `qwen-plus` and `qwen-max` confirmed as free model IDs.
+### Existing providers
+1. **volcengine-ark model IDs (HIGH rotation).** Date-suffixed `doubao-seed-*-<YYMMDD>` IDs rotate frequently; the recommended `doubao-seed-2-1-pro-260915` / `doubao-seed-2-1-turbo-260628` are current as of the live model-list page but will rotate again. Consider the `doubao-seed-evolving` alias for rotation resistance. Also: the catalog's `doubao-seed-2-0-lite-260428` was not merely stale but **non-free** — confirm replacement is in the free-quota list.
+2. **groq free_models + free-tier TPM.** 4/5 catalog IDs are wrong/deprecated; recommended replacement list (`openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.8-27b`, `openai/gpt-oss-safeguard-20b`) must be re-confirmed on the live models page. Discrepancy: rate-limits doc says **8K TPM** for free tier vs models page "250K TPM" (that 250K is the paid Developer tier) — confirm the actual free-tier TPM. Also re-verify whether `moonshotai/kimi-k2-instruct` is truly gone.
+3. **cerebras EXCLUDE (policy change).** First-hand confirmed card-required $5 trial + "no permanently free tier" — but this reverses the prior catalog, so the parent should re-fetch `inference-docs.cerebras.ai/support/rate-limits` to confirm the policy truly changed (and there's no separate no-card tier) before removing.
+4. **zai free-flash status (RESOLVED first-hand).** z.ai pricing page confirms the FREE flash models are `glm-4.5-flash` and `glm-4.7-flash`; the "latest" `glm-5.3-flash`/`glm-5.3-flashx` are **PAID**. Use `["glm-4.5-flash", "glm-4.7-flash"]`. (A subagent had wrongly suggested `glm-5.3-flash` — corrected by direct fetch of https://docs.z.ai/guides/overview/pricing.)
+5. **novita-ai "$1 credit, no card" claim.** base_url (no `/v1`) and the two $0 models are confirmed; the "$1 signup credit, no card" figure could not be confirmed from public docs without login. The $0 models satisfy the free criterion regardless, but if the catalog's `notes` cite the $1 credit, verify on `novita.ai/billing` after signup.
+6. **alibaba-dashscope alias resolution + free-quota terms.** Confirm `qwen-plus`/`qwen-max` still resolve (else refresh to `qwen3.7-plus`/`qwen3.8-max`) and that the 90-day no-card free quota still applies.
+7. **mistral free-mode terms.** Confirm which current models are free and that the free tier still needs no card.
+8. **siliconflow / openrouter free-SKU rotation.** Both lists rotate fast; re-enumerate from live pricing / `/api/v1/models` at catalog-update time.
+9. **nvidia trial caps.** 1000-credit grant is a one-time trial (5000 total cap), not perpetually free; build.nvidia.com now also shows paid partner per-token pricing alongside the free-credit NIM endpoint — confirm the 4 catalog models remain free-credit-eligible. Also re-confirm the exact API `model` string for `meta/llama-3.3-70b-instruct` and `mistralai/mixtral-8x22b-instruct-v0.1` (dotted form per catalog vs underscored URL slug).
+10. **cloudflare model namespace.** Confirm `@cf/mistralai/mistral-7b-instruct-v0.1` (catalog) vs `@cf/mistral/mistral-7b-instruct-v0.1` (current pricing page path) — possible namespace change.
 
-**Catalog fields:**
-- `id`: `alibaba-dashscope`
-- `name`: `Alibaba Cloud Bailian (DashScope)`
-- `base_url`: `https://dashscope.aliyuncs.com/compatible-mode/v1`
-- `protocol`: `openai`
-- `keyless`: `false`
-- `signup_url`: `https://help.aliyun.com/zh/model-studio/get-api-key`
-- `free_models`:
-  - `qwen-plus`
-  - `qwen-max`
-- `notes_zh`: `首次开通阿里云百炼即自动发放各模型 90 天新人免费额度（如 qwen-plus/qwen-max，约 100 万 Token/模型）；未认证用户也可调用，无需绑定支付方式；额度耗尽或到期后转为按量付费。`
-- `notes_en`: `Free quota auto-granted on Model Studio activation (~1M tokens per model, valid 90 days, e.g. qwen-plus/qwen-max); usable by unverified accounts with no payment method bound; switches to pay-as-you-go only after quota exhaustion/expiry.`
-
-**Primary sources verified:**
-- https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope — OpenAI-compat endpoint + curl with `Authorization: Bearer`
-- https://help.aliyun.com/zh/model-studio/new-free-quota — 90-day free quota terms
-- https://help.aliyun.com/zh/model-studio/get-api-key — API key + signup
-- https://www.alibabacloud.com/help/en/model-studio/first-api-call-to-qwen — first call
-- https://www.alibabacloud.com/help/en/model-studio/model-pricing — pricing/free rows
-- https://help.aliyun.com/zh/model-studio/rate-limit — rate limits
-
-**Gotchas:**
-- Free quota exists **only in the Beijing (华北2) region** for the China product; API keys are region-specific and not interchangeable across Beijing/Virginia/Singapore.
-- The legacy base_url `https://dashscope.aliyuncs.com/compatible-mode/v1` still works, but newer docs prefer the workspace-specific form `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` (requires the user's WorkspaceId). Use the legacy form for the catalog (works without a WorkspaceId).
-- Free quota is a **one-time 90-day grant** (NOT recurring daily/monthly) and is non-renewable per real-name entity.
-- Use the unversioned aliases (`qwen-plus`, `qwen-max`) for stability; the exact per-model free-token amounts and model lineup change — always check the live pricing page.
-- `qwen-turbo` is also a current model but confirm its free-quota row before relying on it.
-
----
-
-### 11. Volcengine Ark (Doubao)
-
-- **Verdict: ACCEPTED** — OpenAI-compatible base_url `https://ark.cn-beijing.volces.com/api/v3` verified in official docs with Bearer auth + OpenAI-shaped body; new users get a free quota via 安心体验模式 (safe-experience mode) with real-name authentication (ID verification, **no payment method**); 2+ free `doubao-seed-*` model IDs confirmed from official docs/code examples and the live model-price page (API IDs use dashed+date-suffix format).
-
-> Note: **Tencent Hunyuan is REJECTED** (separate candidate #17 below). Only Volcengine Ark (Doubao) is accepted here.
-
-**Catalog fields:**
-- `id`: `volcengine-ark`
-- `name`: `Volcengine Ark (Doubao)`
-- `base_url`: `https://ark.cn-beijing.volces.com/api/v3`
-- `protocol`: `openai`
-- `keyless`: `false`
-- `signup_url`: `https://console.volcengine.com/ark`
-- `free_models`:
-  - `doubao-seed-2-0-lite-260428`
-  - `doubao-seed-1-6-251015`
-- `notes_zh`: `火山方舟新用户经实名认证后可享安心体验模式：50 万 token 免费额度，无需绑卡，耗尽即停；每个模型另有免费额度。`
-- `notes_en`: `Volcengine Ark: new users get a 500k-token free quota via safe-experience mode (no payment method; service pauses before charges), and every model has its own free call quota.`
-
-**Primary sources verified:**
-- https://docs.volcengine.com/docs/82379/1298459 — base_url `https://ark.cn-beijing.volces.com/api/v3` + OpenAI-compat
-- https://docs.volcengine.com/docs/82379/1399009 — OpenAI SDK (`from openai import OpenAI` with `ARK_API_KEY`) migration example
-- https://docs.volcengine.com/docs/82379/1330626 — 安心体验模式 free quota
-- https://www.volcengine.com/docs/82379/1544106 — live model-price page confirming `doubao-seed-2.0-lite`, `doubao-seed-1.6`, etc. as current models
-- https://github.com/volcengine/OpenViking/blob/main/docs/zh/guides/02-volcengine-purchase-guide.md — confirms API ID format is dashed+date-suffixed: `doubao-seed-2-0-lite-260428` (published 2025-12-28)
-- https://www.volcengine.com/product/ark — product page
-
-**Gotchas:**
-- base_url is `/api/v3` (**NOT `/v1`**) — it is the documented OpenAI-compatible equivalent; the OpenAI Python SDK works by setting `base_url` to this value.
-- Free tier is a **one-time 500k-token signup quota** via 安心体验模式 for users who have NOT opened a paid model service; it is not a recurring daily quota by default (the product page also advertises a claimable daily up-to-5M-tokens-per-model promo, but its exact terms were not confirmable).
-- Volcengine account registration requires real-name authentication (实名认证 = ID verification, **NOT a credit card**) — no payment method is needed to use the free quota.
-- Model IDs use a dashed+date format and are **updated frequently** (e.g. `doubao-seed-2-0-lite-260428`, `doubao-seed-1-6-251015`) — verify current IDs in the Volcengine console model list (doc 1330310) before shipping. The two IDs above follow the documented format and reference models confirmed live on the price page (`doubao-seed-2.0-lite`, `doubao-seed-1.6`).
-- The Tencent Hunyuan endpoint (`api.hunyuan.cloud.tencent.com/v1`) is fully decommissioned on 2026-09-30 and its free models went offline 2026-06-22; its migration target TokenHub requires enabling post-payment (a payment gate) — Hunyuan does **not** qualify and must not be added.
-
----
-
-## Rejected providers
-
-### 2. DeepSeek — ❌ REJECTED
-- **Reason:** OpenAI-compatible (`https://api.deepseek.com`, `POST /chat/completions` works) and exact current model IDs (`deepseek-flash`, `deepseek-v4-pro`) are confirmed from official docs, but the **free tier is not clearly stated on any public primary source** — the pricing page is pay-as-you-go and free-quota specifics are deferred (ToS §6.2) to the login-gated `platform.deepseek.com`. The free-tier requirement is not met (fails "clearly stated").
-- **Sources:** https://api-docs.deepseek.com/quick_start/pricing , https://api-docs.deepseek.com/api/get-user-balance , https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html
-- **Gotchas:** base_url `https://api.deepseek.com` has no `/v1` suffix but `POST /chat/completions` works (the `/v1` form is also historically accepted). If DeepSeek later publishes a no-card free quota on a public page, this becomes acceptable.
-
-### 4. GitHub Models — ❌ REJECTED
-- **Reason:** GitHub Models was **fully retired as of 2026-07-30** — the inference API, playground, model catalog, and BYOK are no longer available to any customer, so there is no working free OpenAI-compatible endpoint.
-- **Sources:** https://docs.github.com/en/github-models , https://models.github.ai/inference
-- **Gotchas:** GitHub directs users to Azure AI Foundry or GitHub Copilot instead; neither is a drop-in free keyless OpenAI-compatible endpoint under the `github.ai`/`models.inference.azure.com` domain.
-
-### 7. Together AI — ❌ REJECTED
-- **Reason:** OpenAI-compatible (`https://api.together.ai/v1`, raw HTTP `/v1/chat/completions` with Bearer key) but **NOT genuinely free**: official billing docs state "Together AI does not currently offer free trials" and platform access requires a minimum $5 credit purchase with a payment method (fully prepaid).
-- **Sources:** https://docs.together.ai/docs/billing-credits , https://docs.together.ai/docs/inference/openai-compatibility , https://www.together.ai/pricing
-- **Gotchas:** The catalog lists one Free-priced model (`Prism-ML/Ternary-Bonsai-27B`) but it still cannot be called without the $5 prepaid balance + payment method on file. The "$5 free credits" hint is contradicted by the provider's current official docs.
-
-### 8. DeepInfra — ❌ REJECTED
-- **Reason:** OpenAI-compatible (verified base_url `https://api.deepinfra.com/v1/openai`, raw HTTP + Bearer auth), but **REJECTED**: DeepInfra is a pure pay-as-you-go per-token provider with **no documented free tier, no free signup credits, no recurring free quota, and no $0/free models** in any official source.
-- **Sources:** https://docs.deepinfra.com/chat/overview , https://deepinfra.com/pricing , https://deepinfra.com/models/text-generation
-- **Gotchas:** The hinted base_url `/v1` is wrong (documented form is `https://api.deepinfra.com/v1/openai`); `meta-llama/Meta-Llama-3.1-8B-Instruct` is paid, not free — the actual id is `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` ($0.02/1M in). Strong low-cost provider, but not a free-tier provider by this catalog's criteria.
-
-### 10. Chutes AI — ❌ REJECTED
-- **Reason:** Despite being OpenAI-compatible (verified base_url `https://llm.chutes.ai/v1`), Chutes' official pricing FAQ states **"We do not offer a free tier at this time"** (top-up/PAYG only, no free credits), and inference requires a Bearer key (anonymous requests 429) — fails the "genuinely free right now" requirement.
-- **Sources:** https://chutes.ai/pricing , https://chutes.ai/llms.txt , https://chutes.ai/agents/connect
-- **Gotchas:** The "Chutes is a free LLM router" reputation is outdated. For reference only: verified OpenAI base_url is `https://llm.chutes.ai/v1` (NOT `api.chutes.ai`, which is the management API); signup at `https://chutes.ai/auth/start` (no card required, but no free credits granted); every catalog model is paid per-token.
-
-### 17. Tencent Hunyuan — ❌ REJECTED
-- **Reason:** The Hunyuan platform `api.hunyuan.cloud.tencent.com` is **fully decommissioned on 2026-09-30** with free models offline since 2026-06-22, and its migration target TokenHub (`tokenhub.tencentmaas.com/v1`) requires enabling post-payment (a payment gate).
-- **Sources:** https://cloud.tencent.com/document/product/1729/131925 , https://cloud.tencent.com/document/product/1729/111007
-- **Gotchas:** Do not add Tencent Hunyuan. (Volcengine Ark above is the accepted Chinese-cloud provider.)
-
-### 18. Lepton AI — ❌ REJECTED
-- **Reason:** Lepton AI was acquired by NVIDIA; the old hosted OpenAI-compatible LLM API at `api.lepton.ai` is dead (resolves to a non-public IP). The current product, NVIDIA DGX Cloud Lepton, is an enterprise GPU deployment platform with only per-deployment `${your-endpoint-url}` placeholders (no stable public `/v1` base_url) where users deploy their own Hugging Face models — so there is no hosted base_url, no recurring free hosted-inference tier, and no provider-supplied free model id strings.
-- **Sources:** https://docs.nvidia.com/dgx-cloud/lepton/get-started/ , https://docs.nvidia.com/dgx-cloud/lepton/get-started/endpoint/ , https://docs.nvidia.com/dgx-cloud/lepton/features/endpoints/create-llm/
-- **Gotchas:** Third-party claims of "$10 free signup credits" refer to the pre-acquisition hosted API that no longer exists. Even if a deployment exposes an OpenAI-shaped surface, the base_url and model IDs are user-deployment-specific, so it cannot be added as a one-click provider.
-
-### 19. AnyAPI — ❌ REJECTED
-- **Reason:** AnyAPI is a real provider with an apparent free tier ("Start Free", a "Free" tier filter, and a reported recurring 100K anytokens/day quota), and it is OpenAI-compatible (`https://api.anyapi.ai/v1`, Bearer). However, the **exact currently-valid free model IDs could not be confirmed** from an accessible primary source: the live model catalog (`anyapi.ai/ai-models`) is behind a Cloudflare challenge and could not be enumerated, and the model IDs the research surfaced (`openai/gpt-4o`, `openai/gpt-4-turbo`) are not current in the live catalog (which now lists `openai/gpt-6-astra`, `z-ai/glm-5-3-flash`, `google/gemini-3-8-flash`, etc.). Fails "at least 2 exact free model IDs you can list" against a clean primary source.
-- **Sources:** https://anyapi.ai/ai-models , https://docs.anyapi.ai/ , https://anyapi.ai/
-- **Gotchas:** If the implementer can enumerate the current Free-tier model IDs (e.g. by logging into the dashboard), AnyAPI could become acceptable — the free daily-quota tier (recurring, no card statement) and OpenAI-compat base_url are otherwise plausible. Listed IDs (gpt-4o/gpt-4-turbo) are likely deprecated in the current 2026 catalog; do not ship them.
-
----
-
-## Methodology notes
-
-- Each provider's OpenAI compatibility was confirmed against the provider's **own** docs/code examples (curl or SDK `base_url`/`baseURL` + `Authorization: Bearer` + OpenAI-shaped body), not third-party blog roundups.
-- Free-tier terms were confirmed against the provider's own pricing/billing/rate-limit docs. "No payment method required" was required for credit-based free tiers; identity verification (real-name auth, phone) is treated as distinct from a payment method and allowed.
-- Model IDs were taken **verbatim** from the providers' live official pages (model catalogs, pricing tables, code examples, model-detail pages). Where a sub-agent's proposed ID was found to be outdated/not on the current page (e.g. Fireworks `llama-v3p1-8b-instruct`, AnyAPI `gpt-4o`), it was corrected or the provider rejected.
-- Cross-corroboration: several "futuristic-looking" model IDs (e.g. `gpt-oss-120b`, `gemma-4-31b-it`, `nemotron-3-super-120b-a12b`, `kimi-k2.6`, `glm-5p2`) were independently confirmed to be real and current because they appear on **multiple** providers' live official pages (SambaNova, Novita, Fireworks, Requesty, HuggingFace, Cohere) — these are genuine current open-weight models, not inventions.
+### New candidates
+11. **Tencent Hunyuan (REVERSAL — base_url resolved).** This ADD **reverses the prior research's "decommissioned 2026-09-30" rejection** — the parent must carefully re-verify the free tier (1M tokens on first activation) is still claimable, because a TokenHub migration notice is present. base_url is now **RESOLVED**: canonical = `https://api.hunyuan.cloud.tencent.com/v1` per the authoritative OpenAI-compat doc (1729/111007, updated 2026-04-27, verbatim base_url + curl + OpenAI/Node/Go SDK identical); the `hunyuan.cloud.tencent.com/openai/v1` form is a non-canonical TRTC-integration artifact, not in the official OpenAI-compat doc. (Anthropic-compat sibling: `api.hunyuan.cloud.tencent.com/anthropic`.) So no base_url re-verification needed — only the free-tier/migration re-check remains.
+12. **Kluster AI (provisional ADD).** Official `kluster.ai` docs were DNS-unreachable from the research environment (entire domain ENOTFOUND). base_url (`https://api.kluster.ai/v1`) + model IDs are secondary-source-confirmed (Kluster official X + a blog), NOT from a directly-fetched official curl. **Re-verify against live official docs before shipping** — do not ship on secondary sources alone.
+13. **ModelScope base_url.** Official quickstart is JS-walled; base_url `https://api-inference.modelscope.cn/v1` is corroborated by the official ModelScope GitHub repo + VoltAgent integration doc, but not a directly-fetched official curl. Re-verify the exact base_url from official docs.
+14. **AI21 model ID strings.** Confirm exact API model strings (`jamba-large`/`jamba-mini` vs `-latest`/versioned aliases) against the live API reference.
+15. **Infermatic free-plan card policy + domain.** Confirm the free plan requires no card at signup. Real domain is `infermatic.ai` (API host `api.totalgpt.ai`); the task's `infermatic.com` was the wrong TLD (SSL error).
+16. **Chinese-provider voucher/quota churn (all 5 CN ADDs).** Baidu ¥20 (1 month), Stepfun gifted credits (expire), iFlyTek free quota, Hunyuan 1M (1 year), ModelScope Magicubes — all are time-limited grants, not perpetually-free models (except iFlyTek `lite` + ModelScope's free-inference mechanism). Model lineups churn fast (iFlyTek Max→Ultra 2026-03-10; Stepfun audio 限时免费; Hunyuan TokenHub migration; Baidu ernie-5.x). **Freeze each `free_models` list by hitting the provider's `GET /models` (or equivalent) at catalog-build time.**
