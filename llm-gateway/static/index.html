@@ -973,19 +973,19 @@ function renderApiKeys(m){
     <div class="chips" style="margin-bottom:0.875rem">
       ${chips.map(c=>`<span class="chip ${f===c[0]?'active':''}" onclick="S.keyFilter='${c[0]}';renderMain()">${c[1]}</span>`).join('')}
     </div>
-    <div class="card"><div class="tbl-scroll"><table>
+    <div class="card"><div class="tbl-scroll"><table class="cards">
       <tr><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('智能冷却时长')}</th><th>${t('状态')}</th><th>${t('token 余额')}</th><th>${t('账单')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
       ${list.map(k=>`
       <tr>
-        <td><span class="keytag" data-ak="${esc(k.kid)}" data-shown="0">••••••••</span></td>
-        <td>${esc(PNAME(k.prov))}</td>
-        <td class="num">${k.cdDur}s</td>
-        <td>${keyStatus(k)}</td>
-        <td class="num">${k.tb===Infinity?`<span class="faint">${t('不限')}</span>`:k.tb.toLocaleString()}</td>
-        <td class="num">${k.bb===Infinity?`<span class="faint">${t('不限')}</span>`:'¥'+k.bb}</td>
-        <td class="num">${k.req||0}</td>
-        <td class="faint"><span class="ak-err" title="${esc(k.lastErr||'-')}">${esc(k.lastErr||'-')}</span></td>
-        <td class="ak-actions">
+        <td data-label="${t('Key')}"><span class="keytag" data-ak="${esc(k.kid)}" data-shown="0">••••••••</span></td>
+        <td data-label="${t('提供商')}">${esc(PNAME(k.prov))}</td>
+        <td data-label="${t('智能冷却时长')}" class="num">${k.cdDur}s</td>
+        <td data-label="${t('状态')}">${keyStatus(k)}</td>
+        <td data-label="${t('token 余额')}" class="num">${k.tb===Infinity?`<span class="faint">${t('不限')}</span>`:k.tb.toLocaleString()}</td>
+        <td data-label="${t('账单')}" class="num">${k.bb===Infinity?`<span class="faint">${t('不限')}</span>`:'¥'+k.bb}</td>
+        <td data-label="${t('请求数')}" class="num">${k.req||0}</td>
+        <td data-label="${t('最近错误')}" class="faint"><span class="ak-err" title="${esc(k.lastErr||'-')}">${esc(k.lastErr||'-')}</span></td>
+        <td data-label="${t('操作')}" class="ak-actions">
           <button class="small" type="button" onclick="akShow('${esc(k.kid)}', this)">${t('显示')}</button>
           <button class="small" type="button" onclick="akCopy('${esc(k.kid)}', this)">${t('复制')}</button>
           <button class="small" type="button" onclick="akEditSeed('${esc(k.kid)}')">${t('Seed')}</button>

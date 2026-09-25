@@ -359,7 +359,24 @@ button[disabled], button:disabled { opacity: 0.5; cursor: default; pointer-event
 .bottom-nav .bn-item .bn-label { text-align: center; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
-@media (max-width: 640px) { table { display: block; overflow-x: auto; } th, td { white-space: nowrap; } }
+@media (max-width: 640px) { table { display: block; overflow-x: auto; } th, td { white-space: nowrap; } }   /* unconverted tables keep horizontal scroll */
+@media (max-width: 640px) {
+  /* tables marked class="cards" -> stacked card-lists (no horizontal scroll). Each
+     <tr> a card, each <td> a label:value row via data-label (label left, value
+     right). Preserves the tr/td DOM so surgical cell patching (updateAkCells /
+     tickAkCountdown via span[data-ak]) still works. The header row (first tr) hides;
+     a td without data-label renders its value alone. Convert a table by adding
+     class="cards" + data-label on each td. */
+  table.cards { display: block; width: 100%; overflow: visible; }
+  table.cards tr:first-child { display: none; }
+  table.cards tr { display: block; padding: 0.75rem 0.875rem; border: 1px solid var(--color-border-default); border-radius: 0.75rem; background: var(--color-surface-raised); margin-bottom: 0.625rem; }
+  table.cards tr:last-child { margin-bottom: 0; }
+  table.cards td { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 0.3125rem 0; border: none; text-align: right; white-space: normal; }
+  table.cards td::before { content: attr(data-label); color: var(--color-text-tertiary); font-family: var(--font-sans); font-size: 0.75rem; font-weight: 500; text-align: left; flex: none; }
+  table.cards td:not([data-label])::before { content: none; }
+  table.cards td[colspan] { justify-content: center; color: var(--color-text-tertiary); }
+  table.cards td[colspan]::before { content: none; }
+}
 @media (max-width: 900px) {
   .main > .prov-board { flex-direction: column; gap: 1rem; }
   .main > .prov-board .prov-list-col { width: 100%; flex-direction: row; overflow-x: auto; }
