@@ -320,6 +320,13 @@ class MainActivity : androidx.activity.ComponentActivity() {
                 WebView(context).apply {
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
+                    // Respect the viewport meta tag (width=device-width) so the
+                    // responsive console uses the device width, not a default
+                    // ~980px desktop viewport. Without useWideViewPort the WebView
+                    // ignores the meta -> the mobile layout (bottom-nav + card-lists
+                    // + stacked forms) never triggers on a phone.
+                    settings.useWideViewPort = true
+                    settings.loadWithOverviewMode = true
                     webChromeClient = object : WebChromeClient() {
                         // file input (导入配置 in the console)
                         override fun onShowFileChooser(
