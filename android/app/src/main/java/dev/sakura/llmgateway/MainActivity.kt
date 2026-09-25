@@ -359,6 +359,13 @@ class MainActivity : androidx.activity.ComponentActivity() {
                                 .show()
                             return true
                         }
+                        // DEBUG (v0.6.1): bridge JS console messages (incl. window.onerror)
+                        // to logcat so WebView JS errors are visible via `adb logcat -s JS`.
+                        // Temporary instrumentation — remove once the empty-config bug is fixed.
+                        override fun onConsoleMessage(cm: android.webkit.ConsoleMessage): Boolean {
+                            android.util.Log.i("JS", "${cm.message()} @ ${cm.sourceId()}:${cm.lineNumber()} [${cm.messageLevel()}]")
+                            return true
+                        }
                     }
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
