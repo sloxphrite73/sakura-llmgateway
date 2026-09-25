@@ -29,6 +29,8 @@
     <!-- main -->
     <main class="main" id="main" tabindex="0"></main>
   </div>
+  <!-- mobile bottom tab bar (≤560px; replaces the sidebar icon-rail) -->
+  <nav class="bottom-nav" id="bottom-nav" aria-label="导航"></nav>
 </div>
 <div class="msg" id="msg" role="status" aria-live="polite"></div>
 
@@ -248,6 +250,18 @@ function renderSidebar(){
     <button class="side-item ${S.tab===tb.id?'active':''}" onclick="setTab('${tb.id}')" title="${t(tb.label)}">
       <svg viewBox="0 0 24 24">${ICONS[tb.id]}</svg>
       <span class="side-label">${t(tb.label)}</span>
+    </button>`).join('');
+  renderBottomNav();
+}
+// Mobile bottom tab bar (shown ≤560px via CSS): same tabs as the sidebar, fixed at
+// the bottom instead of the left icon-rail — bigger touch targets + frees content
+// width. Hidden on wide viewports (the sidebar is used there).
+function renderBottomNav(){
+  const bn = $('bottom-nav'); if(!bn) return;
+  bn.innerHTML = TABS.map(tb => `
+    <button class="bn-item ${S.tab===tb.id?'active':''}" onclick="setTab('${tb.id}')" aria-label="${t(tb.label)}" title="${t(tb.label)}">
+      <svg viewBox="0 0 24 24">${ICONS[tb.id]}</svg>
+      <span class="bn-label">${t(tb.label)}</span>
     </button>`).join('');
 }
 function setTab(id){ S.tab=id; if(id!=='models') S.editingModel=null; renderSidebar(); renderMain(); }
