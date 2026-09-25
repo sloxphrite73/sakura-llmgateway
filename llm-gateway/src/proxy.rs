@@ -911,7 +911,9 @@ where
                     this.app.record_tokens(total, Some(&this.key_id), &this.provider_id, &this.model);
                     let dur = this.start.elapsed().as_secs_f32();
                     if dur > 0.0 && o > 0 {
-                        this.app.record_tps(&this.key_id, o as f32 / dur);
+                        let tps = o as f32 / dur;
+                        this.app.record_tps(&this.key_id, tps);
+                        this.app.record_model_tps(&this.model, tps);
                     }
                 }
                 Poll::Ready(None)

@@ -277,6 +277,9 @@ survive restarts.
     "rotations": {},
     "provider_metrics": {
       "p-xxx": { "rpm": 0, "tpm": 0, "success_rate": 1.0, "avg_tftt_ms": 0, "tps": 0.0 }
+    },
+    "model_metrics": {
+      "gpt-4o": { "avg_tps": 0.0, "avg_tftt_ms": 0 }
     }
   }
 }
@@ -302,10 +305,15 @@ Notes:
   unchanged)
 - `models` empty = unmanaged (all models pass through, backward compatible)
 - `stats` = request statistics (totals, 24h histogram, per key/provider/model
-  counters + rotations + `provider_metrics`), merged into `gateway.json` (no longer
-  a separate `stats.json`). A pre-merge `stats.json` next to `gateway.json` is
-  auto-migrated into the `stats` field on startup, then removed. Omit on a
-  hand-written config = empty stats (old configs load unchanged)
+  counters + rotations + `provider_metrics` + `model_metrics`), merged into
+  `gateway.json` (no longer a separate `stats.json`). A pre-merge `stats.json` next
+  to `gateway.json` is auto-migrated into the `stats` field on startup, then removed.
+  Omit on a hand-written config = empty stats (old configs load unchanged)
+- `stats.model_metrics` = per-model detected avgTPS (generation speed, tokens/sec)
+  + avgTFTT (first-token latency, ms), streaming-only, sampled on each flush; the
+  model card shows the persisted value after a restart until the model serves new
+  streaming traffic. The model card hover shows these (not the per-key RPM/TPM, which
+  live on the API Key page)
 - the file is rewritten (atomically) on every config change + on the 5s stats flush
 
 ## 📡 API overview

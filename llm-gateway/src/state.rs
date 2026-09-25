@@ -70,6 +70,10 @@ pub(crate) struct PoolRuntime {
     /// (= the managed model id the UI shows). Streaming only (non-stream has no
     /// "first token"); 0 until the first streamed chunk of a request for that model.
     model_tftt: HashMap<String, VecDeque<u32>>,
+    /// Per-model tokens/sec samples (streaming generation rate), last
+    /// `METRIC_SAMPLE_CAP`; the model page's avg-TPS reads the mean. Keyed by the
+    /// upstream model id (same key as `model_tftt`). Streaming only.
+    model_tps: HashMap<String, VecDeque<f32>>,
     /// Strategy-layer D1 cursor map (impl-spec §1, §4.1). Keyed by the
     /// candidate-set identifier (D3: `"{group_id}\x1f{provider_or_any}"`); the
     /// value is the round-robin cursor. Replaces the old per-provider
@@ -408,6 +412,21 @@ impl App {
         stats.provider_metrics.get(pid).cloned().unwrap_or_default()
     }
 
+    /// Per-model detected metrics for the model card / /api/stats: the live
+    /// avgTPS+avgTFTT when the model has served streaming traffic since startup,
+    /// else the persisted `stats.model_metrics` value (so the card shows the
+    /// last-known value right after a restart, until new streaming traffic overrides).
+    pub fn detected_model_metrics_for(&self, model: &str) -> crate::stats::ModelMetrics {
+        {
+            let pool = self.pool.lock().unwrap();
+            if let Some(lm) = model_live_metrics_from_pool(&pool, model) {
+                return lm;
+            }
+        }
+        let stats = self.stats.lock().unwrap();
+        stats.model_metrics.get(model).cloned().unwrap_or_default()
+    }
+
     /// Serialize the merged gateway.json content: config fields + a `stats` field
     /// (with provider_metrics refreshed from live traffic for providers that have
     /// served since startup). Used by save_all (write) + admin export_config
@@ -424,6 +443,11 @@ impl App {
                 if let Some(lm) = provider_live_metrics_from_pool(&pool, p) {
                     stats.provider_metrics.insert(p.id.clone(), lm);
                 }
+                for mo in &p.models {
+                    if let Some(lm) = model_live_metrics_from_pool(&pool, &mo.id) {
+                        stats.model_metrics.insert(mo.id.clone(), lm);
+                    }
+                }
             }
         }
         stats.prune(now_ms());
@@ -437,6 +461,7 @@ impl App {
         {
             let mut live = self.stats.lock().unwrap();
             live.provider_metrics = stats.provider_metrics.clone();
+            live.model_metrics = stats.model_metrics.clone();
         }
         serde_json::to_string_pretty(&val).unwrap_or_default()
     }
@@ -549,12 +574,34 @@ impl App {
     }
 
     /// Mean per-model TFTT (ms), or 0 when no streamed sample yet.
+    #[allow(dead_code)] // superseded by detected_model_metrics_for (live-vs-persisted); kept as a live accessor
     pub fn model_avg_tftt(&self, model: &str) -> u32 {
         let pool = self.pool.lock().unwrap();
         match pool.model_tftt.get(model) {
             None => 0,
             Some(s) if s.is_empty() => 0,
             Some(s) => (s.iter().map(|&v| v as u64).sum::<u64>() / s.len() as u64) as u32,
+        }
+    }
+
+    /// Record a per-model tokens/sec sample — streaming generation rate.
+    pub(crate) fn record_model_tps(&self, model: &str, tps: f32) {
+        let mut pool = self.pool.lock().unwrap();
+        let s = pool.model_tps.entry(model.to_string()).or_default();
+        s.push_back(tps);
+        while s.len() > METRIC_SAMPLE_CAP {
+            s.pop_front();
+        }
+    }
+
+    /// Mean per-model TPS (tokens/sec), or 0.0 when no streamed sample yet.
+    #[allow(dead_code)] // superseded by detected_model_metrics_for (live-vs-persisted); kept as a live accessor
+    pub fn model_avg_tps(&self, model: &str) -> f32 {
+        let pool = self.pool.lock().unwrap();
+        match pool.model_tps.get(model) {
+            None => 0.0,
+            Some(s) if s.is_empty() => 0.0,
+            Some(s) => s.iter().map(|&v| v).sum::<f32>() / s.len() as f32,
         }
     }
 
@@ -851,6 +898,30 @@ impl App {
 /// None when the provider has served no traffic since startup (all its keys have
 /// empty req_times) — the caller then falls back to the persisted
 /// `stats.provider_metrics` so the UI shows the last-known value after a restart.
+fn model_live_metrics_from_pool(
+    pool: &PoolRuntime,
+    model: &str,
+) -> Option<crate::stats::ModelMetrics> {
+    let tftt = pool.model_tftt.get(model);
+    let tps = pool.model_tps.get(model);
+    let has_tftt = tftt.map_or(false, |s| !s.is_empty());
+    let has_tps = tps.map_or(false, |s| !s.is_empty());
+    if !has_tftt && !has_tps {
+        return None; // no streaming traffic for this model since startup
+    }
+    let avg_tftt_ms = match tftt {
+        Some(s) if !s.is_empty() => {
+            (s.iter().map(|&v| v as u64).sum::<u64>() / s.len() as u64) as u32
+        }
+        _ => 0,
+    };
+    let avg_tps = match tps {
+        Some(s) if !s.is_empty() => s.iter().map(|&v| v).sum::<f32>() / s.len() as f32,
+        _ => 0.0,
+    };
+    Some(crate::stats::ModelMetrics { avg_tps, avg_tftt_ms })
+}
+
 fn provider_live_metrics_from_pool(
     pool: &PoolRuntime,
     p: &crate::config::Provider,

@@ -790,9 +790,10 @@ pub async fn get_stats(State(app): State<std::sync::Arc<App>>) -> Response {
         .models
         .iter()
         .map(|(m, b)| {
+            let dm = app.detected_model_metrics_for(m);
             (
                 m.clone(),
-                serde_json::json!({ "success": b.success, "fail": b.fail, "tokens": b.tokens, "avg_tftt_ms": app.model_avg_tftt(m) }),
+                serde_json::json!({ "success": b.success, "fail": b.fail, "tokens": b.tokens, "avg_tftt_ms": dm.avg_tftt_ms, "avg_tps": dm.avg_tps }),
             )
         })
         .collect();

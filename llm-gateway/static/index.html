@@ -564,7 +564,7 @@ function renderModelList(c){
       <button onclick="fetchUpstreamModels(this)">${t('从上游获取模型')}</button>
     </div>
     <div class="mc-grid">
-      ${list.map(mo=>{ const idx=MODELS.indexOf(mo); const k=KEYS.find(k=>k.prov===mo.prov&&k.model===mo.id); return `
+      ${list.map(mo=>{ const idx=MODELS.indexOf(mo); return `
       <div class="mc ${mo.on?'':'disabled'}" onclick="editModel(${idx})">
         <div class="mc-top">
           <div>
@@ -579,8 +579,7 @@ function renderModelList(c){
           <span>${t('输出')} <b>¥${mo.pOut}</b></span>
         </div>
         <div class="mc-hover">
-          <span>RPM <b>${k&&k.rpm||'-'}</b></span>
-          <span>TPM <b>${k&&k.tpm?k.tpm.toLocaleString():'-'}</b></span>
+          <span>avgTPS <b>${mo.tps?mo.tps.toFixed(1):'-'}</b></span>
           <span>avgTFTT <b>${mo.tftt?mo.tftt+'ms':'-'}</b></span>
         </div>
         <span class="mc-arrow">→</span>
@@ -1287,7 +1286,8 @@ function adaptAll(){
       const price = (p.price_table && p.price_table[m.id] != null) ? p.price_table[m.id] : 0;
       // single `price` → 输入价格; 输出价格 split + 上下文长度 have no backend → 0
       const tftt = (STATS && STATS.models && STATS.models[m.id]) ? (STATS.models[m.id].avg_tftt_ms || 0) : 0;
-      MODELS.push({ id: m.id, prov: p.id, up: m.id, pIn: price, pOut: 0, ctx: (m.context_length||0), on: m.enabled, alias: aliases, tftt });
+      const tps = (STATS && STATS.models && STATS.models[m.id]) ? (STATS.models[m.id].avg_tps || 0) : 0;
+      MODELS.push({ id: m.id, prov: p.id, up: m.id, pIn: price, pOut: 0, ctx: (m.context_length||0), on: m.enabled, alias: aliases, tftt, tps });
     });
     (p.keys || []).forEach(k => {
       const mt = k.metrics || {};

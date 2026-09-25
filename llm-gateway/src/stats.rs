@@ -38,6 +38,18 @@ pub struct ProviderMetrics {
     pub tps: f32,
 }
 
+/// Auto-detected per-model live metrics (a model's generation speed avgTPS +
+/// first-token latency avgTFTT). Persisted under `stats.model_metrics` in
+/// gateway.json so the values survive a restart: the model card shows the persisted
+/// value until the model serves new streaming traffic, then live takes over. Both
+/// are streaming-completion metrics (non-streaming requests contribute no sample).
+/// See state.rs `detected_model_metrics_for`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ModelMetrics {
+    pub avg_tps: f32,      // tokens/sec, streaming generation rate
+    pub avg_tftt_ms: u32,  // time-to-first-token (ms)
+}
+
 /// Request statistics. Persisted into gateway.json (under the `stats` field, merged
 /// with the config) on a debounce timer so the counters and the 24h histogram
 /// survive gateway restarts.
@@ -65,6 +77,13 @@ pub struct Stats {
     /// last-persisted entry. See state.rs `detected_metrics_for`.
     #[serde(default)]
     pub provider_metrics: BTreeMap<String, ProviderMetrics>,
+    /// Auto-detected per-model live metrics (model id -> {avgTPS, avgTFTT}), sampled
+    /// on each flush from the pool's per-model tps/tftt samples. Survives restart so
+    /// the model card shows the last-known avgTPS/avgTFTT until new streaming traffic
+    /// overrides. Only models with live samples are refreshed on a flush; others keep
+    /// their last-persisted entry. See state.rs `detected_model_metrics_for`.
+    #[serde(default)]
+    pub model_metrics: BTreeMap<String, ModelMetrics>,
 }
 
 const HOUR_MS: u64 = 3_600_000;

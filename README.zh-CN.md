@@ -251,6 +251,9 @@ client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="anything")
     "rotations": {},
     "provider_metrics": {
       "p-xxx": { "rpm": 0, "tpm": 0, "success_rate": 1.0, "avg_tftt_ms": 0, "tps": 0.0 }
+    },
+    "model_metrics": {
+      "gpt-4o": { "avg_tps": 0.0, "avg_tftt_ms": 0 }
     }
   }
 }
@@ -272,8 +275,11 @@ client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="anything")
   内置默认值，旧配置无感加载）
 - `models` 为空时视为"未托管"，所有请求照常放行（向后兼容旧配置）
 - `stats` = 请求统计（总量、24h 直方图、每 Key/提供商/模型成功失败计数 + rotations +
-  `provider_metrics`），合并进 `gateway.json`（不再单独 `stats.json`）。同目录旧
-  `stats.json` 启动时自动迁入 `stats` 字段后删除。手写配置省略该字段 = 空统计（旧配置无感加载）
+  `provider_metrics` + `model_metrics`），合并进 `gateway.json`（不再单独 `stats.json`）。
+  同目录旧 `stats.json` 启动时自动迁入 `stats` 字段后删除。手写配置省略该字段 = 空统计（旧配置无感加载）
+- `stats.model_metrics` = 每模型检测 avgTPS（生成速度 tokens/s）+ avgTFTT（首字延迟 ms），
+  仅流式，每次 flush 采样；重启后模型卡先显存盘值，该模型有新流式流量后覆盖。模型卡悬停显这两个
+  （不显 per-key RPM/TPM，那些在 API Key 页）
 - 该文件在每次配置改动 + 每 5s 统计 flush 时原子性地重写
 
 ## 📡 API 概览
