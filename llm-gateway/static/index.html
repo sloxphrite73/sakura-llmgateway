@@ -270,6 +270,7 @@ function setLocalProv(id){ S.localProv=id; S.addState=null; renderMain(); }
 /* ============ render: main dispatcher ============ */
 function renderMain(){
   const m = $('main');
+  console.log('[RM] tab='+S.tab+' STATUS='+(STATUS?'set':'null')+' mainLen='+m.innerHTML.length+' preview='+m.innerHTML.substring(0,160));
   if (!STATUS) { m.innerHTML = ''; return; }
   if (S.tab==='providers') renderProviders(m);
   else if (S.tab==='models') renderModels(m);
@@ -1330,6 +1331,7 @@ function adaptAll(){
 /* ============ refresh: load real data + adapt + dry-run + render ============ */
 async function refresh(){
   try {
+    console.log('[REFRESH] start');
     STATUS = await api('GET', '/api/status');
     STATS = await api('GET', '/api/stats');
     const cat = await api('GET', '/api/free-catalog'); CATALOG = (cat && cat.providers) || [];
@@ -1343,8 +1345,9 @@ async function refresh(){
     if (!S.reqModel && MODELS.length) S.reqModel = MODELS[0].id;
     if (!S.reqProv && PROVIDERS.length) S.reqProv = PROVIDERS[0].id;
     await runDryRun();
+    console.log('[REFRESH] done STATUS='+(STATUS?'set':'null')+' prov='+PROVIDERS.length+' keys='+KEYS.length+' models='+MODELS.length);
     renderTopbar(); renderSideFoot(); renderMain();
-  } catch(e){ console.error('refresh failed', e); }
+  } catch(e){ console.error('[REFRESH] failed', e); }
 }
 
 /* ============ theme + collapse ============ */
@@ -1356,6 +1359,7 @@ $('hamburger').addEventListener('click',()=>{
 });
 
 /* ============ boot ============ */
+console.log('[BOOT] console JS started');
 S.lang = localStorage.getItem('lang')==='en' ? 'en' : 'zh';
 applyTheme(localStorage.getItem('theme')==='light' ? 'light' : 'dark');
 renderTopbar(); renderSidebar(); renderMain();
