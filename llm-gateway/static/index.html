@@ -310,16 +310,16 @@ function renderOverview(m){
     </div>
     <div class="section">
       <div class="section-title">${t('提供商概览')} <span class="note">${t('点行进详情')}</span></div>
-      <div class="card"><table>
+      <div class="card"><table class="cards">
         <tr><th>${t('提供商')}</th><th>${t('协议')}</th><th>${t('Key')}</th><th>${t('token 余额')}</th><th>${t('账单余额')}</th><th>${t('RPM')}</th></tr>
         ${PROVIDERS.map(p=>{ const kc=KEYS.filter(k=>k.prov===p.id).length; return `
         <tr class="row-click" onclick="S.localProv='${p.id}';setTab('providers')">
-          <td><span class="pdot" style="display:inline-block;width:0.5rem;height:0.5rem;border-radius:50%;background:${p.dot};margin-right:0.4375rem;vertical-align:middle"></span>${esc(p.name)}</td>
-          <td><span class="pill">${p.proto}</span></td>
-          <td class="num">${kc}</td>
-          <td class="num">${p.tb===Infinity?`<span class="faint">${t('不限')}</span>`:p.tb.toLocaleString()}</td>
-          <td class="num">${p.bb===Infinity?`<span class="faint">${t('不限')}</span>`:p.bb}</td>
-          <td class="num">${p.rpm||'<span class="faint">-</span>'}</td>
+          <td data-label="${t('提供商')}"><span class="pdot" style="display:inline-block;width:0.5rem;height:0.5rem;border-radius:50%;background:${p.dot};margin-right:0.4375rem;vertical-align:middle"></span>${esc(p.name)}</td>
+          <td data-label="${t('协议')}"><span class="pill">${p.proto}</span></td>
+          <td data-label="${t('Key')}" class="num">${kc}</td>
+          <td data-label="${t('token 余额')}" class="num">${p.tb===Infinity?`<span class="faint">${t('不限')}</span>`:p.tb.toLocaleString()}</td>
+          <td data-label="${t('账单余额')}" class="num">${p.bb===Infinity?`<span class="faint">${t('不限')}</span>`:p.bb}</td>
+          <td data-label="${t('RPM')}" class="num">${p.rpm||'<span class="faint">-</span>'}</td>
         </tr>`; }).join('')}
       </table></div>
     </div>`;
@@ -655,14 +655,14 @@ function renderModelGroups(c){
   c.innerHTML = `
     <div class="section">
       <div class="section-title">${t('模型组')} <span class="note">${t('同一模型跨提供商编组 · 每个模型恒属且仅属一组')}</span></div>
-      <div class="card"><table>
+      <div class="card"><table class="cards">
         <tr><th>${t('组名')}</th><th>${t('成员 (provider · model)')}</th><th>${t('成员数')}</th><th></th></tr>
         ${GROUPS.map((g,i)=>`
         <tr>
-          <td><span class="keytag" style="border-color:var(--color-action-primary-hover);color:var(--color-action-primary-hover)">${esc(g.name)}</span></td>
-          <td>${g.members.map(m=>`<span class="keytag">${esc(PNAME(m.prov))} · ${esc(m.model)}</span>`).join(' ')}</td>
-          <td class="num">${g.members.length}</td>
-          <td><button class="small" onclick="editGroup(${i})">${t('编辑')}</button></td>
+          <td data-label="${t('组名')}"><span class="keytag" style="border-color:var(--color-action-primary-hover);color:var(--color-action-primary-hover)">${esc(g.name)}</span></td>
+          <td data-label="${t('成员 (provider · model)')}">${g.members.map(m=>`<span class="keytag">${esc(PNAME(m.prov))} · ${esc(m.model)}</span>`).join(' ')}</td>
+          <td data-label="${t('成员数')}" class="num">${g.members.length}</td>
+          <td data-label="${t('操作')}"><button class="small" onclick="editGroup(${i})">${t('编辑')}</button></td>
         </tr>`).join('') || `<tr><td colspan="4" class="faint">${t('暂无数据')}</td></tr>`}
       </table></div>
       <div class="row" style="margin-top:0.75rem"><button class="small" onclick="newGroup()">${t('+ 新建模型组')}</button>
@@ -829,19 +829,19 @@ function renderStrategy(m){
         </div>
       </div>
       ${resultBanner(res)}
-      <div class="card"><table>
+      <div class="card"><table class="cards">
         <tr><th>${t('#')}</th><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('模型')}</th><th>${t('valid')}</th><th>${t('cool')}</th><th>${t('单价')}</th><th>${t('TPS')}</th><th>${t('成功率')}</th></tr>
         ${res.cand.map((k,i)=>`
         <tr class="${res.winner===k?'row-winner':''}">
-          <td class="num faint">${i+1}</td>
-          <td><span class="keytag">${esc(k.kid)}</span></td>
-          <td>${esc(PNAME(k.prov))}</td>
-          <td><span class="keytag">${esc(k.model)}</span></td>
-          <td>${k.valid?`<span class="st ok">${t('是')}</span>`:`<span class="st off">${t('否')}</span>`}</td>
-          <td>${k.cool?`<span class="st cool">${k.cd}s</span>`:`<span class="faint">-</span>`}</td>
-          <td class="num">${k.price.toFixed(4)}</td>
-          <td class="num">${k.tps}</td>
-          <td class="num">${(k.sr*100).toFixed(1)}%</td>
+          <td data-label="#" class="num faint">${i+1}</td>
+          <td data-label="${t('Key')}"><span class="keytag">${esc(k.kid)}</span></td>
+          <td data-label="${t('提供商')}">${esc(PNAME(k.prov))}</td>
+          <td data-label="${t('模型')}"><span class="keytag">${esc(k.model)}</span></td>
+          <td data-label="${t('valid')}">${k.valid?`<span class="st ok">${t('是')}</span>`:`<span class="st off">${t('否')}</span>`}</td>
+          <td data-label="${t('cool')}">${k.cool?`<span class="st cool">${k.cd}s</span>`:`<span class="faint">-</span>`}</td>
+          <td data-label="${t('单价')}" class="num">${k.price.toFixed(4)}</td>
+          <td data-label="${t('TPS')}" class="num">${k.tps}</td>
+          <td data-label="${t('成功率')}" class="num">${(k.sr*100).toFixed(1)}%</td>
         </tr>`).join('') || `<tr><td colspan="9" class="faint">${t('候选为空')}</td></tr>`}
       </table></div>
     </div>`;
@@ -1172,23 +1172,23 @@ function renderStats(m){
     </div>
     <div class="section">
       <div class="section-title">${t('按提供商')}</div>
-      <div class="card"><table>
+      <div class="card"><table class="cards">
         <tr><th>${t('提供商')}</th><th>${t('请求')}</th><th>${t('成功')}</th><th>${t('失败')}</th><th>${t('Token 消耗')}</th></tr>
-        ${statRow(provStats, 5, ([id,p])=>{ const req=p.success+p.fail; return `<tr><td>${esc(p.name)}</td><td class="num">${req.toLocaleString()}</td><td class="num" style="color:var(--color-feedback-success-text)">${p.success.toLocaleString()}</td><td class="num" style="color:var(--color-feedback-error-text)">${p.fail}</td><td class="num">${(p.tokens||0).toLocaleString()}</td></tr>`; })}
+        ${statRow(provStats, 5, ([id,p])=>{ const req=p.success+p.fail; return `<tr><td data-label="${t('提供商')}">${esc(p.name)}</td><td data-label="${t('请求')}" class="num">${req.toLocaleString()}</td><td data-label="${t('成功')}" class="num" style="color:var(--color-feedback-success-text)">${p.success.toLocaleString()}</td><td data-label="${t('失败')}" class="num" style="color:var(--color-feedback-error-text)">${p.fail}</td><td data-label="${t('Token 消耗')}" class="num">${(p.tokens||0).toLocaleString()}</td></tr>`; })}
       </table></div>
     </div>
     <div class="section">
       <div class="section-title">${t('按模型')}</div>
-      <div class="card"><table>
+      <div class="card"><table class="cards">
         <tr><th>${t('模型')}</th><th>${t('提供商')}</th><th>${t('请求')}</th><th>${t('成功')}</th><th>${t('失败')}</th><th>${t('Token 消耗')}</th></tr>
-        ${statRow(modelStats, 6, ([mid,s])=>{ const req=s.success+s.fail; return `<tr><td><span class="keytag">${esc(mid)}</span></td><td class="faint">-</td><td class="num">${req.toLocaleString()}</td><td class="num" style="color:var(--color-feedback-success-text)">${s.success.toLocaleString()}</td><td class="num" style="color:var(--color-feedback-error-text)">${s.fail}</td><td class="num">${(s.tokens||0).toLocaleString()}</td></tr>`; })}
+        ${statRow(modelStats, 6, ([mid,s])=>{ const req=s.success+s.fail; return `<tr><td data-label="${t('模型')}"><span class="keytag">${esc(mid)}</span></td><td data-label="${t('提供商')}" class="faint">-</td><td data-label="${t('请求')}" class="num">${req.toLocaleString()}</td><td data-label="${t('成功')}" class="num" style="color:var(--color-feedback-success-text)">${s.success.toLocaleString()}</td><td data-label="${t('失败')}" class="num" style="color:var(--color-feedback-error-text)">${s.fail}</td><td data-label="${t('Token 消耗')}" class="num">${(s.tokens||0).toLocaleString()}</td></tr>`; })}
       </table></div>
     </div>
     <div class="section">
       <div class="section-title">${t('按 API Key')}</div>
-      <div class="card"><table>
+      <div class="card"><table class="cards">
         <tr><th>${t('API Key')}</th><th>${t('请求')}</th><th>${t('成功')}</th><th>${t('失败')}</th><th>${t('Token 消耗')}</th></tr>
-        ${statRow(keyStats, 5, ([id,k])=>{ const req=k.success+k.fail; return `<tr><td>${esc(k.name)}</td><td class="num">${req.toLocaleString()}</td><td class="num" style="color:var(--color-feedback-success-text)">${k.success.toLocaleString()}</td><td class="num" style="color:var(--color-feedback-error-text)">${k.fail}</td><td class="num">${(k.tokens||0).toLocaleString()}</td></tr>`; })}
+        ${statRow(keyStats, 5, ([id,k])=>{ const req=k.success+k.fail; return `<tr><td data-label="${t('API Key')}">${esc(k.name)}</td><td data-label="${t('请求')}" class="num">${req.toLocaleString()}</td><td data-label="${t('成功')}" class="num" style="color:var(--color-feedback-success-text)">${k.success.toLocaleString()}</td><td data-label="${t('失败')}" class="num" style="color:var(--color-feedback-error-text)">${k.fail}</td><td data-label="${t('Token 消耗')}" class="num">${(k.tokens||0).toLocaleString()}</td></tr>`; })}
       </table></div>
     </div>`;
 }

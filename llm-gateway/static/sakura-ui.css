@@ -352,7 +352,7 @@ button[disabled], button:disabled { opacity: 0.5; cursor: default; pointer-event
   font-family: var(--font-sans); font-size: 0.6875rem; font-weight: 500; line-height: 1.1;
   padding: 0.25rem 0.125rem; min-height: 3rem; cursor: pointer;
 }
-.bottom-nav .bn-item svg { width: 1.25rem; height: 1.25rem; }
+.bottom-nav .bn-item svg { width: 1.125rem; height: 1.125rem; flex: none; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .bottom-nav .bn-item:hover { color: var(--color-text-link); }              /* §8 hover: 字色趋粉 */
 .bottom-nav .bn-item:active { transform: translateY(0.03125rem); }          /* §10 active/pressed */
 .bottom-nav .bn-item.active { color: var(--color-text-link); }
