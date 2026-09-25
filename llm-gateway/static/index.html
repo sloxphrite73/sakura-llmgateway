@@ -1061,6 +1061,33 @@ async function refreshStats(){
     renderStats($('main'));
   } catch(e){ /* transient; next tick retries */ }
 }
+/* ---------- api key smooth countdown (1s local tick, no fetch) ---------- */
+// Data is fetched every 5s (refreshAkStatus), but the cooldown countdown must
+// decrement smoothly every second. Each cooling key carries untilMs (the
+// server's absolute expiry timestamp from /api/status); this tick recomputes
+// cd = ceil((untilMs - Date.now())/1000) and patches only the status cell.
+// When a cooldown reaches 0 it triggers one debounced refreshAkStatus to
+// re-sync with the server (which authoritatively flips 可用 or re-cools).
+function tickAkCountdown(){
+  if (S.tab !== 'apikeys' || document.hidden) return;
+  const now = Date.now();
+  let anyExpired = false;
+  document.querySelectorAll('span[data-ak]').forEach(span => {
+    const k = KEYS.find(x => x.kid === span.dataset.ak);
+    if (!k || !k.cool || !k.untilMs) return;
+    const tr = span.closest('tr'); if (!tr) return;
+    const cd = Math.max(0, Math.ceil((k.untilMs - now) / 1000));
+    if (cd === k.cd) return;
+    k.cd = cd;
+    const c = tr.children;
+    if (c[3]) c[3].innerHTML = keyStatus(k);
+    if (cd === 0) anyExpired = true;
+  });
+  if (anyExpired && !S._akSyncing) {
+    S._akSyncing = true;
+    refreshAkStatus().finally(() => { S._akSyncing = false; });
+  }
+}
 
 /* ---------- provider actions ---------- */
 async function saveProvider(id){
@@ -1252,6 +1279,7 @@ function adaptAll(){
       KEYS.push({
         kid: k.id, prov: p.id, model: '-',
         valid: !k.invalid, cool: !!k.cooling, cd,
+        untilMs: k.cooling ? k.cooling.until_ms : 0,
         // 智能冷却时长 (生效值, spec §7 + 偏离②保留链): learned → per-key
         // cooldown_secs → global default. Always a number (default always set).
         cdDur: k.learned_cooldown != null ? k.learned_cooldown
@@ -1316,12 +1344,13 @@ S.lang = localStorage.getItem('lang')==='en' ? 'en' : 'zh';
 applyTheme(localStorage.getItem('theme')==='light' ? 'light' : 'dark');
 renderTopbar(); renderSidebar(); renderMain();
 refresh();
-// 5s live refresh: API Key page (cooldown countdown, 可用↔冷却, request/error
-// tallies — surgical cell patch, no full re-render) and Stats page (totals +
-// 24h histogram + per-provider/key/model tables). Both self-guard to only fetch
-// on their tab and when the page is visible.
+// Live refresh cadence: API Key + Stats panels fetch every 5s (self-guarded to
+// their tab + page-visible). The API Key cooldown countdown additionally ticks
+// every 1s locally (no fetch) off each key's untilMs absolute timestamp, so it
+// decrements smoothly; reaching 0 triggers one debounced refreshAkStatus.
 setInterval(refreshAkStatus, 5000);
 setInterval(refreshStats, 5000);
+setInterval(tickAkCountdown, 1000);
 </script>
 </body>
 </html>
