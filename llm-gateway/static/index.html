@@ -1017,7 +1017,7 @@ async function saveAkSeed(kid){
   } catch(e){ console.error('saveAkSeed', e); toast(t('失败: ')+e.message); }
 }
 
-/* ---------- api key live status (per-second poll, spec: 实时状态) ---------- */
+/* ---------- api key live status (5s poll, spec: 数据 5s 更新) ---------- */
 // A full refresh() every second would re-render the whole page, reset the key
 // show/hide toggles, and disrupt the seed editor / add-key input mid-typing.
 // Instead: fetch only /api/status, re-adapt KEYS, then surgically patch the
@@ -1047,6 +1047,19 @@ function updateAkCells(){
     if (c[6]) c[6].textContent = String(k.req||0);
     if (c[7]) c[7].innerHTML = `<span class="ak-err" title="${esc(k.lastErr||'-')}">${esc(k.lastErr||'-')}</span>`;
   });
+}
+
+/* ---------- stats live refresh (5s poll, spec: 数据 5s 更新) ---------- */
+// Display-only panel (totals + 24h histogram + per-provider/key/model tables),
+// so a full re-render of the stats panel every 5s is safe — no inputs to disrupt.
+// Self-guards: only fetches on the Stats tab and when the page is visible.
+async function refreshStats(){
+  if (S.tab !== 'stats' || document.hidden) return;
+  try {
+    STATS = await api('GET', '/api/stats');
+    adaptAll();
+    renderStats($('main'));
+  } catch(e){ /* transient; next tick retries */ }
 }
 
 /* ---------- provider actions ---------- */
@@ -1303,10 +1316,12 @@ S.lang = localStorage.getItem('lang')==='en' ? 'en' : 'zh';
 applyTheme(localStorage.getItem('theme')==='light' ? 'light' : 'dark');
 renderTopbar(); renderSidebar(); renderMain();
 refresh();
-// per-second live status on the API Key page (cooldown countdown, 可用↔冷却,
-// request/error tallies). Self-guards: only fetches on the API Key tab and
-// when the page is visible; patches cells surgically (no full re-render).
-setInterval(refreshAkStatus, 1000);
+// 5s live refresh: API Key page (cooldown countdown, 可用↔冷却, request/error
+// tallies — surgical cell patch, no full re-render) and Stats page (totals +
+// 24h histogram + per-provider/key/model tables). Both self-guard to only fetch
+// on their tab and when the page is visible.
+setInterval(refreshAkStatus, 5000);
+setInterval(refreshStats, 5000);
 </script>
 </body>
 </html>
