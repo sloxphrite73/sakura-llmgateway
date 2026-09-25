@@ -536,32 +536,29 @@ pub async fn update_settings(
 
 /// GET /api/config/export — returns gateway.json as a download.
 pub async fn export_config(State(app): State<std::sync::Arc<App>>) -> Response {
-    let cfg = app.read_config();
-    match serde_json::to_string_pretty(&cfg) {
-        Ok(body) => {
-            let filename = app
-                .config_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("gateway.json")
-                .to_string();
+    // Export the merged gateway.json content (config + stats with sampled
+    // provider_metrics) so a downloaded backup is a complete portable snapshot.
+    let body = app.config_plus_stats_json();
+    let filename = app
+        .config_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("gateway.json")
+        .to_string();
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json; charset=utf-8"),
             (
-                StatusCode::OK,
-                [
-                    ("content-type", "application/json; charset=utf-8"),
-                    (
-                        "content-disposition",
-                        Box::leak(format!("attachment; filename=\"{filename}\"\0").into_boxed_str())
-                            .strip_suffix('\0')
-                            .unwrap_or("attachment"),
-                    ),
-                ],
-                body,
-            )
-                .into_response()
-        }
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &format!("serialize failed: {e}")),
-    }
+                "content-disposition",
+                Box::leak(format!("attachment; filename=\"{filename}\"\0").into_boxed_str())
+                    .strip_suffix('\0')
+                    .unwrap_or("attachment"),
+            ),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -586,10 +583,13 @@ pub async fn import_config(
         let mut cur = app.config.write().unwrap();
         *cur = cfg.clone();
     }
-    if let Err(e) = cfg.save(&app.config_path) {
+    // save_all persists the merged gateway.json (new config + current stats). The
+    // imported file's own `stats` (if present) is intentionally ignored — import is
+    // a config hot-swap, not a stats restore.
+    if !app.save_all() {
         return err(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("imported in memory but failed to persist: {e}"),
+            &"imported in memory but failed to persist gateway.json",
         );
     }
     ok(cfg)
@@ -870,6 +870,9 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                     })
                 })
                 .collect();
+            // Per-provider detected metrics (live aggregate, or the persisted value
+            // after a restart until new traffic overrides — see detected_metrics_for).
+            let dm = app.detected_metrics_for(&cfg, &p.id);
             serde_json::json!({
                 "id": p.id,
                 "name": p.name,
@@ -884,6 +887,13 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                 "price_table": p.price_table,
                 "models": p.models,
                 "keys": keys,
+                "detected_metrics": {
+                    "rpm": dm.rpm,
+                    "tpm": dm.tpm,
+                    "success_rate": dm.success_rate,
+                    "avg_tftt_ms": dm.avg_tftt_ms,
+                    "tps": dm.tps,
+                },
             })
         })
         .collect();

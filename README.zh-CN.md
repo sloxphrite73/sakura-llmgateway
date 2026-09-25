@@ -71,7 +71,7 @@ T ──── 429 ──▶ [T, 2T]          成功 ──▶ [T/2, T]
   1.0），B/C/D/J 排序会把它排最后、攒到流量前永远轮不到。设置 `seed_rpm` /
   `seed_tpm` / `seed_success_rate` / `seed_avg_tftt_ms` / `seed_tps` 预置初值，
   Key 一旦服务真实流量即自动覆盖（冷却探测器不计为流量）。在 API Key 页逐 Key 编辑
-- 📊 **状态与统计** - 请求统计持久化到 `stats.json`：总量、24 小时逐时柱状图，以及
+- 📊 **状态与统计** - 请求统计持久化进 `gateway.json`（合并到 `stats` 字段）：总量、24 小时逐时柱状图，以及
   按 Key / 提供商 / 模型的成功失败计数——控制台可视化，也可 `GET /api/stats` 查询
 - 📈 **实测指标** - 每模型 avg_TFTT（流式响应首字内容 token 时延；非流式 = 0/不
   显示）显示在模型卡与 `/api/stats`；每提供商 RPM/TPM 限额可编辑且持久化
@@ -197,7 +197,7 @@ client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="anything")
 ### 监控流量
 
 打开**状态**页签：请求总量、24 小时逐时柱状图，以及按 Key / 提供商 / 模型的
-成功失败计数。统计持久化到 `stats.json`（位于 `gateway.json` 旁边），重启不丢失。
+成功失败计数。统计持久化进 `gateway.json`（合并到 `stats` 字段，不再单独 `stats.json`），重启不丢失。
 
 ### 备份或迁移配置
 
@@ -241,7 +241,18 @@ client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="anything")
       ],
       "aliases": { "fast": "gpt-4o-mini" }
     }
-  ]
+  ],
+  "stats": {
+    "total": { "success": 0, "fail": 0, "tokens": 0 },
+    "hourly": {},
+    "keys": {},
+    "providers": {},
+    "models": {},
+    "rotations": {},
+    "provider_metrics": {
+      "p-xxx": { "rpm": 0, "tpm": 0, "success_rate": 1.0, "avg_tftt_ms": 0, "tps": 0.0 }
+    }
+  }
 }
 ```
 
@@ -255,11 +266,15 @@ client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="anything")
 - `model_groups` 声明同一逻辑模型跨提供商（条目为 `[provider_id, upstream_model]`）
   用于跨提供商 fallback；每个模型只属一组
 - 提供商上的 `rpm_limit` / `tpm_limit` = 手动 RPM/TPM 上限（`null` = 无上限；
-  此时控制台显示该提供商各 Key 的实时自动检测聚合）
+  此时控制台显示该提供商各 Key 的自动检测聚合 rpm/tpm/success_rate/avg_tftt/tps，
+  并持久化到 `stats.provider_metrics`——重启不丢失，UI 先显上次存盘值，新流量覆盖）
 - Key 上的 `seed_*` = 预置初始指标，Key 服务真实流量后自动覆盖（均可选；省略 =
   内置默认值，旧配置无感加载）
 - `models` 为空时视为"未托管"，所有请求照常放行（向后兼容旧配置）
-- 在控制台里做任何修改后，该文件都会被原子性地重写
+- `stats` = 请求统计（总量、24h 直方图、每 Key/提供商/模型成功失败计数 + rotations +
+  `provider_metrics`），合并进 `gateway.json`（不再单独 `stats.json`）。同目录旧
+  `stats.json` 启动时自动迁入 `stats` 字段后删除。手写配置省略该字段 = 空统计（旧配置无感加载）
+- 该文件在每次配置改动 + 每 5s 统计 flush 时原子性地重写
 
 ## 📡 API 概览
 

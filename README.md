@@ -84,7 +84,7 @@ T ──── 429 ──▶ [T, 2T]          success ──▶ [T/2, T]
   `seed_avg_tftt_ms` / `seed_tps` to preset initial values, automatically
   overridden once the key serves real traffic (the cooldown prober does not
   count as traffic). Edited per-key in the API Key page
-- 📊 **Status & statistics** - persistent request stats (`stats.json`): totals, a 24h
+- 📊 **Status & statistics** - persistent request stats (merged into `gateway.json` under `stats`): totals, a 24h
   hourly histogram, and success/fail counters per API key, per provider and per model —
   all visible in the web console and queryable via `GET /api/stats`
 - 📈 **Measured metrics** - per-model avg_TFTT (time to first content token in
@@ -221,8 +221,9 @@ client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="anything")
 ### Monitor traffic
 
 Open the **Status** tab to see total requests, a 24h hourly histogram, and per-key /
-per-provider / per-model success and failure counters. Stats persist to `stats.json`
-(next to `gateway.json`) and survive restarts.
+per-provider / per-model success and failure counters. Stats persist into
+`gateway.json` (merged under the `stats` field, no separate `stats.json`) and
+survive restarts.
 
 ### Back up or migrate your config
 
@@ -266,7 +267,18 @@ per-provider / per-model success and failure counters. Stats persist to `stats.j
       ],
       "aliases": { "fast": "gpt-4o-mini" }
     }
-  ]
+  ],
+  "stats": {
+    "total": { "success": 0, "fail": 0, "tokens": 0 },
+    "hourly": {},
+    "keys": {},
+    "providers": {},
+    "models": {},
+    "rotations": {},
+    "provider_metrics": {
+      "p-xxx": { "rpm": 0, "tpm": 0, "success_rate": 1.0, "avg_tftt_ms": 0, "tps": 0.0 }
+    }
+  }
 }
 ```
 
@@ -281,12 +293,20 @@ Notes:
   `[provider_id, upstream_model]`) for cross-provider fallback; each model
   belongs to exactly one group
 - `rpm_limit` / `tpm_limit` on a provider = manual RPM/TPM cap (`null` = no cap;
-  the console then shows the live auto-detected aggregate of the provider's keys)
+  the console then shows the auto-detected aggregate of the provider's keys'
+  measured rpm/tpm/success_rate/avg_tftt/tps, also persisted under
+  `stats.provider_metrics` so it survives a restart — the UI shows the last-known
+  value until new traffic overrides it)
 - `seed_*` on a key = preset initial metrics, auto-overridden once the key serves
   real traffic (all optional; omitted = built-in defaults, so old configs load
   unchanged)
 - `models` empty = unmanaged (all models pass through, backward compatible)
-- the file is rewritten (atomically) whenever you change something in the UI
+- `stats` = request statistics (totals, 24h histogram, per key/provider/model
+  counters + rotations + `provider_metrics`), merged into `gateway.json` (no longer
+  a separate `stats.json`). A pre-merge `stats.json` next to `gateway.json` is
+  auto-migrated into the `stats` field on startup, then removed. Omit on a
+  hand-written config = empty stats (old configs load unchanged)
+- the file is rewritten (atomically) on every config change + on the 5s stats flush
 
 ## 📡 API overview
 

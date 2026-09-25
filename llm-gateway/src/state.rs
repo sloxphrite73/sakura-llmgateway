@@ -83,10 +83,16 @@ pub struct App {
     pub pool: Mutex<PoolRuntime>,
     pub http: reqwest::Client,
     pub config_path: std::path::PathBuf,
-    /// Request statistics, persisted to stats.json periodically.
+    /// Request statistics, persisted into gateway.json (merged with the config under
+    /// the `stats` field) on the periodic flush + on every config change.
     pub stats: Mutex<Stats>,
-    /// stats.json sits next to the config file.
+    /// Legacy standalone stats.json path (next to the config file). Used only for a
+    /// one-time migration into gateway.json on startup, then deleted.
     pub stats_path: std::path::PathBuf,
+    /// Set when stats were migrated from a legacy standalone stats.json into
+    /// gateway.json on startup. `save_all` deletes stats.json after the first
+    /// successful merged write (so the stats land in gateway.json first).
+    stats_migrated: std::sync::atomic::AtomicBool,
     /// Set when learned-cooldown values changed and gateway.json needs a debounced flush.
     config_dirty: Mutex<bool>,
     /// key id -> Instant when its learned_cooldown was last written (in-process only;
@@ -239,7 +245,11 @@ impl App {
             .build()
             .expect("failed to build http client");
         let stats_path = config_path.with_file_name("stats.json");
-        let stats = Stats::load(&stats_path);
+        // Stats now live inside gateway.json (under `stats`, merged with the config).
+        // Load from there; if absent (pre-merge gateway.json), migrate from the legacy
+        // standalone stats.json. The flag lets save_all delete stats.json after the
+        // first successful merged write (so the stats land in gateway.json first).
+        let (stats, migrated) = load_stats_merged(&config_path, &stats_path);
         Self {
             config: std::sync::RwLock::new(config),
             pool: Mutex::new(PoolRuntime::default()),
@@ -247,6 +257,7 @@ impl App {
             config_path,
             stats: Mutex::new(stats),
             stats_path,
+            stats_migrated: std::sync::atomic::AtomicBool::new(migrated),
             config_dirty: Mutex::new(false),
             learned_at: Mutex::new(std::collections::HashMap::new()),
             catalog: crate::free_catalog::CatalogCache::new(),
@@ -302,13 +313,10 @@ impl App {
         stats.add_tokens(tokens, key_id, provider_id, model, now_ms());
     }
 
-    /// Save stats.json (call from the periodic flusher). Prunes the histogram first.
+    /// Persist gateway.json (config + stats, with provider_metrics sampled from live
+    /// traffic). Called by the 5s flusher. save_all does the prune + the atomic write.
     pub fn flush_stats(&self) {
-        let mut stats = self.stats.lock().unwrap();
-        stats.prune(now_ms());
-        if let Err(e) = stats.save(&self.stats_path) {
-            eprintln!("[gateway] WARNING: failed to persist stats: {e}");
-        }
+        self.save_all();
     }
 
     /// Mark gateway.json dirty (learned-cooldown changed); the background flusher
@@ -330,10 +338,7 @@ impl App {
             None => true,
         }; // never-marked = long overdue, write now
         if due {
-            let cfg = self.config.read().unwrap().clone();
-            if let Err(e) = cfg.save(&self.config_path) {
-                eprintln!("[gateway] WARNING: failed to persist learned cooldown: {e}");
-            } else {
+            if self.save_all() {
                 *dirty = false;
             }
             *last_change = Some(Instant::now());
@@ -373,13 +378,91 @@ impl App {
     }
 
     pub fn write_config<F: FnOnce(&mut Config)>(&self, f: F) -> Config {
-        let mut cfg = self.config.write().unwrap();
-        f(&mut cfg);
-        let snapshot = cfg.clone();
-        if let Err(e) = snapshot.save(&self.config_path) {
-            eprintln!("[gateway] WARNING: failed to persist config: {e}");
+        let snapshot = {
+            let mut cfg = self.config.write().unwrap();
+            f(&mut cfg);
+            cfg.clone()
+        }; // write lock dropped before save_all (which re-locks config for read)
+        if !self.save_all() {
+            eprintln!("[gateway] WARNING: failed to persist gateway.json");
         }
         snapshot
+    }
+
+    /// Per-provider detected metrics for the UI: the live aggregate when the provider
+    /// has served traffic since startup, else the persisted `stats.provider_metrics`
+    /// value (so the UI shows the last-known detected RPM/TPM/etc. right after a
+    /// restart, until new traffic overrides).
+    pub fn detected_metrics_for(&self, cfg: &Config, pid: &str) -> crate::stats::ProviderMetrics {
+        let p = match cfg.provider_by_id(pid) {
+            Some(p) => p,
+            None => return Default::default(),
+        };
+        {
+            let pool = self.pool.lock().unwrap();
+            if let Some(lm) = provider_live_metrics_from_pool(&pool, p) {
+                return lm;
+            }
+        }
+        let stats = self.stats.lock().unwrap();
+        stats.provider_metrics.get(pid).cloned().unwrap_or_default()
+    }
+
+    /// Serialize the merged gateway.json content: config fields + a `stats` field
+    /// (with provider_metrics refreshed from live traffic for providers that have
+    /// served since startup). Used by save_all (write) + admin export_config
+    /// (download). Also mirrors the refreshed provider_metrics back into the live
+    /// in-memory stats so the next detected_metrics_for() fallback is current.
+    pub(crate) fn config_plus_stats_json(&self) -> String {
+        // admin::export_config reuses this to serve the merged gateway.json content
+        // as a portable download (config + stats with sampled provider_metrics).
+        let cfg = self.config.read().unwrap().clone();
+        let mut stats = self.stats.lock().unwrap().clone();
+        {
+            let pool = self.pool.lock().unwrap();
+            for p in &cfg.providers {
+                if let Some(lm) = provider_live_metrics_from_pool(&pool, p) {
+                    stats.provider_metrics.insert(p.id.clone(), lm);
+                }
+            }
+        }
+        stats.prune(now_ms());
+        let mut val = serde_json::to_value(&cfg).unwrap_or(serde_json::Value::Null);
+        if let Some(obj) = val.as_object_mut() {
+            obj.insert(
+                "stats".into(),
+                serde_json::to_value(&stats).unwrap_or(serde_json::Value::Null),
+            );
+        }
+        {
+            let mut live = self.stats.lock().unwrap();
+            live.provider_metrics = stats.provider_metrics.clone();
+        }
+        serde_json::to_string_pretty(&val).unwrap_or_default()
+    }
+
+    /// Atomic save of the merged gateway.json (config + stats with sampled
+    /// provider_metrics). All persistence routes through here: the 5s stats flusher,
+    /// the debounced learned-cooldown flusher, and immediate console-change writes.
+    /// Returns false on write failure (callers keep the dirty flag to retry). Also
+    /// deletes the legacy stats.json after the first successful merged write that
+    /// follows a migration (stats.json is removed only once its data is in gateway.json).
+    pub fn save_all(&self) -> bool {
+        let pretty = self.config_plus_stats_json();
+        let tmp = self.config_path.with_extension("json.tmp");
+        let renamed =
+            std::fs::write(&tmp, pretty).is_ok() && std::fs::rename(&tmp, &self.config_path).is_ok();
+        if !renamed {
+            eprintln!("[gateway] WARNING: failed to persist gateway.json");
+            return false;
+        }
+        if self
+            .stats_migrated
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            let _ = std::fs::remove_file(&self.stats_path);
+        }
+        true
     }
 
     /// Mark a key as cooling down. `retry_after_secs` wins if present.
@@ -762,4 +845,79 @@ impl App {
             "last_error": pool.last_error,
         })
     }
+}
+
+/// Aggregate a provider's keys' live metrics from the (already-locked) pool. Returns
+/// None when the provider has served no traffic since startup (all its keys have
+/// empty req_times) — the caller then falls back to the persisted
+/// `stats.provider_metrics` so the UI shows the last-known value after a restart.
+fn provider_live_metrics_from_pool(
+    pool: &PoolRuntime,
+    p: &crate::config::Provider,
+) -> Option<crate::stats::ProviderMetrics> {
+    let mut rpm = 0u64;
+    let mut tpm = 0u64;
+    let mut ok = 0u64;
+    let mut total = 0u64;
+    let mut tftt_sum = 0u64;
+    let mut tftt_n = 0u64;
+    let mut tps_sum = 0.0f32;
+    let mut tps_n = 0u32;
+    let mut has_live = false;
+    for k in &p.keys {
+        if let Some(m) = pool.metrics.get(&k.id) {
+            if !m.req_times.is_empty() {
+                has_live = true;
+            }
+            rpm += m.req_times.len() as u64;
+            tpm += m.token_events.iter().map(|(_, n)| *n).sum::<u64>();
+            let t = m.success.len() as u64;
+            total += t;
+            ok += m.success.iter().filter(|e| e.1).count() as u64;
+            if !m.tftt_samples.is_empty() {
+                tftt_sum += m.tftt_samples.iter().map(|&v| v as u64).sum::<u64>();
+                tftt_n += m.tftt_samples.len() as u64;
+            }
+            if !m.tps_samples.is_empty() {
+                tps_sum += m.tps_samples.iter().map(|&v| v).sum::<f32>();
+                tps_n += m.tps_samples.len() as u32;
+            }
+        }
+    }
+    if !has_live {
+        return None;
+    }
+    let success_rate = if total == 0 { 1.0 } else { ok as f64 / total as f64 };
+    let avg_tftt_ms = if tftt_n == 0 { 0 } else { (tftt_sum / tftt_n) as u32 };
+    let tps = if tps_n == 0 { 0.0 } else { tps_sum / tps_n as f32 };
+    Some(crate::stats::ProviderMetrics {
+        rpm: rpm as u32,
+        tpm: tpm as u32,
+        success_rate,
+        avg_tftt_ms,
+        tps,
+    })
+}
+
+/// Load stats from gateway.json's `stats` sub-field; if absent (a pre-merge
+/// gateway.json), migrate from the legacy standalone stats.json (returns the stats
+/// + a migrated flag so save_all can delete stats.json after the first merged write).
+fn load_stats_merged(
+    config_path: &std::path::Path,
+    stats_path: &std::path::Path,
+) -> (crate::stats::Stats, bool) {
+    if let Ok(raw) = std::fs::read_to_string(config_path) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(s) = v.get("stats") {
+                if let Ok(st) = serde_json::from_value::<crate::stats::Stats>(s.clone()) {
+                    return (st, false);
+                }
+            }
+        }
+    }
+    // No `stats` field in gateway.json (pre-merge) → migrate from legacy stats.json.
+    if stats_path.exists() {
+        return (crate::stats::Stats::load(stats_path), true);
+    }
+    (crate::stats::Stats::default(), false)
 }

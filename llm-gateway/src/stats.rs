@@ -24,8 +24,23 @@ impl Bucket {
     }
 }
 
-/// Request statistics. Persisted to `stats.json` (next to gateway.json) on a debounce
-/// timer so the counters and the 24h histogram survive gateway restarts.
+/// Auto-detected per-provider live metrics (the aggregate of a provider's keys'
+/// measured rpm/tpm/success_rate/avg_tftt/tps). Persisted under `stats.provider_metrics`
+/// in gateway.json so the detected values survive a restart: the UI shows the
+/// persisted value until the provider serves new traffic, then live takes over.
+/// See state.rs `detected_metrics_for`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ProviderMetrics {
+    pub rpm: u32,
+    pub tpm: u32,
+    pub success_rate: f64, // [0,1]; 1.0 when no history
+    pub avg_tftt_ms: u32,
+    pub tps: f32,
+}
+
+/// Request statistics. Persisted into gateway.json (under the `stats` field, merged
+/// with the config) on a debounce timer so the counters and the 24h histogram
+/// survive gateway restarts.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Stats {
     pub total: Bucket,
@@ -43,6 +58,13 @@ pub struct Stats {
     /// reflects provider health even when the retry layer absorbs them.
     #[serde(default)]
     pub rotations: BTreeMap<String, u64>,
+    /// Auto-detected per-provider live metrics (provider id -> metrics), sampled on
+    /// each flush from the pool's per-key metrics. Survives restart so the UI shows
+    /// the last-known detected RPM/TPM/etc. until new traffic overrides. Only
+    /// providers with live traffic are refreshed on a flush; others keep their
+    /// last-persisted entry. See state.rs `detected_metrics_for`.
+    #[serde(default)]
+    pub provider_metrics: BTreeMap<String, ProviderMetrics>,
 }
 
 const HOUR_MS: u64 = 3_600_000;
@@ -110,6 +132,9 @@ impl Stats {
     }
 
     /// Atomic-ish save: temp file then rename over the target (same pattern as config).
+    /// Unused after the gateway.json+stats merge (state.rs `save_all` writes the merged
+    /// file), but kept for the legacy migration path + tests.
+    #[allow(dead_code)]
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let tmp = path.with_extension("json.tmp");
         let pretty = serde_json::to_string_pretty(self)

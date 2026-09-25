@@ -338,8 +338,8 @@ function renderProviders(m){
 function providerDetail(p){
   const kc = KEYS.filter(k=>k.prov===p.id).length;
   const mc = MODELS.filter(mo=>mo.prov===p.id).length;
-  const liveR = KEYS.filter(k=>k.prov===p.id).reduce((s,k)=>s+(k.rpm||0),0);
-  const liveT = KEYS.filter(k=>k.prov===p.id).reduce((s,k)=>s+(k.tpm||0),0);
+  const dm = p.detectedMetrics || {rpm:0,tpm:0};
+  const liveR = dm.rpm, liveT = dm.tpm;
   const autoR = p.rpmLimit==null, autoT = p.tpmLimit==null;
   return `
     <div class="pd-card">
@@ -1261,6 +1261,9 @@ function adaptAll(){
     tb: Infinity, bb: Infinity, rpm: 0, tpm: 0, resetAt: '', resetQuota: 0,
     rpmLimit: (p.rpm_limit!=null) ? p.rpm_limit : null,
     tpmLimit: (p.tpm_limit!=null) ? p.tpm_limit : null,
+    // server-side detected metrics (live aggregate, or persisted after a restart
+    // until new traffic overrides — see state.rs detected_metrics_for).
+    detectedMetrics: p.detected_metrics || null,
     dot: 'var(--color-action-primary)'
   }));
   MODELS = []; KEYS = [];
@@ -1299,14 +1302,13 @@ function adaptAll(){
       });
     });
   });
-  // RPM/TPM display value: a manual cap if set, else the live aggregate of
-  // this provider's key metrics (auto, read-only in the detail panel).
+  // RPM/TPM display value: a manual cap if set, else the server-detected value
+  // (live aggregate, or the persisted value after a restart until new traffic
+  // overrides). Read-only in the detail panel when no manual cap is set.
   PROVIDERS.forEach(pr => {
-    const ks = KEYS.filter(k=>k.prov===pr.id);
-    const liveR = ks.reduce((s,k)=>s+(k.rpm||0),0);
-    const liveT = ks.reduce((s,k)=>s+(k.tpm||0),0);
-    pr.rpm = (pr.rpmLimit!=null) ? pr.rpmLimit : liveR;
-    pr.tpm = (pr.tpmLimit!=null) ? pr.tpmLimit : liveT;
+    const dm = pr.detectedMetrics || {rpm:0,tpm:0};
+    pr.rpm = (pr.rpmLimit!=null) ? pr.rpmLimit : dm.rpm;
+    pr.tpm = (pr.tpmLimit!=null) ? pr.tpmLimit : dm.tpm;
   });
   GROUPS = (MODEL_GROUPS || []).map(g => ({ name: g.id, members: (g.entries || []).map(e => ({ prov: e[0], model: e[1] })) }));
 }
