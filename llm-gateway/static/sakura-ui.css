@@ -23,7 +23,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.8125rem; }
 a { color: var(--color-text-link); text-decoration: none; } a:hover { color: var(--color-text-link-hover); }
 
 /* ===== shell ===== */
-.app { display: flex; flex-direction: column; height: 100vh; }
+.app { display: flex; flex-direction: column; position: fixed; top: 0; left: 0; right: 0; bottom: 0; }
 .topbar {
   display: flex; align-items: center; gap: 0.75rem;
   padding: 0 1.25rem; height: 3.5rem; flex: none;
