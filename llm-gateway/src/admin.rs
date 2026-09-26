@@ -908,6 +908,7 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
         })
         .collect();
     ok(serde_json::json!({
+        "version": env!("GATEWAY_VERSION"),
         "now_ms": now_ms(),
         "default_cooldown_secs": cfg.default_cooldown_secs,
         "max_attempts": cfg.max_attempts,

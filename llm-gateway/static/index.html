@@ -289,7 +289,7 @@ function renderSideFoot(){
       <div class="mc-row"><span>${t('冷却')}</span><b class="mc-warn">${cool}</b></div>
       <div class="mc-row"><span>${t('异常')}</span><b class="mc-err">${off}</b></div>
     </div>
-    <span class="ver-chip">Sakura v0.1</span>`;
+    <span class="ver-chip">Sakura ${(STATUS && STATUS.version) ? STATUS.version : ''}</span>`;
 }
 
 /* ---------- overview (kept as in the prototype — not wired to a tab) ---------- */
