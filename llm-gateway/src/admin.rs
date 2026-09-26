@@ -52,6 +52,7 @@ pub async fn create_provider(
             has_token_balance_api: input.has_token_balance_api.unwrap_or(false),
             has_bill_balance_api: input.has_bill_balance_api.unwrap_or(false),
             price_table: Default::default(),
+            output_price_table: Default::default(),
             rpm_limit: None,
             tpm_limit: None,
         });
@@ -132,6 +133,9 @@ pub async fn update_price_table(
     let cfg = app.write_config(|c| {
         if let Some(p) = c.providers.iter_mut().find(|p| p.id == id) {
             p.price_table = input.table;
+            if let Some(ot) = input.output_table {
+                p.output_price_table = ot;
+            }
             found = true;
         }
     });
@@ -146,6 +150,10 @@ pub async fn update_price_table(
 pub struct PriceTableInput {
     /// logical model id -> CNY per 1M tokens. Missing entry = 0 (free).
     pub table: std::collections::BTreeMap<String, f64>,
+    /// logical model id -> output CNY per 1M tokens. Optional: when absent the
+    /// output price table is left untouched (so a price-only edit doesn't wipe it).
+    #[serde(default)]
+    pub output_table: Option<std::collections::BTreeMap<String, f64>>,
 }
 
 pub async fn delete_provider(
@@ -886,6 +894,7 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                 "rpm_limit": p.rpm_limit,
                 "tpm_limit": p.tpm_limit,
                 "price_table": p.price_table,
+                "output_price_table": p.output_price_table,
                 "models": p.models,
                 "keys": keys,
                 "detected_metrics": {

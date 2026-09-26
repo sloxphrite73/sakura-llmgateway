@@ -687,6 +687,7 @@ mod tests {
             has_token_balance_api: false,
             has_bill_balance_api: false,
             price_table: pa_price,
+            output_price_table: BTreeMap::new(),
             rpm_limit: None,
             tpm_limit: None,
         };
@@ -702,6 +703,7 @@ mod tests {
             has_token_balance_api: false,
             has_bill_balance_api: false,
             price_table: BTreeMap::new(),
+            output_price_table: BTreeMap::new(),
             rpm_limit: None,
             tpm_limit: None,
         };
@@ -832,6 +834,7 @@ mod tests {
             has_token_balance_api: false,
             has_bill_balance_api: false,
             price_table: BTreeMap::new(),
+            output_price_table: BTreeMap::new(),
             rpm_limit: None,
             tpm_limit: None,
         };

@@ -604,7 +604,7 @@ function renderModelEdit(c){
         <div class="erow"><span class="elbl">${t('上游模型名')}</span><input class="eval" aria-label="${t('上游模型名')}" value="${esc(mo.up)}" readonly title="${t('无后端')}"></div>
         <div class="erow"><span class="elbl">${t('上下文长度')}</span><input class="eval" id="me-ctx-${idx}" aria-label="${t('上下文长度')}" type="number" min="0" step="1" value="${mo.ctx?Math.round(mo.ctx/1000):0}"><span class="eunit">${t('K')}</span></div>
         <div class="erow"><span class="elbl">${t('输入价格')}</span><input class="eval" id="me-price-${idx}" aria-label="${t('输入价格')}" type="number" step="0.01" value="${mo.pIn}"><span class="eunit">${t('¥/1M tok')}</span></div>
-        <div class="erow"><span class="elbl">${t('输出价格')}</span><input class="eval" aria-label="${t('输出价格')}" type="number" step="0.01" value="${mo.pOut}" readonly title="${t('无后端')}"><span class="eunit">${t('¥/1M tok')}</span></div>
+        <div class="erow"><span class="elbl">${t('输出价格')}</span><input class="eval" id="me-pout-${idx}" aria-label="${t('输出价格')}" type="number" step="0.01" value="${mo.pOut}"><span class="eunit">${t('¥/1M tok')}</span></div>
         <div class="erow"><span class="elbl">${t('启用')}</span><span class="mc-sw ${mo.on?'on':''}" onclick="toggleModelOn(${idx})"><span class="track"></span><span class="slabel">${mo.on?t('是'):t('否')}</span></span></div>
         <div class="erow"><span class="elbl">${t('别名')}</span>
           <div class="alias-list">
@@ -636,15 +636,19 @@ async function saveModelEdit(idx){
   const mo = MODELS[idx]; if(!mo) return;
   const inp = $('me-price-'+idx); const v = inp ? parseFloat(inp.value) : NaN;
   const price = isNaN(v) ? 0 : v;
+  const poutInp = $('me-pout-'+idx); const ov = poutInp ? parseFloat(poutInp.value) : NaN;
+  const outPrice = isNaN(ov) ? 0 : ov;
   const ctxInp = $('me-ctx-'+idx); const kv = ctxInp ? parseFloat(ctxInp.value) : NaN;
   // UI holds K units → ×1000 to tokens; 0/empty = clear (None).
   const ctxTokens = (!isNaN(kv) && kv>0) ? Math.round(kv*1000) : null;
-  // build the full price table (existing entries + this model) and PUT it
+  // build the full price tables (existing entries + this model) and PUT both
   const p = (STATUS.providers||[]).find(x=>x.id===mo.prov);
   const table = Object.assign({}, (p&&(p.price_table||{})) || {});
   table[mo.id] = price;
+  const outTable = Object.assign({}, (p&&(p.output_price_table||{})) || {});
+  outTable[mo.id] = outPrice;
   try {
-    await api('PUT', '/api/providers/'+mo.prov+'/price-table', { table });
+    await api('PUT', '/api/providers/'+mo.prov+'/price-table', { table, output_table: outTable });
     await api('PUT', '/api/providers/'+mo.prov+'/models/'+encodeURIComponent(mo.id)+'/context-length', { context_length: ctxTokens });
     await refresh(); toast(t('已保存'));
   } catch(e){ console.error('saveModelEdit', e); toast(t('失败: ')+e.message); }
@@ -1284,10 +1288,10 @@ function adaptAll(){
     (p.models || []).forEach(m => {
       const aliases = Object.keys(p.aliases || {}).filter(a => (p.aliases || {})[a] === m.id);
       const price = (p.price_table && p.price_table[m.id] != null) ? p.price_table[m.id] : 0;
-      // single `price` → 输入价格; 输出价格 split + 上下文长度 have no backend → 0
+      const outPrice = (p.output_price_table && p.output_price_table[m.id] != null) ? p.output_price_table[m.id] : 0;
       const tftt = (STATS && STATS.models && STATS.models[m.id]) ? (STATS.models[m.id].avg_tftt_ms || 0) : 0;
       const tps = (STATS && STATS.models && STATS.models[m.id]) ? (STATS.models[m.id].avg_tps || 0) : 0;
-      MODELS.push({ id: m.id, prov: p.id, up: m.id, pIn: price, pOut: 0, ctx: (m.context_length||0), on: m.enabled, alias: aliases, tftt, tps });
+      MODELS.push({ id: m.id, prov: p.id, up: m.id, pIn: price, pOut: outPrice, ctx: (m.context_length||0), on: m.enabled, alias: aliases, tftt, tps });
     });
     (p.keys || []).forEach(k => {
       const mt = k.metrics || {};

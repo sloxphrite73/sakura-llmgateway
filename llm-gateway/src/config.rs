@@ -87,10 +87,14 @@ pub struct Provider {
     /// Volcengine / Alibaba.
     #[serde(default)]
     pub has_bill_balance_api: bool,
-    /// Per-model price in CNY per 1M tokens (logical model id -> price). Missing entry
+    /// Per-model input price in CNY per 1M tokens (logical model id -> price). Missing entry
     /// = 0 (free). Feeds the `price` strategy sort attribute (I, spec §2.2).
     #[serde(default)]
     pub price_table: std::collections::BTreeMap<String, f64>,
+    /// Per-model output price in CNY per 1M tokens (logical model id -> price).
+    /// Missing entry = 0. Shown on the model card alongside the input price.
+    #[serde(default)]
+    pub output_price_table: std::collections::BTreeMap<String, f64>,
     /// Manual per-provider RPM cap (provider detail "配额与速率" panel). `None` =
     /// auto — the UI shows the live aggregate of this provider's key metrics
     /// (read-only) and saves nothing. Informational only (not enforced as
