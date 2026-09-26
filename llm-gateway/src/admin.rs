@@ -582,6 +582,13 @@ pub async fn import_config(
     State(app): State<std::sync::Arc<App>>,
     Json(input): Json<ImportConfigInput>,
 ) -> Response {
+    // Parse the raw JSON as a Value first so we can extract the `stats` sub-field
+    // (Config::parse_str deserializes into Config, which has no `stats` field, so
+    // the stats are silently dropped — we catch them here).
+    let raw_value: serde_json::Value = match serde_json::from_str(&input.content) {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &format!("invalid JSON: {e}")),
+    };
     let cfg = match crate::config::Config::parse_str(&input.content) {
         Ok(c) => c,
         Err(e) => return err(StatusCode::BAD_REQUEST, &e.to_string()),
@@ -591,9 +598,15 @@ pub async fn import_config(
         let mut cur = app.config.write().unwrap();
         *cur = cfg.clone();
     }
-    // save_all persists the merged gateway.json (new config + current stats). The
-    // imported file's own `stats` (if present) is intentionally ignored — import is
-    // a config hot-swap, not a stats restore.
+    // If the imported file has a `stats` field, adopt it (replace current stats).
+    // Lenient: if the stats field is absent or malformed, keep current stats.
+    if let Some(stats_val) = raw_value.get("stats") {
+        if let Ok(imported_stats) = serde_json::from_value::<crate::stats::Stats>(stats_val.clone()) {
+            let mut cur = app.stats.lock().unwrap();
+            *cur = imported_stats;
+        }
+    }
+    // save_all persists the merged gateway.json (new config + adopted stats).
     if !app.save_all() {
         return err(
             StatusCode::INTERNAL_SERVER_ERROR,
