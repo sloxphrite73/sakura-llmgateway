@@ -549,6 +549,11 @@ async function toggleModelOn(i){
   try { await api('PUT', '/api/providers/'+mo.prov+'/models/'+encodeURIComponent(mo.id)); await refresh(); }
   catch(e){ console.error('toggleModelOn', e); toast(t('失败: ')+e.message); }
 }
+async function toggleModelImg(i){
+  const mo = MODELS[i]; if(!mo) return;
+  try { await api('PUT', '/api/providers/'+mo.prov+'/models/'+encodeURIComponent(mo.id)+'/supports-images', { supports_images: !mo.img }); await refresh(); }
+  catch(e){ console.error('toggleModelImg', e); toast(t('失败: ')+e.message); }
+}
 function renderModelList(c){
   const list = S.modelFilter==='all' ? MODELS : MODELS.filter(mo=>mo.prov===S.modelFilter);
   const fchips = [['all',t('全部')]].concat(PROVIDERS.map(p=>[p.id,p.name.split(' ')[0]]));
@@ -606,6 +611,7 @@ function renderModelEdit(c){
         <div class="erow"><span class="elbl">${t('输入价格')}</span><input class="eval" id="me-price-${idx}" aria-label="${t('输入价格')}" type="number" step="0.01" value="${mo.pIn}"><span class="eunit">${t('¥/1M tok')}</span></div>
         <div class="erow"><span class="elbl">${t('输出价格')}</span><input class="eval" id="me-pout-${idx}" aria-label="${t('输出价格')}" type="number" step="0.01" value="${mo.pOut}"><span class="eunit">${t('¥/1M tok')}</span></div>
         <div class="erow"><span class="elbl">${t('启用')}</span><span class="mc-sw ${mo.on?'on':''}" onclick="toggleModelOn(${idx})"><span class="track"></span><span class="slabel">${mo.on?t('是'):t('否')}</span></span></div>
+        <div class="erow"><span class="elbl">${t('图片输入')}</span><span class="mc-sw ${mo.img?'on':''}" onclick="toggleModelImg(${idx})"><span class="track"></span><span class="slabel">${mo.img?t('是'):t('否')}</span></span></div>
         <div class="erow"><span class="elbl">${t('别名')}</span>
           <div class="alias-list">
             ${mo.alias.length?mo.alias.map(a=>`<span class="keytag">${esc(a)} <a href="#" aria-label="${t('删除别名')}" style="color:var(--color-feedback-error-text);text-decoration:none" onclick="delModelAlias(${idx},'${esc(a)}');return false" class="alias-x"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></a></span>`).join(''):`<span class="faint" style="font-size:0.75rem">${t('无')}</span>`}
@@ -1291,7 +1297,7 @@ function adaptAll(){
       const outPrice = (p.output_price_table && p.output_price_table[m.id] != null) ? p.output_price_table[m.id] : 0;
       const tftt = (STATS && STATS.models && STATS.models[m.id]) ? (STATS.models[m.id].avg_tftt_ms || 0) : 0;
       const tps = (STATS && STATS.models && STATS.models[m.id]) ? (STATS.models[m.id].avg_tps || 0) : 0;
-      MODELS.push({ id: m.id, prov: p.id, up: m.id, pIn: price, pOut: outPrice, ctx: (m.context_length||0), on: m.enabled, alias: aliases, tftt, tps });
+      MODELS.push({ id: m.id, prov: p.id, up: m.id, pIn: price, pOut: outPrice, ctx: (m.context_length||0), on: m.enabled, img: !!m.supports_images, alias: aliases, tftt, tps });
     });
     (p.keys || []).forEach(k => {
       const mt = k.metrics || {};

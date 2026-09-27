@@ -366,7 +366,7 @@ pub async fn add_model(
                 result = Err(format!("model `{mid}` already exists on provider `{}`", p.name));
                 return;
             }
-            p.models.push(ManagedModel { id: mid, enabled: true, context_length: None });
+            p.models.push(ManagedModel { id: mid, enabled: true, context_length: None, supports_images: false });
         }
     });
     match result {
@@ -483,7 +483,7 @@ pub async fn import_models(
         if let Some(p) = c.providers.iter_mut().find(|p| p.id == id) {
             for mid in incoming {
                 if !p.models.iter().any(|m| m.id == mid) {
-                    p.models.push(ManagedModel { id: mid, enabled: true, context_length: None });
+                    p.models.push(ManagedModel { id: mid, enabled: true, context_length: None, supports_images: false });
                     imported += 1;
                 }
             }
@@ -509,6 +509,29 @@ pub async fn set_model_context(
         if let Some(p) = c.providers.iter_mut().find(|p| p.id == id) {
             if let Some(m) = p.models.iter_mut().find(|m| m.id == model_id) {
                 m.context_length = input.context_length;
+            }
+        }
+    });
+    ok(cfg)
+}
+
+#[derive(serde::Deserialize)]
+pub struct ImagesInput {
+    pub supports_images: bool,
+}
+
+/// PUT /api/providers/{id}/models/{model_id}/supports-images — toggle whether
+/// a managed model accepts image input. Declared in /v1/models so clients can
+/// discover vision-capable models.
+pub async fn set_model_images(
+    State(app): State<std::sync::Arc<App>>,
+    Path((id, model_id)): Path<(String, String)>,
+    Json(input): Json<ImagesInput>,
+) -> Response {
+    let cfg = app.write_config(|c| {
+        if let Some(p) = c.providers.iter_mut().find(|p| p.id == id) {
+            if let Some(m) = p.models.iter_mut().find(|m| m.id == model_id) {
+                m.supports_images = input.supports_images;
             }
         }
     });

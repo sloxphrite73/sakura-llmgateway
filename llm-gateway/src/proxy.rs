@@ -1158,6 +1158,7 @@ pub async fn list_models(
                 "owned_by": p.name,
                 "provider_id": p.id,
                 "upstream_id": m.id,
+                "supports_images": m.supports_images,
             }));
         }
         for (alias, target) in &p.aliases {

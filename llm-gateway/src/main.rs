@@ -82,6 +82,10 @@ async fn main() {
             put(admin::set_model_context),
         )
         .route(
+            "/api/providers/{id}/models/{model_id}/supports-images",
+            put(admin::set_model_images),
+        )
+        .route(
             "/api/providers/{id}/upstream-models",
             get(admin::upstream_models),
         )

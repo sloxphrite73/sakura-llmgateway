@@ -672,7 +672,7 @@ mod tests {
             seed_avg_tftt_ms: None,
             seed_tps: None,
         };
-        let model = |id: &str| ManagedModel { id: id.into(), enabled: true, context_length: None };
+        let model = |id: &str| ManagedModel { id: id.into(), enabled: true, context_length: None, supports_images: false };
         let mut pa_price = BTreeMap::new();
         pa_price.insert("gpt-4o".to_string(), 5.0);
         let pa = Provider {
@@ -827,7 +827,7 @@ mod tests {
             name: "PS".into(),
             base_url: "http://ps/v1".into(),
             keys: vec![seeded],
-            models: vec![ManagedModel { id: "m".into(), enabled: true, context_length: None }],
+            models: vec![ManagedModel { id: "m".into(), enabled: true, context_length: None, supports_images: false }],
             model_allowlist_only: false,
             aliases: BTreeMap::new(),
             protocol: String::new(),

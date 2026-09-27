@@ -45,6 +45,11 @@ pub struct ManagedModel {
     /// without the field load as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_length: Option<u32>,
+    /// Whether this model accepts image input (vision/multimodal). Declared in
+    /// `/v1/models` so OpenAI-compatible clients (including DSH's catalog) can
+    /// discover image-capable models. `false` (default) = text-only.
+    #[serde(default)]
+    pub supports_images: bool,
 }
 
 fn bool_true() -> bool {
