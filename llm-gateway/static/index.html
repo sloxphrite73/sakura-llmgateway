@@ -911,7 +911,7 @@ async function runDryRun(){
 /* ---------- api keys global table ---------- */
 /* ---------- api key actions ---------- */
 const CLIP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>';
-function akPaste(btn){ try { navigator.clipboard.readText().then(t=>{ const i=btn.parentElement.querySelector('input'); if(i) i.value=t; }).catch(()=>{}); } catch(e){} }
+function akPaste(btn){ try { navigator.clipboard.readText().then(t=>{ const i=btn.parentElement.querySelector('#ak-key-input'); if(i) i.value=t; }).catch(()=>{}); } catch(e){} }
 async function akShow(kid, btn){
   const el=document.querySelector('span.keytag[data-ak="'+kid+'"]'); if(!el) return;
   if (el.dataset.shown==='1'){ el.textContent='••••••••'; el.dataset.shown='0'; btn.textContent=t('显示'); return; }
@@ -943,15 +943,16 @@ async function akRecycle(){
   S.recycled = (S.recycled||0) + inv.length;
   await refresh(); toast(t('已删除'));
 }
-async function akAdd(batch){
+async function akAdd(){
   const sel=document.getElementById('ak-prov'), inp=document.getElementById('ak-key-input');
   if(!sel||!inp) return;
   const prov=sel.value, raw=inp.value.trim(); if(!raw) return;
-  const keys=batch?raw.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean):[raw];
+  // Always split by newlines/commas — single key or batch, same path.
+  const keys=raw.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean);
   let failed=0;
   for (const k of keys){ try { await api('POST', '/api/providers/'+prov+'/keys', { key:k, label:'' }); } catch(e){ failed++; console.error('akAdd', e); } }
   inp.value=''; await refresh();
-  if (failed) toast(t('失败: ')+failed);
+  if (failed) toast(t('失败: ')+failed); else if (keys.length>1) toast(t('已添加 {n} 把').replace('{n}', keys.length-failed));
 }
 async function findRealKey(keyId){
   const cfg = await api('GET', '/api/config/export');
@@ -971,22 +972,21 @@ function renderApiKeys(m){
       <div class="ak-add">
         <select id="ak-prov" aria-label="${t('提供商')}">${PROVIDERS.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
         <span class="ak-input-wrap">
-          <input id="ak-key-input" class="ak-key-input" aria-label="${t('API Key')}" placeholder="${t('粘贴 API Key，多个每行一个可批量添加')}">
+          <textarea id="ak-key-input" class="ak-key-input" aria-label="${t('API Key')}" placeholder="${t('粘贴 API Key，多个每行一个')}" rows="2"></textarea>
           <button class="ak-paste" type="button" aria-label="${t('从剪贴板粘贴')}" title="${t('从剪贴板粘贴')}" onclick="akPaste(this)">${CLIP}</button>
         </span>
-        <button class="primary small" type="button" onclick="akAdd(false)">${t('添加')}</button>
-        <button class="small" type="button" onclick="akAdd(true)">${t('批量添加')}</button>
+        <button class="primary small" type="button" onclick="akAdd()">${t('添加')}</button>
       </div>
       <div class="ak-recycle" style="margin-top:0.875rem"><button class="small" type="button" onclick="akRecycle()" ${invCount?'':'disabled'}>${t('移动所有无效Key至回收站')}</button></div>
     </div>
     <div class="chips" style="margin-bottom:0.875rem">
       ${chips.map(c=>`<span class="chip ${f===c[0]?'active':''}" onclick="S.keyFilter='${c[0]}';renderMain()">${c[1]}</span>`).join('')}
     </div>
-    <div class="card"><div class="tbl-scroll"><table class="cards">
+    <div class="card"><div class="tbl-scroll"><table>
       <tr><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('智能冷却时长')}</th><th>${t('状态')}</th><th>${t('token 余额')}</th><th>${t('账单')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
       ${list.map(k=>`
       <tr>
-        <td data-label="${t('Key')}"><span class="keytag" data-ak="${esc(k.kid)}" data-shown="0">••••••••</span></td>
+        <td data-label="${t('Key')}"><span class="keytag" data-ak="${esc(k.kid)}" data-shown="0">${esc(k.masked||'••••')}</span></td>
         <td data-label="${t('提供商')}">${esc(PNAME(k.prov))}</td>
         <td data-label="${t('智能冷却时长')}" class="num">${k.cdDur}s</td>
         <td data-label="${t('状态')}">${keyStatus(k)}</td>
@@ -1303,6 +1303,10 @@ function adaptAll(){
       const mt = k.metrics || {};
       const now = STATUS.now_ms || 0;
       const cd = k.cooling ? Math.max(0, Math.ceil((k.cooling.until_ms - now) / 1000)) : 0;
+      // Persisted per-key request count from stats (survives restarts); fall
+      // back to the pool's in-memory counter when stats have no entry for this key.
+      const statsKey = (STATS && STATS.keys && STATS.keys[k.id]) ? STATS.keys[k.id] : null;
+      const reqCount = statsKey ? ((statsKey.success||0) + (statsKey.fail||0)) : (k.requests || 0);
       KEYS.push({
         kid: k.id, prov: p.id, model: '-',
         valid: !k.invalid, cool: !!k.cooling, cd,
@@ -1319,7 +1323,7 @@ function adaptAll(){
         tb: mt.token_balance == null ? Infinity : mt.token_balance,
         bb: mt.bill_balance == null ? Infinity : mt.bill_balance,
         price: 0, tps: mt.tps || 0, lastErr: k.last_error || '',
-        req: k.requests || 0,
+        req: reqCount,
         // spec §2.2 seed: preset initial values (null = none / clear).
         seedRpm: k.seed_rpm, seedTpm: k.seed_tpm, seedSr: k.seed_success_rate,
         seedTftt: k.seed_avg_tftt_ms, seedTps: k.seed_tps

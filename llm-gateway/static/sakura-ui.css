@@ -301,9 +301,9 @@ button.ghost:hover { color: var(--color-text-link); border-color: transparent; b
 .ak-add { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
 .ak-add select { min-width: 10rem; }
 .ak-input-wrap { position: relative; flex: 1; min-width: 14rem; }
-.ak-key-input { width: 100%; background: var(--color-surface-raised); border: 1px solid var(--color-border-default); border-radius: 0.5rem; padding: 0.5rem 2.75rem 0.5rem 0.75rem; color: var(--color-text-primary); font-family: var(--font-mono); font-size: 0.875rem; outline: none; transition: border-color .15s, box-shadow .15s; }
+.ak-key-input { width: 100%; background: var(--color-surface-raised); border: 1px solid var(--color-border-default); border-radius: 0.5rem; padding: 0.5rem 2.75rem 0.5rem 0.75rem; color: var(--color-text-primary); font-family: var(--font-mono); font-size: 0.875rem; outline: none; transition: border-color .15s, box-shadow .15s; resize: vertical; min-height: 2.5rem; }
 .ak-key-input:focus { border-color: var(--color-border-focus); box-shadow: 0 0 0 3px rgba(201,93,124,0.18); }
-.ak-paste { position: absolute; right: 0.375rem; top: 50%; transform: translateY(-50%); background: transparent; border: 0; color: var(--color-text-secondary); padding: 0.3125rem; cursor: pointer; display: inline-flex; border-radius: 0.375rem; }
+.ak-paste { position: absolute; right: 0.375rem; top: 0.75rem; background: transparent; border: 0; color: var(--color-text-secondary); padding: 0.3125rem; cursor: pointer; display: inline-flex; border-radius: 0.375rem; }
 .ak-paste:hover { color: var(--color-text-link); background: var(--color-surface-page); }
 .ak-paste svg { width: 1.0625rem; height: 1.0625rem; }
 .ak-recycle { margin-top: 0.875rem; }
