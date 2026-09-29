@@ -914,7 +914,7 @@ const CLIP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
 function akPaste(btn){ try { navigator.clipboard.readText().then(t=>{ const i=btn.parentElement.querySelector('#ak-key-input'); if(i) i.value=t; }).catch(()=>{}); } catch(e){} }
 async function akShow(kid, btn){
   const el=document.querySelector('span.keytag[data-ak="'+kid+'"]'); if(!el) return;
-  if (el.dataset.shown==='1'){ el.textContent='••••••••'; el.dataset.shown='0'; btn.textContent=t('显示'); return; }
+  if (el.dataset.shown==='1'){ const k=KEYS.find(x=>x.kid===kid); el.textContent=k?(k.masked||'••••'):'••••'; el.dataset.shown='0'; btn.textContent=t('显示'); return; }
   try {
     const real = await findRealKey(kid);
     if (!real){ toast(t('未找到该 Key')); return; }
@@ -983,13 +983,16 @@ function renderApiKeys(m){
       ${chips.map(c=>`<span class="chip ${f===c[0]?'active':''}" onclick="S.keyFilter='${c[0]}';renderMain()">${c[1]}</span>`).join('')}
     </div>
     <div class="card"><div class="tbl-scroll"><table>
-      <tr><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('智能冷却时长')}</th><th>${t('状态')}</th><th>${t('token 余额')}</th><th>${t('账单')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
+      <tr><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('智能冷却时长')}</th><th>${t('状态')}</th><th>RPM</th><th>TPM</th><th>${t('avg_TFTT')}</th><th>${t('token 余额')}</th><th>${t('账单')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
       ${list.map(k=>`
       <tr>
         <td data-label="${t('Key')}"><span class="keytag" data-ak="${esc(k.kid)}" data-shown="0">${esc(k.masked||'••••')}</span></td>
         <td data-label="${t('提供商')}">${esc(PNAME(k.prov))}</td>
         <td data-label="${t('智能冷却时长')}" class="num">${k.cdDur}s</td>
         <td data-label="${t('状态')}">${keyStatus(k)}</td>
+        <td data-label="RPM" class="num">${k.rpm||0}</td>
+        <td data-label="TPM" class="num">${k.tpm||0}</td>
+        <td data-label="${t('avg_TFTT')}" class="num">${k.tftt?k.tftt+'ms':'-'}</td>
         <td data-label="${t('token 余额')}" class="num">${k.tb===Infinity?`<span class="faint">${t('不限')}</span>`:k.tb.toLocaleString()}</td>
         <td data-label="${t('账单')}" class="num">${k.bb===Infinity?`<span class="faint">${t('不限')}</span>`:'¥'+k.bb}</td>
         <td data-label="${t('请求数')}" class="num">${k.req||0}</td>
@@ -1000,7 +1003,7 @@ function renderApiKeys(m){
           <button class="small" type="button" onclick="akEditSeed('${esc(k.kid)}')">${t('Seed')}</button>
           <button class="small" type="button" onclick="akDel('${esc(k.kid)}')" style="border-color:var(--color-feedback-error-text);color:var(--color-feedback-error-text)">${t('删除')}</button>
         </td>
-      </tr>`).join('') || `<tr><td colspan="9" class="faint">${t('无')}</td></tr>`}
+      </tr>`).join('') || `<tr><td colspan="12" class="faint">${t('无')}</td></tr>`}
     </table></div></div>`;
 }
 
@@ -1062,13 +1065,16 @@ function updateAkCells(){
     if (!k) return;
     const tr = span.closest('tr'); if (!tr) return;
     const c = tr.children;
-    // cols: 0 Key(untouched) 1 提供商 2 智能冷却时长 3 状态 4 token余额 5 账单 6 请求数 7 最近错误 8 操作
+    // cols: 0 Key 1 提供商 2 冷却 3 状态 4 RPM 5 TPM 6 TFTT 7 token余额 8 账单 9 请求数 10 错误 11 操作
     if (c[2]) c[2].innerHTML = k.cdDur + 's';
     if (c[3]) c[3].innerHTML = keyStatus(k);
-    if (c[4]) c[4].innerHTML = k.tb===Infinity ? `<span class="faint">${t('不限')}</span>` : k.tb.toLocaleString();
-    if (c[5]) c[5].innerHTML = k.bb===Infinity ? `<span class="faint">${t('不限')}</span>` : '¥'+k.bb;
-    if (c[6]) c[6].textContent = String(k.req||0);
-    if (c[7]) c[7].innerHTML = `<span class="ak-err" title="${esc(k.lastErr||'-')}">${esc(k.lastErr||'-')}</span>`;
+    if (c[4]) c[4].textContent = String(k.rpm||0);
+    if (c[5]) c[5].textContent = String(k.tpm||0);
+    if (c[6]) c[6].textContent = k.tftt ? (k.tftt+'ms') : '-';
+    if (c[7]) c[7].innerHTML = k.tb===Infinity ? `<span class="faint">${t('不限')}</span>` : k.tb.toLocaleString();
+    if (c[8]) c[8].innerHTML = k.bb===Infinity ? `<span class="faint">${t('不限')}</span>` : '¥'+k.bb;
+    if (c[9]) c[9].textContent = String(k.req||0);
+    if (c[10]) c[10].innerHTML = `<span class="ak-err" title="${esc(k.lastErr||'-')}">${esc(k.lastErr||'-')}</span>`;
   });
 }
 
