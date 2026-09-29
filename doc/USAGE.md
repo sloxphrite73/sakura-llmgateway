@@ -139,10 +139,13 @@ Stepfun, iFlyTek Spark, Tencent Hunyuan, ModelScope, Infermatic:
 Each provider card manages one upstream:
 
 - **Edit / delete** the provider (name + base URL).
-- **API keys** — add/remove keys, optional per-key cooldown override, live
-  status, request count, last error. The API key value is always shown masked.
-- **Models** — the managed model catalog (see section 4).
+- **Models** — the managed model catalog (see section 4). Per-model: enable/disable,
+  context length, input/output price, `supports_images` toggle, one-click import
+  from upstream `/v1/models`.
 - **Aliases** — short names mapped to upstream model names (see section 5).
+- **Rate limits** — optional manual RPM/TPM cap (null = auto, shows live aggregate).
+
+API keys are managed from the **API Key** tab (see below), not from the provider card.
 
 **Key status meanings:**
 
@@ -168,18 +171,25 @@ The **策略 / Strategy** tab configures the routing strategy (see §4.2):
 
 ### API Key page
 
-A global table of every key across all providers (one row per key):
+A global table of every key across all providers (one row per key). At the top of the
+page is an **add-key bar**: select a provider from the dropdown, paste one or more API
+keys into the textarea (one per line for batch import), and click **Add**. Keys are
+always displayed masked (head + tail visible); click **Show** to reveal the full key,
+**Hide** to restore the mask.
 
-- **智能冷却时长 / Smart cooldown** column — each key's effective cooldown
-  (`learned_cooldown` → per-key `cooldown_secs` → global default).
-- **状态 / Status** column — 可用 / 冷却 · 剩 Xs / 无效; the page polls
-  `/api/status` **once per second** and surgically updates the status, cooldown
-  countdown, request count and error cells, so the countdown ticks down live and
-  keys flip 可用↔冷却 as they recover. The key show/hide toggle and any open
-  editor are not disrupted.
+Each row shows:
+
+- **Smart cooldown** — each key's effective cooldown (`learned_cooldown` → per-key
+  `cooldown_secs` → global default).
+- **Status** — Available / Cooling · Xs left / Invalid; the page polls `/api/status`
+  **once per second** and surgically updates the status, cooldown countdown, request
+  count and error cells, so the countdown ticks down live and keys flip
+  Available↔Cooling as they recover.
+- **RPM / TPM / avg_TFTT** — measured per-key metrics (from the live pool snapshot).
+- **Request count** — persisted from `stats.keys` (survives restarts).
 - **Seed** — a `Seed` button per key opens an edit card for the five metric seeds
   (RPM / TPM / success_rate / avg_tftt / TPS; empty = clear), see §4.3.
-- **显示 / 复制 / 删除** — reveal (masked → full), copy, or delete a key.
+- **Show / Copy / Delete** — reveal (masked → full), copy, or delete a key.
 
 ### Theme & language
 

@@ -124,12 +124,10 @@ Ports (API `8000`, UI `8001`) are set in the config file or editable in the UI
 ### Configure providers and keys
 
 1. Open the web console `http://127.0.0.1:8001/`
-2. Go to the **Providers** tab and add a provider (name + OpenAI-compatible `base_url`)
-3. Add one or more API keys to the provider's key pool (paste multiple keys, one per line, for batch import)
-4. (Optional) Import the provider's model catalog from its `/v1/models` with one click,
-   enable/disable individual models, toggle `supports_images` for vision models, and turn on allowlist mode
+2. Go to the **Providers** tab and add a provider (name + OpenAI-compatible `base_url`). You can also pick one from the built-in free provider catalog (25 upstreams with setup guides).
+3. Go to the **API Key** tab, select the provider from the dropdown, paste one or more API keys (one per line for batch import), and click **Add**. Keys are always displayed masked (head + tail visible); click **Show** to reveal the full key.
+4. (Optional) In the **Models** tab, import the provider's model catalog from its `/v1/models` with one click, enable/disable individual models, toggle `supports_images` for vision models, set context length / input price / output price, and turn on allowlist mode
 5. (Optional) Set up aliases, e.g. `fast` → `gpt-4o-mini`
-6. (Optional) Set per-model context length, input price, and output price in the model edit form
 
 ### Use the gateway API
 
