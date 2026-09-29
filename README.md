@@ -1,111 +1,44 @@
 # Sakura LLM Gateway
 
-🎯 A local-first LLM API gateway that pools API keys per provider, rotates them automatically on rate limits with smart cooldowns, and manages everything from a built-in web console. Speaks both **OpenAI** and **Anthropic** protocols (any inbound × any upstream, translated automatically), ships as a single-file Windows exe and an Android APK, and lets any client — Claude Code, Cherry Studio, whatever — safely share your entire key pool.
+A local-first LLM API gateway that pools API keys per provider, rotates them automatically on rate limits with smart cooldowns, and manages everything from a built-in web console. Speaks both **OpenAI** and **Anthropic** protocols (any inbound × any upstream, translated automatically), ships as a single-file Windows executable and an Android APK, and lets any client — Claude Code, Cherry Studio, or anything that speaks OpenAI — safely share your entire key pool.
 
-[English](README.md) | [简体中文](README.zh-CN.md) · 📖 Usage guide: [English](doc/USAGE.md) | [中文](doc/使用说明.md)
+[English](README.md) | [简体中文](README.zh-CN.md) · Usage guide: [English](doc/USAGE.md) | [中文](doc/使用说明.md)
 
-[Bugs report and communication with dev(Telegram)](https://t.me/+4NfMkc8SJDwzYWZl)
+[Bugs report and communication with dev (Telegram)](https://t.me/+4NfMkc8SJDwzYWZl)
 
-## ✨ Features
+## Features
 
-- 🔌 **OpenAI-compatible API** - point any agent/tool at `http://127.0.0.1:8000/v1`
-  - `POST /v1/chat/completions` (streaming SSE and non-streaming)
-  - `GET /v1/models` (aggregated from all providers + aliases)
-- 🌸 **Anthropic Messages protocol** - also exposes `POST /v1/messages` (Claude Code
-  and Anthropic SDKs connect directly); each provider can be set to `openai` or
-  `anthropic` protocol and the gateway translates bidirectionally — any inbound
-  protocol × any upstream protocol works (OpenAI clients can use a real Claude API
-  key pool too); tools / images / streaming events / count_tokens all supported
-- 🔑 **API-Key Pool** - round-robin across keys; a key that receives `429` is put into
-  cooldown and traffic rotates to the next key immediately
-- ⏱️ **Smart cooldown** - resolution order: upstream `Retry-After` header →
-  `learned_cooldown` (learned via binary-search probing) → per-key override → global
-  default (60s); when all keys are cooling down, the gateway fails fast with `429`
-- 🔬 **Cooldown learning (binary-search prober)** - after a 429, a background prober
-  measures the key's real rate-limit window and stores it as `learned_cooldown`:
-  starting from T (the previous learned value, else the global default), it sends a
-  tiny probe after T seconds (the provider's first enabled managed model,
-  `max_tokens: 1`) — success means the window is shorter, bracketing `[T/2, T]`;
-  another 429 means longer, bracketing `[T, 2T]`. The bracket is then bisected for
-  ~5 rounds to ±1s and the **midpoint** is stored. Bounded by design: at most
-  10 probes per measurement, a 900s window cap, and at most one recalibration per
-  key per hour — so it never burns quota
+**Dual-protocol proxy** — point any agent or tool at `http://127.0.0.1:8000/v1`. The gateway accepts OpenAI Chat Completions (`POST /v1/chat/completions`) and Anthropic Messages (`POST /v1/messages`) on the same port. Each provider can be set to `openai` or `anthropic` upstream protocol, and the gateway translates bidirectionally — OpenAI clients can use a real Claude API key pool, and vice versa. Streaming SSE, tool use, image input, and `count_tokens` all pass through.
+
+**API-Key pool with automatic rotation** — round-robin across keys per provider. When a key receives a `429`, it enters cooldown and traffic rotates to the next key immediately — the client never sees the rate limit. The retry budget is `max_attempts × key_count` (default 3×), and once the first byte of a response is sent, the stream passes through untouched.
+
+**Smart cooldown learning** — cooldown resolution follows a priority chain: upstream `Retry-After` header → `learned_cooldown` (measured by binary-search probing) → per-key override → global default (60s). After a 429, a background prober measures the key's real rate-limit window: it brackets the window (probe at time T — success means shorter, 429 means longer) then bisects for ~5 rounds to ±1s precision. Bounded by design: at most 10 probes per measurement, a 900s window cap, and at most one recalibration per key per hour. Invalid keys (401/403) are quarantined for 30 minutes instead of short cooldown.
 
 ```
 Probe interval (seconds)
 T ──── 429 ──▶ [T, 2T]          success ──▶ [T/2, T]
-                 │                          │
-                 ▼ bisect ~5 rounds          ▼ bisect ~5 rounds
-            converge to ±1s ◀━━━━ midpoint stored as learned_cooldown
+                │                          │
+                ▼ bisect ~5 rounds          ▼ bisect ~5 rounds
+           converge to ±1s ◀━━━━ midpoint stored as learned_cooldown
 ```
-- 🚫 **Invalid-key quarantine** - `401/403` means the key itself is dead: it is
-  quarantined for 30 minutes instead of the short rotate-out cooldown
-- 🔁 **Retry before first byte** - 429/5xx/timeouts rotate to the next key (budget =
-  `max_attempts` × key count, default 3×); once the first byte is sent, the stream is
-  passed through untouched
-- 🧹 **Stream interruption handling** - a mid-stream failure emits an OpenAI-style SSE
-  error chunk followed by `data: [DONE]`, so clients end cleanly with no duplicated or
-  truncated text
-- 🖼️ **Large context & image input** - the `/v1` proxy lifted axum's default 2 MiB
-  request body limit, so ~1M-token context requests and base64 image inputs go
-  through (when the upstream supports them). Image content blocks pass through
-  same-protocol (OpenAI→OpenAI) and translate cross-protocol (OpenAI↔Anthropic)
-- 📦 **Managed models** - per-provider model catalog (`{ id, enabled }`), one-click
-  import from the provider's `/v1/models` (with checkboxes), and an optional allowlist
-  mode that rejects models not in the list
-- 🆓 **Free provider catalog** - the console's "Provider catalog" panel ships 25
-  OpenAI-compatible upstreams with free tiers — SiliconFlow, Z.AI GLM, OpenRouter
-  `:free`, Pollinations (keyless), NVIDIA NIM, Groq, Mistral, Cloudflare
-  Workers AI, Google Gemini, SambaNova, Hugging Face, Fireworks, Novita, Requesty,
-  Cohere, Alibaba DashScope, Volcengine Doubao, Moonshot Kimi, AI21, Baidu Qianfan,
-  Stepfun, iFlyTek Spark, Tencent Hunyuan, ModelScope, Infermatic: each card carries
-  a **setup-guide link** and preset free models —
-  **paste key → confirm** adds everything in one step (provider + models + keys).
-  The catalog is embedded in the binary and can also be refreshed from GitHub
-- 🎯 **Model routing** - request models as `provider/model` (e.g. `openai/gpt-4o`), or
-  set up short **aliases** in the UI (e.g. `fast` → `gpt-4o-mini`)
-- 🧭 **Routing strategy** - a `(provider, model, api_key_id)` triple table; two
-  filter toggles (`lock_model_group` / `lock_provider`, both ON by default = exact
-  provider+model, only rotate keys = the long-standing behavior, zero-surprise
-  upgrade) shrink candidates into four modes — exact / model-first (same logical
-  model across all providers) / provider-first (all that provider's models) /
-  available-first (whole table). Sort = fixed leading `valid ↓` + `non-cooled ↓`
-  (always on, no toggle) + a user stack of 0–3 of 10 keys (A–J: success_rate,
-  rpm, tpm, avg_tftt, token_balance×2, bill_balance×2, price, tps), tiebreak =
-  table-order (D1 cursor rotation → round-robin). Walks to the first valid +
-  non-cooled row; if all valid rows are cooling → `429` + `Retry-After:
-  min(remaining_secs)` (precise seconds from the measured `learned_cooldown`,
-  not a fixed value). `learned_cooldown` feeds `cold`/`remaining_secs`
-  orthogonally; `model_groups` enable cross-provider same-model fallback. The
-  策略 / Strategy tab has a dry-run preview
-- 🌱 **Per-key metric seed** - a brand-new key has no live metrics (rpm/tpm = 0,
-  success_rate = 1.0), so B/C/D/J sorts rank it last and it never gets picked
-  until it accrues traffic. Set `seed_rpm` / `seed_tpm` / `seed_success_rate` /
-  `seed_avg_tftt_ms` / `seed_tps` to preset initial values, automatically
-  overridden once the key serves real traffic (the cooldown prober does not
-  count as traffic). Edited per-key in the API Key page
-- 📊 **Status & statistics** - persistent request stats (merged into `gateway.json` under `stats`): totals, a 24h
-  hourly histogram, and success/fail counters per API key, per provider and per model —
-  all visible in the web console and queryable via `GET /api/stats`
-- 📈 **Measured metrics** - per-model avg_TFTT (time to first content token in
-  streaming responses; non-streaming = 0/not shown) on the model card and in
-  `/api/stats`; per-provider RPM/TPM limits are editable + persisted
-  (`rpm_limit` / `tpm_limit`, optional; null = no manual cap, and the console
-  shows the live aggregate of that provider's keys' measured rpm/tpm)
-- 🖥️ **Web console** - `http://127.0.0.1:8001/`, a single-page sakura-themed console
-  rebuilt 1:1 from a token-driven design system (dark/light + EN/中文, persisted):
-  统计/Stats, 提供商/Providers, 模型/Models, 策略/Strategy (filter+sort+dry-run),
-  API Key (live per-second status, smart-cooldown column, per-key metric seed
-  editor, show/copy), and 设置/Settings — manage providers, the key pool, models,
-  aliases, model groups, routing strategy, and settings
-- 💾 **JSON config** - human-readable `gateway.json`, saved atomically on every change
-- 📤 **Config export/import** - download `gateway.json` as a browser file, or import one
-  with validate-then-swap semantics: the whole file is rejected on any error, and a valid
-  file hot-swaps with **no restart** (in-flight requests finish on the old state)
-- 🔐 **Optional auth** - off by default; enable in the UI to require a gateway-issued
-  Bearer key on the local API
-- 📦 **Single binary** - the web console is a single native HTML/JS file embedded via
-  `rust-embed`; `cargo build` produces everything, no Node toolchain
+
+**Model routing and strategy** — request models as `provider/model` (e.g. `openai/gpt-4o`) or set up short aliases. A routing strategy with two filter toggles (`lock_model_group` / `lock_provider`, both ON by default) and a user-configurable sort stack of 0–3 keys (A–J: success_rate, rpm, tpm, avg_tftt, token/bill balances, price, tps) gives four modes: exact, model-first (cross-provider fallback), provider-first, or available-first. A dry-run preview shows which key will be picked before you send.
+
+**Managed models and free provider catalog** — per-provider model catalog with one-click import from the upstream's `/v1/models`. An optional allowlist mode rejects unlisted models. The console ships a catalog of 25 OpenAI-compatible upstreams with free tiers — SiliconFlow, Z.AI GLM, OpenRouter `:free`, Pollinations (keyless), NVIDIA NIM, Groq, Mistral, Google Gemini, and more — each with a setup guide and preset free models. Paste a key and confirm to add everything in one step.
+
+**Image input declaration** — models can be flagged with `supports_images` (toggle in the model edit form), declared in `/v1/models` so clients can discover vision-capable models. Image content blocks pass through same-protocol (OpenAI→OpenAI) and translate cross-protocol (OpenAI↔Anthropic). The gateway forwards image requests as-is — no stripping, no size limits (axum's default 2 MiB body cap is lifted).
+
+**Persistent statistics and measured metrics** — request stats (totals, 24h hourly histogram, per-key/provider/model success-fail counters) are merged into `gateway.json` under `stats` and survive restarts. Per-model avgTFTT (time-to-first-token) and avgTPS (generation speed) are sampled from streaming responses and persisted. Per-provider detected RPM/TPM/success_rate/avg_tftt/tps are also persisted so the UI shows the last-known value after a restart until new traffic overrides it.
+
+**Per-key metric seed** — a brand-new key has no live metrics, so sort-based routing ranks it last. Set `seed_rpm` / `seed_tpm` / `seed_success_rate` / `seed_avg_tftt_ms` / `seed_tps` to preset initial values, automatically overridden once the key serves real traffic.
+
+**Web console** — `http://127.0.0.1:8001/`, a single-page sakura-themed console (dark/light + EN/中文, preferences persisted): Stats, Providers, Models, Strategy (filter + sort + dry-run), API Key (live per-second status, cooldown countdown, RPM/TPM/avg_TFTT columns, per-key metric seed editor, show/copy, batch import), and Settings. Mobile-first responsive layout with a bottom tab bar on phones.
+
+**Version display** — the sidebar footer shows the real release version (e.g. `Sakura v0.7.1`) via a build script that runs `git describe --tags` at compile time.
+
+**Config export/import** — download `gateway.json` as a file, or import one with validate-then-swap semantics: the whole file is rejected on any error, a valid file hot-swaps with no restart (in-flight requests finish on the old state), and imported stats are adopted (not discarded).
+
+**Single binary, no Node toolchain** — the web console is a single native HTML/JS file embedded via `rust-embed`; `cargo build` produces everything.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -135,7 +68,7 @@ T ──── 429 ──▶ [T, 2T]          success ──▶ [T/2, T]
         └─────────┘   └─────────┘   └─────────┘
 ```
 
-## 🚀 Quick start
+## Quick start
 
 ### Option 1: Download a release (Windows exe / Android APK, no toolchain)
 
@@ -148,7 +81,7 @@ put it in an empty folder, and double-click it. The web console opens at
 install it (allow "install unknown apps" if asked). First launch offers to import a
 `gateway.json` exported from your desktop, or you can skip and start with an empty
 config and add keys in the console. The app runs the gateway as a foreground service
-(notification + 10s health watchdog) and shows the same web console full-screen;
+(notification + 10s health watchdog) and shows the same web console full-screen.
 `gateway.json` from a file manager can be imported via "Open with → Sakura LLM Gateway"
 (hot-reloads if the gateway is running).
 
@@ -164,8 +97,6 @@ daily with `llm-gateway/start.bat`.
 ./install.sh   # checks/installs Rust, builds release, creates default gateway.json
 ./start.sh     # builds if needed, then starts the gateway
 ```
-
-The install script installs rustup at user level (no admin needed) if cargo is missing.
 
 ### Option 3: Build from source
 
@@ -188,16 +119,17 @@ cargo build --release
 Ports (API `8000`, UI `8001`) are set in the config file or editable in the UI
 (port changes take effect on restart).
 
-## 📖 Usage guide
+## Usage guide
 
 ### Configure providers and keys
 
 1. Open the web console `http://127.0.0.1:8001/`
-2. Go to the **Config** tab and add a provider (name + OpenAI-compatible `base_url`)
-3. Add one or more API keys to the provider's key pool
+2. Go to the **Providers** tab and add a provider (name + OpenAI-compatible `base_url`)
+3. Add one or more API keys to the provider's key pool (paste multiple keys, one per line, for batch import)
 4. (Optional) Import the provider's model catalog from its `/v1/models` with one click,
-   enable/disable individual models, and turn on allowlist mode
+   enable/disable individual models, toggle `supports_images` for vision models, and turn on allowlist mode
 5. (Optional) Set up aliases, e.g. `fast` → `gpt-4o-mini`
+6. (Optional) Set per-model context length, input price, and output price in the model edit form
 
 ### Use the gateway API
 
@@ -220,19 +152,20 @@ client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="anything")
 
 ### Monitor traffic
 
-Open the **Status** tab to see total requests, a 24h hourly histogram, and per-key /
-per-provider / per-model success and failure counters. Stats persist into
-`gateway.json` (merged under the `stats` field, no separate `stats.json`) and
-survive restarts.
+Open the **Stats** tab to see total requests, a 24h hourly histogram, and per-key /
+per-provider / per-model success and failure counters. The API Key page shows
+per-key RPM, TPM, avg_TFTT, request counts (persisted), and live cooldown status.
+Stats persist into `gateway.json` (merged under the `stats` field) and survive restarts.
 
 ### Back up or migrate your config
 
 - **Export**: click *Export config* in the console (or `GET /api/config/export`) to
   download `gateway.json` as a file
 - **Import**: click *Import config* (or `POST /api/config/import`) and choose a file —
-  invalid files are rejected wholesale; valid files hot-swap instantly, no restart
+  invalid files are rejected wholesale; valid files hot-swap instantly (stats are
+  adopted, not discarded), no restart needed
 
-## ⚙️ Config format
+## Config format
 
 ```json
 {
@@ -263,9 +196,11 @@ survive restarts.
           "seed_avg_tftt_ms": null, "seed_tps": null }
       ],
       "models": [
-        { "id": "gpt-4o", "enabled": true }
+        { "id": "gpt-4o", "enabled": true, "context_length": 128000, "supports_images": true }
       ],
-      "aliases": { "fast": "gpt-4o-mini" }
+      "aliases": { "fast": "gpt-4o-mini" },
+      "price_table": { "gpt-4o": 2.5 },
+      "output_price_table": { "gpt-4o": 10.0 }
     }
   ],
   "stats": {
@@ -285,69 +220,51 @@ survive restarts.
 }
 ```
 
-Notes:
+Key fields:
 
-- `cooldown_secs: null` on a key = use global default
-- `learned_cooldown` is machine-written by the binary-search prober (bracket
-  midpoint, ±1s accuracy) and beats `cooldown_secs`
-- `strategy.filter` both ON (default) = exact `(provider, model)`, only rotate
-  keys; `strategy.sort` is 0–3 of A–J (ordered, no dups) — the user sort stack
-- `model_groups` declares the same logical model across providers (entries are
-  `[provider_id, upstream_model]`) for cross-provider fallback; each model
-  belongs to exactly one group
-- `rpm_limit` / `tpm_limit` on a provider = manual RPM/TPM cap (`null` = no cap;
-  the console then shows the auto-detected aggregate of the provider's keys'
-  measured rpm/tpm/success_rate/avg_tftt/tps, also persisted under
-  `stats.provider_metrics` so it survives a restart — the UI shows the last-known
-  value until new traffic overrides it)
-- `seed_*` on a key = preset initial metrics, auto-overridden once the key serves
-  real traffic (all optional; omitted = built-in defaults, so old configs load
-  unchanged)
-- `models` empty = unmanaged (all models pass through, backward compatible)
-- `stats` = request statistics (totals, 24h histogram, per key/provider/model
-  counters + rotations + `provider_metrics` + `model_metrics`), merged into
-  `gateway.json` (no longer a separate `stats.json`). A pre-merge `stats.json` next
-  to `gateway.json` is auto-migrated into the `stats` field on startup, then removed.
-  Omit on a hand-written config = empty stats (old configs load unchanged)
-- `stats.model_metrics` = per-model detected avgTPS (generation speed, tokens/sec)
-  + avgTFTT (first-token latency, ms), streaming-only, sampled on each flush; the
-  model card shows the persisted value after a restart until the model serves new
-  streaming traffic. The model card hover shows these (not the per-key RPM/TPM, which
-  live on the API Key page)
-- the file is rewritten (atomically) on every config change + on the 5s stats flush
+- `cooldown_secs: null` on a key = use global default; `learned_cooldown` is machine-written by the binary-search prober and beats `cooldown_secs`
+- `strategy.filter` both ON (default) = exact `(provider, model)`, only rotate keys
+- `model_groups` declares the same logical model across providers for cross-provider fallback
+- `rpm_limit` / `tpm_limit` = manual cap (`null` = auto, shows live aggregate)
+- `price_table` / `output_price_table` = per-model input/output price (CNY / 1M tokens, `0` = free)
+- `supports_images` on a model = declares image input capability in `/v1/models`
+- `context_length` on a model = max context window in tokens (shown on model card as "Nk")
+- `seed_*` on a key = preset initial metrics, auto-overridden once the key serves real traffic
+- `stats` = request statistics, merged into `gateway.json` (no separate `stats.json`); a pre-merge `stats.json` is auto-migrated on startup then removed. Importing a `gateway.json` with `stats` adopts those stats.
 
-## 📡 API overview
+## API overview
 
 ### Gateway API (OpenAI + Anthropic compatible)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/v1/chat/completions` | POST | Chat completions (streaming + non-streaming) |
+| `/v1/chat/completions` | POST | Chat completions (streaming + non-streaming, images) |
 | `/v1/messages` | POST | Anthropic Messages (streaming + non-streaming, tools / images) |
-| `/v1/messages/count_tokens` | POST | Token counting (proxied for Anthropic upstreams, local estimate for OpenAI ones) |
-| `/v1/models` | GET | Aggregated model list |
+| `/v1/messages/count_tokens` | POST | Token counting (proxied for Anthropic upstreams, local estimate for OpenAI) |
+| `/v1/models` | GET | Aggregated model list (includes `supports_images` per model) |
 
 ### Console API
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/status` | GET | Live config + key-pool state |
+| `/api/status` | GET | Live config + key-pool state + version |
 | `/api/stats` | GET | Request statistics (totals, 24h histogram, per key/provider/model) |
-| `/api/config/export` | GET | Download `gateway.json` |
-| `/api/config/import` | POST | Validate-then-swap config hot reload |
+| `/api/config/export` | GET | Download `gateway.json` (config + stats) |
+| `/api/config/import` | POST | Validate-then-swap config + stats hot reload |
 | `/api/providers` | GET / POST | List / create providers |
 | `/api/providers/{id}` | PUT / DELETE | Update / delete provider |
-| `/api/providers/{id}/rate-limits` | PUT | Set provider RPM/TPM limits (`{rpm_limit, tpm_limit}`, null = clear) |
+| `/api/providers/{id}/rate-limits` | PUT | Set provider RPM/TPM limits |
+| `/api/providers/{id}/price-table` | PUT | Set per-model input + output prices (`{table, output_table}`) |
 | `/api/providers/{id}/keys` | POST | Add key |
 | `/api/providers/{id}/keys/{key_id}` | DELETE / PUT | Delete key / update metric seeds |
-| `/api/strategy/dry-run` | POST | Preview routing for a model (routed key + candidates) |
-| `/api/keys/{key_id}/cooldown` | DELETE | Clear key cooldown |
 | `/api/providers/{id}/models` | POST | Add managed model |
-| `/api/providers/{id}/models/import` | POST | Import models from upstream `/v1/models` |
-| `/api/providers/{id}/aliases` | POST | Set alias |
+| `/api/providers/{id}/models/{model_id}/context-length` | PUT | Set model context length |
+| `/api/providers/{id}/models/{model_id}/supports-images` | PUT | Toggle image input support |
+| `/api/keys/{key_id}/cooldown` | DELETE | Clear key cooldown |
+| `/api/strategy/dry-run` | POST | Preview routing for a model |
 | `/api/settings` | PUT | Update global settings |
 
-## 🧪 Testing
+## Testing
 
 A mock OpenAI-compatible upstream is included:
 
@@ -360,7 +277,7 @@ curl http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/jso
   -d '{"model":"mock/mock-large","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-## 🏗️ Project layout
+## Project layout
 
 ```
 llm-gateway/
@@ -371,9 +288,10 @@ llm-gateway/
 │   ├── proxy.rs   /v1 proxy: model resolution, key rotation, probing, streaming
 │   ├── stats.rs   request statistics (counters + 24h histogram, persisted)
 │   ├── admin.rs   REST API behind the web console
-│   └── ui.rs      embedded web console (static/index.html)
+│   ├── ui.rs      embedded web console (static/index.html)
+│   └── build.rs   embeds git tag as GATEWAY_VERSION at compile time
 ├── static/
-│   └── index.html single-file console UI (Status + Config tabs)
+│   └── index.html single-file console UI
 ├── test/
 │   └── gateway.json   mock-upstream test config (gitignored; create your own)
 ├── install.bat / start.bat   Windows one-click scripts
@@ -390,18 +308,18 @@ a 10-second HTTP watchdog (probes `/api/status`; restarts on death or hang).
 The UI is the embedded console in a fullscreen WebView; config export goes through
 the system save dialog, and `gateway.json` imports hot-reload a running gateway.
 
-## 🛠️ Tech stack
+## Tech stack
 
-- **Rust** (edition 2021) - the entire backend, single static binary
-- **axum + tokio + hyper** - async HTTP serving and proxying
-- **reqwest (rustls)** - upstream HTTPS client, no OpenSSL dependency
-- **rust-embed** - console UI embedded into the binary at compile time
-- **serde / serde_json** - config, stats and API serialization
+- **Rust** (edition 2021) — the entire backend, single static binary
+- **axum + tokio + hyper** — async HTTP serving and proxying
+- **reqwest (rustls)** — upstream HTTPS client, no OpenSSL dependency
+- **rust-embed** — console UI embedded into the binary at compile time
+- **serde / serde_json** — config, stats, and API serialization
 
-## 🤝 Contributing
+## Contributing
 
 Issues and pull requests are welcome!
 
-## 📄 License
+## License
 
 [GPL-3.0](LICENSE)
