@@ -427,6 +427,44 @@ impl App {
         stats.model_metrics.get(model).cloned().unwrap_or_default()
     }
 
+    /// Per-key detected metrics: live pool values when the key has served traffic
+    /// since startup, else the persisted `stats.key_metrics` value (so the API Key
+    /// page shows the last-known RPM/TPM/success_rate/avg_tftt/tps after a restart).
+    /// Returns a KeyMetricsSnapshot (includes token_balance/bill_balance from live).
+    pub fn detected_key_metrics_for(&self, key_id: &str) -> KeyMetricsSnapshot {
+        {
+            let pool = self.pool.lock().unwrap();
+            if let Some(lm) = key_live_metrics_from_pool(&pool, key_id) {
+                let bill_balance = pool.metrics.get(key_id).and_then(|m| m.bill_balance);
+                return KeyMetricsSnapshot {
+                    success_rate: lm.success_rate,
+                    rpm: lm.rpm,
+                    tpm: lm.tpm,
+                    avg_tftt_ms: lm.avg_tftt_ms,
+                    tps: lm.tps,
+                    token_balance: None,
+                    bill_balance,
+                };
+            }
+        }
+        let stats = self.stats.lock().unwrap();
+        if let Some(pm) = stats.key_metrics.get(key_id) {
+            return KeyMetricsSnapshot {
+                success_rate: pm.success_rate,
+                rpm: pm.rpm,
+                tpm: pm.tpm,
+                avg_tftt_ms: pm.avg_tftt_ms,
+                tps: pm.tps,
+                token_balance: None,
+                bill_balance: None,
+            };
+        }
+        KeyMetricsSnapshot {
+            success_rate: 1.0,
+            ..Default::default()
+        }
+    }
+
     /// Serialize the merged gateway.json content: config fields + a `stats` field
     /// (with provider_metrics refreshed from live traffic for providers that have
     /// served since startup). Used by save_all (write) + admin export_config
@@ -448,6 +486,11 @@ impl App {
                         stats.model_metrics.insert(mo.id.clone(), lm);
                     }
                 }
+                for k in &p.keys {
+                    if let Some(lm) = key_live_metrics_from_pool(&pool, &k.id) {
+                        stats.key_metrics.insert(k.id.clone(), lm);
+                    }
+                }
             }
         }
         stats.prune(now_ms());
@@ -462,6 +505,7 @@ impl App {
             let mut live = self.stats.lock().unwrap();
             live.provider_metrics = stats.provider_metrics.clone();
             live.model_metrics = stats.model_metrics.clone();
+            live.key_metrics = stats.key_metrics.clone();
         }
         serde_json::to_string_pretty(&val).unwrap_or_default()
     }
@@ -964,6 +1008,49 @@ fn provider_live_metrics_from_pool(
     Some(crate::stats::ProviderMetrics {
         rpm: rpm as u32,
         tpm: tpm as u32,
+        success_rate,
+        avg_tftt_ms,
+        tps,
+    })
+}
+
+/// Per-key live metrics from the pool. Returns None when the key has no live
+/// traffic since startup (all rolling windows empty) — the caller falls back
+/// to the persisted `stats.key_metrics` so the API Key page shows the last-known
+/// value after a restart.
+fn key_live_metrics_from_pool(
+    pool: &PoolRuntime,
+    key_id: &str,
+) -> Option<crate::stats::KeyMetricsPersisted> {
+    let m = pool.metrics.get(key_id)?;
+    if m.req_times.is_empty()
+        && m.token_events.is_empty()
+        && m.tftt_samples.is_empty()
+        && m.tps_samples.is_empty()
+    {
+        return None;
+    }
+    let total = m.success.len();
+    let success_rate = if total == 0 {
+        1.0
+    } else {
+        let ok = m.success.iter().filter(|e| e.1).count() as f64;
+        ok / total as f64
+    };
+    let tpm = m.token_events.iter().map(|(_, n)| *n).sum::<u64>() as u32;
+    let avg_tftt_ms = if m.tftt_samples.is_empty() {
+        0
+    } else {
+        (m.tftt_samples.iter().map(|&v| v as u64).sum::<u64>() / m.tftt_samples.len() as u64) as u32
+    };
+    let tps = if m.tps_samples.is_empty() {
+        0.0
+    } else {
+        m.tps_samples.iter().map(|&v| v).sum::<f32>() / m.tps_samples.len() as f32
+    };
+    Some(crate::stats::KeyMetricsPersisted {
+        rpm: m.req_times.len() as u32,
+        tpm,
         success_rate,
         avg_tftt_ms,
         tps,

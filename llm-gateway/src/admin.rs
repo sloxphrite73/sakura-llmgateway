@@ -887,7 +887,7 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                     // selector's fill_rows uses, exposed so the UI can show the
                     // success_rate / rpm / tpm / tftt / tps / token+bill balance
                     // columns the prototype had. None balances = +∞ (shown as 不限).
-                    let m = app.metrics_of(&p.id, &k.id);
+                    let m = app.detected_key_metrics_for(&k.id);
                     serde_json::json!({
                         "id": k.id,
                         "key": mask(&k.key),

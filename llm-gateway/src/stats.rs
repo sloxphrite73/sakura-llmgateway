@@ -50,6 +50,20 @@ pub struct ModelMetrics {
     pub avg_tftt_ms: u32,  // time-to-first-token (ms)
 }
 
+/// Auto-detected per-key live metrics (key id -> metrics), sampled on each flush
+/// from the pool's per-key rolling windows. Survives restart so the API Key page
+/// shows the last-known RPM/TPM/success_rate/avg_tftt/tps until new traffic
+/// overrides. Only keys with live traffic are refreshed on a flush; others keep
+/// their last-persisted entry. See state.rs `detected_key_metrics_for`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct KeyMetricsPersisted {
+    pub rpm: u32,
+    pub tpm: u32,
+    pub success_rate: f64, // [0,1]; 1.0 when no history
+    pub avg_tftt_ms: u32,
+    pub tps: f32,
+}
+
 /// Request statistics. Persisted into gateway.json (under the `stats` field, merged
 /// with the config) on a debounce timer so the counters and the 24h histogram
 /// survive gateway restarts.
@@ -84,6 +98,12 @@ pub struct Stats {
     /// their last-persisted entry. See state.rs `detected_model_metrics_for`.
     #[serde(default)]
     pub model_metrics: BTreeMap<String, ModelMetrics>,
+    /// Per-key detected metrics (key id -> metrics), sampled on each flush from
+    /// the pool's per-key rolling windows. Survives restart so the API Key page
+    /// shows the last-known RPM/TPM/success_rate/avg_tftt/tps. See state.rs
+    /// `detected_key_metrics_for`.
+    #[serde(default)]
+    pub key_metrics: BTreeMap<String, KeyMetricsPersisted>,
 }
 
 const HOUR_MS: u64 = 3_600_000;
