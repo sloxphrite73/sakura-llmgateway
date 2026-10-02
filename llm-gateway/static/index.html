@@ -993,8 +993,8 @@ function renderApiKeys(m){
         <td data-label="RPM" class="num">${k.rpm||0}</td>
         <td data-label="TPM" class="num">${k.tpm||0}</td>
         <td data-label="${t('avg_TFTT')}" class="num">${k.tftt?k.tftt+'ms':'-'}</td>
-        <td data-label="${t('token 余额')}" class="num">${k.tb===Infinity?`<span class="faint">${t('不限')}</span>`:k.tb.toLocaleString()}</td>
-        <td data-label="${t('账单')}" class="num">${k.bb===Infinity?`<span class="faint">${t('不限')}</span>`:'¥'+k.bb}</td>
+        <td data-label="${t('token 余额')}" class="num">${k.tb===Infinity?'—':k.tb.toLocaleString()}</td>
+        <td data-label="${t('账单')}" class="num">${k.bb===Infinity?'—':'¥'+k.bb}</td>
         <td data-label="${t('请求数')}" class="num">${k.req||0}</td>
         <td data-label="${t('最近错误')}" class="faint"><span class="ak-err" title="${esc(k.lastErr||'-')}">${esc(k.lastErr||'-')}</span></td>
         <td data-label="${t('操作')}" class="ak-actions">
@@ -1071,8 +1071,8 @@ function updateAkCells(){
     if (c[4]) c[4].textContent = String(k.rpm||0);
     if (c[5]) c[5].textContent = String(k.tpm||0);
     if (c[6]) c[6].textContent = k.tftt ? (k.tftt+'ms') : '-';
-    if (c[7]) c[7].innerHTML = k.tb===Infinity ? `<span class="faint">${t('不限')}</span>` : k.tb.toLocaleString();
-    if (c[8]) c[8].innerHTML = k.bb===Infinity ? `<span class="faint">${t('不限')}</span>` : '¥'+k.bb;
+    if (c[7]) c[7].innerHTML = k.tb===Infinity ? '—' : k.tb.toLocaleString();
+    if (c[8]) c[8].innerHTML = k.bb===Infinity ? '—' : '¥'+k.bb;
     if (c[9]) c[9].textContent = String(k.req||0);
     if (c[10]) c[10].innerHTML = `<span class="ak-err" title="${esc(k.lastErr||'-')}">${esc(k.lastErr||'-')}</span>`;
   });

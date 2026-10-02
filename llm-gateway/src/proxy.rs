@@ -628,6 +628,20 @@ fn finish_generic(
                     let ok = parsed.as_ref().map(|v| v.get("error").is_none()).unwrap_or(true);
                     app.record_stat(ok, Some(&key_id), &provider_id, &client_model);
                     if !ok {
+                        // Some providers return HTTP 200 with an auth-failure error body
+                        // instead of a proper 401 status. Detect and quarantine the key.
+                        let err_text = parsed.as_ref().ok().and_then(|v| {
+                            let e = v.get("error")?;
+                            Some(serde_json::to_string(e).unwrap_or_default().to_lowercase())
+                        }).unwrap_or_default();
+                        if err_text.contains("invalid_api_key") || err_text.contains("invalid api key")
+                            || err_text.contains("authentication") || err_text.contains("unauthorized")
+                            || err_text.contains("\"401\"") || err_text.contains("api key not")
+                            || err_text.contains("permission_denied")
+                        {
+                            app.mark_invalid(&provider_id, &key_id, 30 * 60,
+                                &format!("upstream 200 with auth error: {}", err_text.chars().take(200).collect::<String>()));
+                        }
                         return error_response_for(
                             StatusCode::BAD_GATEWAY,
                             "upstream returned an error body".into(),

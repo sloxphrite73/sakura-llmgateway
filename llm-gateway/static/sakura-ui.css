@@ -130,7 +130,7 @@ a { color: var(--color-text-link); text-decoration: none; } a:hover { color: var
 
 /* ===== tables ===== */
 table { width: 100%; border-collapse: collapse; }
-td, th { padding: 0.75rem 1rem; border-bottom: 1px solid var(--color-border-default); text-align: left; vertical-align: middle; }
+td, th { padding: 0.75rem 1rem; border-bottom: 1px solid var(--color-border-default); text-align: left; vertical-align: middle; white-space: nowrap; }
 tr:last-child td { border-bottom: none; }
 th { color: var(--color-text-tertiary); font-weight: 600; font-size: 0.75rem; border-bottom: 1px solid var(--color-border-strong); text-transform: none; letter-spacing: 0.02em; }
 td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
