@@ -1057,8 +1057,13 @@ async function refreshAkStatus(){
   if (S.tab !== 'apikeys' || document.hidden) return;
   try {
     STATUS = await api('GET', '/api/status');
+    const oldCount = KEYS.length;
     adaptAll();
-    updateAkCells();
+    if (KEYS.length !== oldCount) {
+      renderMain(); // key count changed (added/deleted/empty→populated) — re-render
+    } else {
+      updateAkCells(); // same count — patch cells without disrupting user interactions
+    }
   } catch(e){ /* transient; next tick retries */ }
 }
 function updateAkCells(){
