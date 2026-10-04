@@ -1028,11 +1028,13 @@ fn key_live_metrics_from_pool(
     key_id: &str,
 ) -> Option<crate::stats::KeyMetricsPersisted> {
     let m = pool.metrics.get(key_id)?;
-    if m.req_times.is_empty()
-        && m.token_events.is_empty()
-        && m.tftt_samples.is_empty()
-        && m.tps_samples.is_empty()
-    {
+    // Only return live metrics when the key has RECENT traffic (RPM or TPM window
+    // non-empty). The 60s rolling windows expire when the key hasn't been used
+    // recently — at that point we must NOT return Some with RPM=0/TPM=0, because
+    // that would overwrite the persisted last-known value with zeros on the next
+    // flush. Fall back to persisted instead (avg_TFTT/TPS samples are not
+    // time-pruned, but they're meaningless without recent traffic context).
+    if m.req_times.is_empty() && m.token_events.is_empty() {
         return None;
     }
     let total = m.success.len();
