@@ -264,7 +264,7 @@ function renderBottomNav(){
       <span class="bn-label">${t(tb.label)}</span>
     </button>`).join('');
 }
-function setTab(id){ S.tab=id; if(id!=='models') S.editingModel=null; renderSidebar(); renderMain(); }
+function setTab(id){ S.tab=id; if(id!=='models') S.editingModel=null; renderSidebar(); renderMain(); if(id==='apikeys') refreshAkStatus(); }
 function setLocalProv(id){ S.localProv=id; S.addState=null; renderMain(); }
 
 /* ============ render: main dispatcher ============ */
@@ -965,10 +965,11 @@ function renderApiKeys(m){
   const list = KEYS.filter(k => f==='all' || (f==='ok'&&k.valid&&!k.cool) || (f==='cool'&&k.cool) || (f==='off'&&!k.valid));
   const invCount = KEYS.filter(k=>!k.valid).length;
   m.innerHTML = `
+    <div class="ak-layout">
     <h2 class="board-title">${t('API Key')}</h2>
     <div class="board-note">${t('全局状态总览 · 跨所有提供商一张表')}${S.recycled?` · ${t('已回收 {n} 把').replace('{n}',S.recycled)}`:''}</div>
     ${S.akEdit ? renderAkSeedCard(S.akEdit) : ''}
-    <div class="card card-pad" style="margin-bottom:1.25rem">
+    <div class="card card-pad" style="margin-bottom:1.25rem;flex:none">
       <div class="ak-add">
         <select id="ak-prov" aria-label="${t('提供商')}">${PROVIDERS.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
         <span class="ak-input-wrap">
@@ -979,10 +980,10 @@ function renderApiKeys(m){
       </div>
       <div class="ak-recycle" style="margin-top:0.875rem"><button class="small" type="button" onclick="akRecycle()" ${invCount?'':'disabled'}>${t('移动所有无效Key至回收站')}</button></div>
     </div>
-    <div class="chips" style="margin-bottom:0.875rem">
+    <div class="chips" style="margin-bottom:0.875rem;flex:none">
       ${chips.map(c=>`<span class="chip ${f===c[0]?'active':''}" onclick="S.keyFilter='${c[0]}';renderMain()">${c[1]}</span>`).join('')}
     </div>
-    <div class="card"><div class="tbl-scroll"><table>
+    <div class="card ak-table-card"><div class="tbl-scroll"><table>
       <tr><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('智能冷却时长')}</th><th>${t('状态')}</th><th>RPM</th><th>TPM</th><th>${t('avg_TFTT')}</th><th>${t('token 余额')}</th><th>${t('账单')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
       ${list.map(k=>`
       <tr>
@@ -1004,7 +1005,8 @@ function renderApiKeys(m){
           <button class="small" type="button" onclick="akDel('${esc(k.kid)}')" style="border-color:var(--color-feedback-error-text);color:var(--color-feedback-error-text)">${t('删除')}</button>
         </td>
       </tr>`).join('') || `<tr><td colspan="12" class="faint">${t('无')}</td></tr>`}
-    </table></div></div>`;
+    </table></div></div>
+    </div>`;
 }
 
 /* ---------- api key metric seed editor (spec §2.2 手动 seed) ---------- */
