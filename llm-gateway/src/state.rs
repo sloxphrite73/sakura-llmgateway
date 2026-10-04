@@ -254,11 +254,11 @@ impl App {
         // standalone stats.json. The flag lets save_all delete stats.json after the
         // first successful merged write (so the stats land in gateway.json first).
         let (mut stats, migrated) = load_stats_merged(&config_path, &stats_path);
-        // The 24h hourly histogram is a sliding window, not cumulative. On restart,
-        // stale buckets from the previous session would linger until they age out
-        // (up to 24h). Clear them so the histogram starts fresh — "a new day".
-        // Total/per-key/per-provider/per-model counters are cumulative and stay.
-        stats.hourly.clear();
+        // Prune the 24h hourly histogram on startup: buckets older than 24h
+        // (from a previous session that was down for >24h) are removed, but
+        // recent buckets (e.g. 2pm data when restarting at 9pm) are kept —
+        // the sliding window continues across restarts.
+        stats.prune(now_ms());
         Self {
             config: std::sync::RwLock::new(config),
             pool: Mutex::new(PoolRuntime::default()),
