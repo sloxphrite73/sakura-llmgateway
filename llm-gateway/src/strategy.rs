@@ -60,6 +60,16 @@ pub struct Row {
     pub price: f64,
     /// Post-D1-rotation position; the table-order tiebreaker (impl-spec §4.1).
     pub idx: usize,
+    // --- availability (sort key K) ---
+    /// The key's RPM capacity estimate, resolved in `build_candidates`:
+    /// the key's `seed_rpm` when set, else the provider's `rpm_limit` divided
+    /// evenly across its keys, else None (unknown → headroom stays neutral).
+    pub capacity_rpm: Option<u32>,
+    /// Composite availability score for sort key K (filled by
+    /// `state.rs::fill_rows`): smoothed success_rate × capacity headroom.
+    /// 1.0 when nothing is known (new key / no capacity data) — neutral, so K
+    /// degenerates to the D1 round-robin tiebreak instead of guessing.
+    pub availability: f64,
 }
 
 /// A request's candidate set, built once from config (impl-spec §5: built
@@ -255,6 +265,12 @@ pub fn build_candidates(cfg: &Config, client_model: &str) -> Result<CandidateSet
             None => continue, // provider vanished from config since route resolved
         };
         let price = provider.price_table.get(price_key).copied().unwrap_or(0.0);
+        // K's capacity estimate: the key's own seed_rpm wins (per-key truth);
+        // else split the provider's rpm_limit evenly across its keys (coarse
+        // approximation — documented); else unknown (None → neutral headroom).
+        let shared_capacity = provider
+            .rpm_limit
+            .map(|l| l / (provider.keys.len() as u32).max(1));
         for k in &provider.keys {
             rows.push(Row {
                 provider_id: pid.clone(),
@@ -278,6 +294,8 @@ pub fn build_candidates(cfg: &Config, client_model: &str) -> Result<CandidateSet
                 bill_balance: None,
                 price,
                 idx: 0,
+                capacity_rpm: k.seed_rpm.or(shared_capacity),
+                availability: 1.0,
             });
         }
     }
@@ -362,6 +380,10 @@ impl SortKey {
             SortKey::I => cmp_f64(a.price, b.price),
             // J tps desc — fastest generation first.
             SortKey::J => cmp_f64(b.tps as f64, a.tps as f64),
+            // K availability desc — highest composite availability
+            // (smoothed success_rate × capacity headroom) first: the key most
+            // likely to serve this request on the first attempt.
+            SortKey::K => cmp_f64(b.availability, a.availability),
         }
     }
 }
@@ -511,6 +533,8 @@ mod tests {
             bill_balance: None,
             price: 0.0,
             idx,
+            capacity_rpm: None,
+            availability: 1.0,
         }
     }
 
@@ -648,6 +672,43 @@ mod tests {
         let (res, _c) = select_pure(&mut rows, &[SortKey::I], 0);
         let routed = match res { SelectResult::Routed(r) => r, other => panic!("{other:?}") };
         assert_eq!(routed.api_key_id, "b", "valid leading key outranks cheaper-but-dead");
+    }
+
+    // --- sort key K (composite availability) ---
+
+    #[test]
+    fn sort_k_prefers_higher_availability() {
+        // Two healthy keys: b has the higher availability score → K picks b.
+        let mut rows = vec![
+            { let mut r = row("a", true, true, 0, 0); r.availability = 0.6; r },
+            { let mut r = row("b", true, true, 0, 1); r.availability = 0.95; r },
+        ];
+        let (res, _c) = select_pure(&mut rows, &[SortKey::K], 0);
+        let routed = match res { SelectResult::Routed(r) => r, other => panic!("{other:?}") };
+        assert_eq!(routed.api_key_id, "b", "K desc → highest availability first");
+    }
+
+    #[test]
+    fn sort_k_equal_scores_fall_back_to_round_robin() {
+        // All availability equal (the no-data neutral case: every row 1.0) →
+        // K is a no-op and the D1 cursor rotation decides (north-compat).
+        let mut rows = vec![row("a", true, true, 0, 0), row("b", true, true, 0, 1)];
+        let (res, c) = select_pure(&mut rows, &[SortKey::K], 0);
+        let routed = match res { SelectResult::Routed(r) => r, other => panic!("{other:?}") };
+        assert_eq!(routed.api_key_id, "a", "equal scores → cursor row");
+        assert_eq!(c, 1, "cursor advances one");
+    }
+
+    #[test]
+    fn sort_k_never_beats_valid_leading() {
+        // a has a perfect availability score but is invalid → b must win.
+        let mut rows = vec![
+            { let mut r = row("a", false, false, 0, 0); r.availability = 1.0; r },
+            { let mut r = row("b", true, true, 0, 1); r.availability = 0.1; r },
+        ];
+        let (res, _c) = select_pure(&mut rows, &[SortKey::K], 0);
+        let routed = match res { SelectResult::Routed(r) => r, other => panic!("{other:?}") };
+        assert_eq!(routed.api_key_id, "b", "valid leading key outranks availability");
     }
 
     // --- build_candidates: the four filter modes (spec §4) ---
@@ -860,5 +921,29 @@ mod tests {
         assert!((r.success_rate - 1.0).abs() < 1e-9);
         assert_eq!(r.avg_tftt_ms, 0);
         assert!((r.tps - 0.0).abs() < 1e-3);
+    }
+
+    // --- K capacity resolution (build_candidates) ---
+
+    #[test]
+    fn capacity_prefers_key_seed_rpm() {
+        // seed_rpm is the per-key truth; it wins over the provider's shared limit.
+        let mut cfg = cfg_two_providers();
+        let pa = cfg.providers.iter_mut().find(|p| p.id == "pa").unwrap();
+        pa.rpm_limit = Some(100);
+        pa.keys[0].seed_rpm = Some(7);
+        let set = build_candidates(&cfg, "pa/gpt-4o").unwrap();
+        let a1 = set.rows.iter().find(|r| r.api_key_id == "a1").unwrap();
+        let a2 = set.rows.iter().find(|r| r.api_key_id == "a2").unwrap();
+        assert_eq!(a1.capacity_rpm, Some(7), "seed_rpm wins");
+        assert_eq!(a2.capacity_rpm, Some(50), "rpm_limit 100 / 2 keys = 50");
+    }
+
+    #[test]
+    fn capacity_unknown_without_seed_or_limit() {
+        // No seed_rpm and no provider rpm_limit → None (neutral headroom).
+        let cfg = cfg_two_providers();
+        let set = build_candidates(&cfg, "pa/gpt-4o").unwrap();
+        assert!(set.rows.iter().all(|r| r.capacity_rpm.is_none()));
     }
 }

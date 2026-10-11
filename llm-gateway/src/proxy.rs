@@ -487,29 +487,39 @@ where
             app.record_key_stat(false, &row.api_key_id);
             app.record_rotation(&row.provider_id);
             if code == 429 {
-                // Rate limited: honor Retry-After (or the learned/global default), and
-                // back off briefly before hammering the next key — TPM limits are
-                // per-minute, so an instant retry with the same large payload burns the
-                // next key too. A background prober then measures the key's real window.
-                app.mark_cooldown(&row.provider_id, &row.api_key_id, retry_after, &reason);
-                // Probe with the first enabled managed model (real upstreams reject
-                // unknown models with 400, which made the old "probe" model unlearnable).
-                let probe_model = provider
-                    .models
-                    .iter()
-                    .find(|m| m.enabled)
-                    .map(|m| m.id.clone())
-                    .unwrap_or_else(|| "probe".to_string());
+                // Quota-exhausted (not a rate window): the key is dead until the
+                // user tops up / the plan resets — quarantine it like an auth
+                // failure instead of cooling it for a minute and retrying forever.
+                let lower = snippet.to_lowercase();
+                let quota_dead = ["entitlement exhausted", "quota exhausted", "insufficient_quota",
+                    "exceeded your current quota", "insufficient balance", "余额不足"]
+                    .iter().any(|m| lower.contains(m));
+                if quota_dead {
+                    app.mark_invalid(&row.provider_id, &row.api_key_id, 30 * 60, &reason);
+                    continue;
+                }
+                // Rate limited: v0.7.9 cooldown chain (Retry-After → learned →
+                // per-key → default). A background prober then measures the key's
+                // real window.
+                app.mark_rate_limited(&row.provider_id, &row.api_key_id, retry_after, &reason);
+                // B-5: probe with the model that actually got 429'd — many
+                // upstreams rate-limit per-model, so probing a different (first
+                // enabled) model would measure the wrong window.
                 spawn_prober(
                     app.clone(),
                     row.provider_id,
                     row.api_key_id,
                     row.key_secret,
                     url.clone(),
-                    probe_body_for(upstream_proto, &probe_model),
+                    probe_body_for(upstream_proto, &row.upstream_model),
                     upstream_proto,
                 );
-                tokio::time::sleep(Duration::from_millis(1500)).await;
+                // Short politeness gap before trying the next key. The old 1500ms
+                // backoff dated from the single-provider era (guard against shared
+                // account-level TPM cascades); observed pools are per-key limited,
+                // where the next key has independent quota and the long sleep was
+                // pure client-visible latency (~2s per rotation).
+                tokio::time::sleep(Duration::from_millis(250)).await;
             } else if code == 401 || code == 403 {
                 // Auth failure = the key itself is dead (invalid/revoked/out of quota
                 // tier). A 5s cooldown just lets round-robin feed it again forever;
@@ -1041,7 +1051,17 @@ fn find_event_end(buf: &[u8]) -> Option<usize> {
 /// binary search. Start from T (the key's learned_cooldown if one exists, else the
 /// global default): probe at T — success means the window is shorter (explore [T/2, T]),
 /// 429 means it is longer (explore [T, 2T]). Then bisect the bracket for a few rounds
-/// and store the midpoint as the key's `learned_cooldown` (debounced config write).
+/// and store the result as the key's `learned_cooldown` (debounced config write).
+///
+/// Timing model (B-1): all probe offsets are relative to `t0` = the 429 trigger time —
+/// each round sleeps until `t0 + offset`, so wall-clock drift across rounds can't
+/// corrupt the measurement. Result (B-2): write `high + 1s` (the shortest offset
+/// proven to succeed), not the midpoint — underestimating loops the key back into
+/// 429s while the re-learn guard blocks recalibration. Overflow guard (B-3): if the
+/// first probe at PROBE_MAX_SECS still 429s, the window is beyond what probing can
+/// measure — write nothing (the key falls back to the Retry-After/default chain).
+/// Negative cache (B-4): failed/aborted measurements also stamp `learned_at`, so a
+/// permanently-failing key doesn't spawn a prober on every 429.
 ///
 /// Bounded: bisection rounds and probe count are capped so a dead/limited key doesn't
 /// burn quota forever; only one prober per key runs at a time (`claim_probe`).
@@ -1070,7 +1090,7 @@ fn spawn_prober(
         return; // a prober is already measuring this key
     }
     tokio::spawn(async move {
-        // Skip re-learning when a fresh measurement already exists.
+        // Skip re-learning when a fresh measurement (or recent failed attempt) exists.
         if app.learned_cooldown_age_secs(&provider_id, &key_id)
             .map(|age| age < RELEARN_AFTER_SECS)
             .unwrap_or(false)
@@ -1085,16 +1105,20 @@ fn spawn_prober(
             .unwrap_or_else(|| app.default_cooldown_secs())
             .clamp(PROBE_MIN_SECS, PROBE_MAX_SECS);
 
+        // B-1: anchor every probe offset to the 429 trigger moment.
+        let t0 = std::time::Instant::now();
         let mut probes_used = 0u32;
 
-        // One probe after waiting `secs`. Ok(true)=success, Ok(false)=still 429,
-        // Err=unlearnable (401/403/4xx/network) — abort without writing a value.
+        // One probe at `offset` seconds after t0. Ok(true)=success, Ok(false)=still
+        // 429, Err=unlearnable (401/403/4xx/network) — abort without writing a value.
+        #[allow(clippy::too_many_arguments)]
         async fn probe(
             app: &Arc<App>,
             url: &str,
             key_secret: &str,
             body: &serde_json::Value,
-            secs: u64,
+            offset_secs: u64,
+            t0: std::time::Instant,
             probes_used: &mut u32,
             proto: Protocol,
         ) -> Result<bool, ()> {
@@ -1102,7 +1126,12 @@ fn spawn_prober(
                 return Err(());
             }
             *probes_used += 1;
-            tokio::time::sleep(Duration::from_secs(secs)).await;
+            // B-1: sleep until the absolute target t0+offset (not "offset from now").
+            // NOTE: the prober deliberately does NOT hold the key in cooling during
+            // measurement (B-6 was reverted — benching keys for the whole probe
+            // duration collapsed the pool under 429 storms, PASS §30.3).
+            let wait_secs = offset_secs.saturating_sub(t0.elapsed().as_secs());
+            tokio::time::sleep(Duration::from_secs(wait_secs)).await;
             let builder = apply_upstream_auth(
                 app.http.post(url).timeout(Duration::from_secs(20)),
                 key_secret,
@@ -1118,10 +1147,20 @@ fn spawn_prober(
         }
 
         // Phase 1 — bracket the window around the initial guess T.
-        let (mut low, mut high) = match probe(&app, &url, &key_secret, &probe_body, t, &mut probes_used, upstream_proto).await {
+        let (mut low, mut high) = match probe(&app, &url, &key_secret, &probe_body, t, t0, &mut probes_used, upstream_proto).await {
             Ok(true) => (t / 2, t), // window is shorter than T
-            Ok(false) => (t, (t * 2).min(PROBE_MAX_SECS)), // longer than T
+            Ok(false) => {
+                // B-3: still limited at the search ceiling → the window is beyond
+                // measurement (hourly/daily). Write nothing; keep the default chain.
+                if t >= PROBE_MAX_SECS {
+                    app.note_probe_attempt(&key_id);
+                    app.release_probe(&key_id);
+                    return;
+                }
+                (t, (t * 2).min(PROBE_MAX_SECS))
+            }
             Err(()) => {
+                app.note_probe_attempt(&key_id); // B-4: negative-cache the failed attempt
                 app.release_probe(&key_id);
                 return;
             }
@@ -1133,18 +1172,23 @@ fn spawn_prober(
                 break;
             }
             let mid = (low + high) / 2;
-            match probe(&app, &url, &key_secret, &probe_body, mid, &mut probes_used, upstream_proto).await {
+            match probe(&app, &url, &key_secret, &probe_body, mid, t0, &mut probes_used, upstream_proto).await {
                 Ok(true) => high = mid,
                 Ok(false) => low = mid,
-                Err(()) => break, // keep whatever bracket we have; still write midpoint
+                Err(()) => break, // keep whatever bracket we have; still write high
             }
         }
 
         app.release_probe(&key_id);
-        let learned = (low + high) / 2;
+        // B-2: write the shortest PROVEN-successful offset (+1s margin), not the
+        // midpoint — cooling underestimates loop the key back into 429s, and the
+        // re-learn guard would block recalibration for an hour.
+        let learned = high + 1;
         if learned >= PROBE_MIN_SECS {
             app.set_learned_cooldown(&provider_id, &key_id, learned);
             app.clear_error(&key_id);
+        } else {
+            app.note_probe_attempt(&key_id);
         }
     });
 }

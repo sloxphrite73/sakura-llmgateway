@@ -162,9 +162,9 @@ The **策略 / Strategy** tab configures the routing strategy (see §4.2):
 - **Two filter toggles** — `lock_model_group` and `lock_provider` (both ON by
   default = exact provider+model, only rotate keys). The combination picks one of
   four candidate modes (exact / model-first / provider-first / available-first).
-- **Sort stack** — three slots for the A–J sort keys (success_rate, rpm, tpm,
-  avg_tftt, token/bill balance ×2, price, tps); the fixed `valid ↓` + `non-cooled ↓`
-  leads are always on and not shown.
+- **Sort stack** — three slots for the A–K sort keys (success_rate, rpm, tpm,
+  avg_tftt, token/bill balance ×2, price, tps, availability); the fixed
+  `valid ↓` + `non-cooled ↓` leads are always on and not shown.
 - **Dry-run preview** — pick a model (+ optional provider) and run a simulated
   route: it shows the routed key and the full candidate list with each key's
   valid/cooling/remaining state and metrics.
@@ -203,8 +203,11 @@ Each row shows:
 1. Requests are distributed round-robin across the provider's keys.
 2. A key that receives **429** is benched: cooldown = upstream `Retry-After`
    header → `learned_cooldown` (learned via binary-search probing, see §4.1) →
-   per-key override → global default. The gateway waits **1.5s** and
-   retries the same request on the next key.
+   per-key override → global default. The gateway waits **250ms** and retries
+   the same request on the next key. A 429 whose body reports **exhausted
+   quota** (e.g. "entitlement exhausted" / "insufficient_quota" / "余额不足") is
+   not a rate window — the key is quarantined for 30 minutes like an auth
+   failure.
 
 ### 4.1 Cooldown learning (binary-search prober)
 
@@ -213,18 +216,23 @@ and stores it as `learned_cooldown` (visible in the console and config file):
 
 1. **Initial T** = the previous learned value (else the global default), clamped
    to 2–900 seconds.
-2. **Bracket**: after waiting T seconds, send a tiny probe (the provider's first
-   enabled managed model, `max_tokens: 1`) — success means the window is shorter,
-   bracketing `[T/2, T]`; another 429 means longer, bracketing `[T, 2T]`
-   (900s cap).
+2. **Bracket**: all probe timings are anchored to the 429 moment `t0` (each
+   round sleeps until `t0 + offset`, so wall-clock drift can't skew the
+   measurement). The probe replays the model that was actually 429'd with
+   `max_tokens: 1` — success means the window is shorter, bracketing
+   `[T/2, T]`; another 429 means longer, bracketing `[T, 2T]` (900s cap; still
+   429 at 900s = unlearnable, nothing is stored).
 3. **Bisect**: bisect the bracket for ~5 rounds (probe the midpoint; success takes
    the upper half, 429 the lower), converging to ±1 second.
-4. **Store**: the bracket **midpoint** becomes the key's `learned_cooldown`
-   (debounced config write).
+4. **Store**: the bracket's **upper bound + 1s** becomes the key's
+   `learned_cooldown` (the shortest offset proven to succeed; debounced config
+   write).
 
 Guard rails: at most 10 probes per measurement; 401/403/other 4xx/network errors
 are "unlearnable" and abort the search; each key recalibrates at most once per
-hour (`RELEARN_AFTER_SECS = 3600`); only one prober per key at a time.
+hour — and failed attempts count against that budget too, so a permanently
+failing key doesn't spawn a prober on every 429; only one prober per key at a
+time.
 3. **401/403** (invalid key) quarantines the key for 30 minutes instead —
    retrying a dead key just wastes calls.
 4. Other key-scoped errors (408/5xx, network errors) bench the key for 5s and
@@ -267,12 +275,23 @@ api_key_id)` triple table and, per request:
    | B | rpm | ↓ | H | bill_balance | ↑ |
    | C | tpm | ↓ | I | price | ↑ |
    | D | avg_tftt | ↑ | J | tps | ↓ |
-   | E | token_balance | ↓ | | | |
+   | E | token_balance | ↓ | K | availability | ↓ |
    | F | token_balance | ↑ | | | |
 
    `token_balance` / `bill_balance` use `+∞` when the provider doesn't report
    them (`None`); `∞` sorts first under `↓` (best) and last under `↑`. The
    measured attributes (rpm/tpm/success_rate/avg_tftt/tps) are always finite.
+
+   **K (availability)** is a composite "most likely to succeed on the first
+   attempt" score: `smoothed success_rate × capacity headroom`. The success
+   rate is Bayesian-smoothed as `(ok + 2) / (n + 2)` over the 5-min rolling
+   window (no history → 1.0, so new keys are never penalized). Headroom =
+   `1 − current RPM / capacity`, clamped to `[0.05, 1]` — a key near its limit
+   is heavily deprioritized but never excluded (true rate-limiting is the
+   cooldown layer's job). Capacity resolution: the key's `seed_rpm` first, else
+   the provider's `rpm_limit` split evenly across its keys, else unknown →
+   headroom 1.0 (K then ranks by success alone). When every candidate scores
+   equal, K degenerates to the round-robin tiebreak.
 4. **Walk** — scan top-down, take the first `valid + non-cooled` row; route it.
 5. **Terminal**:
    - routed → serve that `(provider, model, api_key_id)`;
@@ -443,7 +462,7 @@ through byte-for-byte.
 | `keys[].seed_*` | Preset initial metrics (`seed_rpm`/`seed_tpm`/`seed_success_rate`/`seed_avg_tftt_ms`/`seed_tps`); auto-overridden once the key serves traffic. All optional, see §4.3 |
 | `providers[].rpm_limit` / `tpm_limit` | Manual RPM/TPM cap; `null` = no cap (console shows the live auto-detected aggregate) |
 | `strategy.filter` | `lock_model_group` + `lock_provider` (both ON = exact provider+model); see §4.2 |
-| `strategy.sort` | 0–3 of A–J (ordered, no dups) — the user sort stack |
+| `strategy.sort` | 0–3 of A–K (ordered, no dups) — the user sort stack |
 | `model_groups` | Same logical model across providers (entries `[provider_id, upstream_model]`); see §4.2 |
 | `models` | Managed catalog; empty = unmanaged |
 | `model_allowlist_only` | Reject models not in the (non-empty) list |

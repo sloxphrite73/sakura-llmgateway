@@ -120,6 +120,7 @@ const SORTS = {
   H:{n:'账单余额 ↑',     fn:(a,b)=>a.bb-b.bb},
   I:{n:'单价 ↑',         fn:(a,b)=>a.price-b.price},
   J:{n:'生成速度TPS ↓', fn:(a,b)=>b.tps-a.tps},
+  K:{n:'可用性 ↓',       fn:(a,b)=>b.avail-a.avail},
 };
 const SORT_KEYS = Object.keys(SORTS);
 
@@ -193,6 +194,7 @@ const EN = {
   '成功率 ↓':'Success rate ↓', 'RPM ↓':'RPM ↓', 'TPM ↓':'TPM ↓', '首字延迟 ↑':'TFTT ↑',
   'token余额 ↓':'Token balance ↓', 'token余额 ↑':'Token balance ↑',
   '账单余额 ↓':'Bill balance ↓', '账单余额 ↑':'Bill balance ↑', '单价 ↑':'Price ↑', '生成速度TPS ↓':'Gen speed TPS ↓',
+  '可用性 ↓':'Availability ↓',
   /* feedback strings for the wired (real-API) mutations — no new UI elements */
   '删除该提供商及其所有 Key？':'Delete this provider and all its keys?',
   '删除该 Key？':'Delete this key?',
@@ -895,7 +897,7 @@ async function runDryRun(){
       routed: k.routed,
       kid: k.api_key_id, prov: k.provider_id, model: k.upstream_model,
       valid: k.valid, cool: !k.non_cooled, cd: k.remaining_secs||0,
-      price: k.price||0, tps: k.tps||0, sr: k.success_rate||0
+      price: k.price||0, tps: k.tps||0, sr: k.success_rate||0, avail: k.availability!=null?k.availability:1
     }));
     let winner = null;
     for (const k of cand) if (k.routed) winner = k;

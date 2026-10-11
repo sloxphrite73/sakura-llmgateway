@@ -146,8 +146,9 @@ impl Default for AuthSettings {
 // Routing strategy layer (spec §2.1, §2.3, §4.2; impl-spec §2.1, §4.2)
 // ---------------------------------------------------------------------------
 
-/// One user-selectable sort key (spec §5.2: A–J). Serializes as the single
-/// uppercase letter `"A"`..`"J"` so `gateway.json` reads `"sort": ["I","J"]`.
+/// One user-selectable sort key (spec §5.2: A–J; K added post-spec: composite
+/// availability = smoothed success_rate × capacity headroom). Serializes as the single
+/// uppercase letter `"A"`..`"K"` so `gateway.json` reads `"sort": ["I","J"]`.
 /// The comparison direction + attribute live in `strategy.rs` (`impl SortKey`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SortKey {
@@ -161,6 +162,7 @@ pub enum SortKey {
     H, // bill_balance      asc
     I, // price             asc
     J, // tps               desc
+    K, // availability      desc (smoothed success_rate × capacity headroom)
 }
 
 impl SortKey {
@@ -180,6 +182,7 @@ impl SortKey {
             "H" => Some(Self::H),
             "I" => Some(Self::I),
             "J" => Some(Self::J),
+            "K" => Some(Self::K),
             _ => None,
         }
     }

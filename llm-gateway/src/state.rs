@@ -18,6 +18,17 @@ pub(crate) const METRIC_TPM_WINDOW_SECS: u64 = 60;
 /// Rolling sample cap for `avg_tftt` / `tps` (last-N mean, spec §2.2).
 pub(crate) const METRIC_SAMPLE_CAP: usize = 50;
 
+/// Sort key K: prior strength for the smoothed success rate
+/// `(ok + β) / (n + β)` — a prior of "1.0 with 2 phantom observations", so a
+/// key with no history scores 1.0 (don't penalize new keys) and the estimate
+/// converges to the measured rate as samples accrue.
+pub(crate) const AVAILABILITY_PRIOR_BETA: f64 = 2.0;
+/// Sort key K: floor for the capacity-headroom factor. A key estimated at/over
+/// its RPM capacity is heavily deprioritized but never hard-excluded — the
+/// estimate may be wrong, and true rate-limiting is the cooldown layer's job
+/// (orthogonality, spec §7).
+pub(crate) const AVAILABILITY_HEADROOM_FLOOR: f64 = 0.05;
+
 /// Per-key rolling metrics consumed by the strategy layer (spec §2.2 attributes).
 /// `tpm` / `avg_tftt` / `tps` / `*_balance` land in a later chunk (token counting +
 /// stream timing + balance-API fetchers); zero/None until then.
@@ -148,6 +159,9 @@ fn fill_rows(pool: &mut PoolRuntime, rows: &mut [crate::strategy::Row], now: Ins
                 // "手动 seed" — set in build_candidates) for the measured
                 // metrics. Balances are already None (no provider-reported
                 // data for an untouched key). Nothing to overwrite.
+                // K: no live load → headroom 1.0, so availability collapses to
+                // the seed success_rate (or 1.0 for a brand-new key).
+                r.availability = r.success_rate.clamp(0.0, 1.0);
             }
             Some(m) => {
                 let total = m.success.len();
@@ -172,6 +186,25 @@ fn fill_rows(pool: &mut PoolRuntime, rows: &mut [crate::strategy::Row], now: Ins
                 };
                 r.token_balance = None;
                 r.bill_balance = m.bill_balance;
+                // K = smoothed success_rate × capacity headroom.
+                // sr: (ok + β)/(n + β) — prior 1.0 with strength β, so few
+                // samples stay near 1.0 and the estimate converges to the
+                // measured rate (a 1/1 key no longer beats a 99/100 key).
+                let ok = m.success.iter().filter(|e| e.1).count() as f64;
+                let sr = (ok + AVAILABILITY_PRIOR_BETA) / (total as f64 + AVAILABILITY_PRIOR_BETA);
+                // headroom: how far the key is from its estimated RPM capacity.
+                // Unknown capacity (no seed_rpm, no provider rpm_limit) → 1.0
+                // (neutral: K then ranks by success alone). Capacity 0 is
+                // treated as unknown (avoids div-by-zero; an explicit 0 seed
+                // means "not set").
+                let headroom = match r.capacity_rpm {
+                    Some(c) if c > 0 => {
+                        (1.0 - m.req_times.len() as f64 / c as f64)
+                            .clamp(AVAILABILITY_HEADROOM_FLOOR, 1.0)
+                    }
+                    _ => 1.0,
+                };
+                r.availability = sr * headroom;
             }
         }
         // spec §2.3 quota gate: valid = not-banned AND (when a balance is
@@ -239,6 +272,210 @@ mod tests {
     #[test]
     fn both_balances_zero_is_not_valid() {
         assert!(!valid_with_quota(true, Some(0), Some(0.0)));
+    }
+
+    // --- sort key K: availability = smoothed success_rate × headroom ---
+
+    /// Minimal strategy Row for fill_rows tests (only the fields fill_rows reads).
+    fn k_row(key_id: &str, seed_sr: f64, capacity: Option<u32>) -> crate::strategy::Row {
+        crate::strategy::Row {
+            provider_id: "p".into(),
+            upstream_model: "m".into(),
+            api_key_id: key_id.into(),
+            key_secret: String::new(),
+            group_id: "m".into(),
+            valid: true,
+            non_cooled: true,
+            remaining_secs: 0,
+            success_rate: seed_sr,
+            rpm: 0,
+            tpm: 0,
+            avg_tftt_ms: 0,
+            tps: 0.0,
+            token_balance: None,
+            bill_balance: None,
+            price: 0.0,
+            idx: 0,
+            capacity_rpm: capacity,
+            availability: 1.0,
+        }
+    }
+
+    #[test]
+    fn availability_no_history_uses_seed_success_rate() {
+        // No live metrics → availability = the skeleton's seed success_rate
+        // (headroom 1.0: no load). A brand-new key (seed None → 1.0) scores 1.0.
+        let mut pool = PoolRuntime::default();
+        let mut rows = vec![k_row("seeded", 0.85, Some(10)), k_row("fresh", 1.0, None)];
+        fill_rows(&mut pool, &mut rows, Instant::now());
+        assert!((rows[0].availability - 0.85).abs() < 1e-9);
+        assert!((rows[1].availability - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn availability_penalizes_near_capacity() {
+        // 9 requests in the 60s window against a capacity of 10 → headroom 0.1
+        // → availability collapses despite a perfect success history.
+        let mut pool = PoolRuntime::default();
+        let m = pool.metrics.entry("hot".into()).or_default();
+        for _ in 0..9 {
+            m.req_times.push_back(Instant::now());
+            m.success.push_back((Instant::now(), true));
+        }
+        let mut rows = vec![k_row("hot", 1.0, Some(10))];
+        fill_rows(&mut pool, &mut rows, Instant::now());
+        // sr = (9+2)/(9+2) = 1.0; headroom = 1 - 9/10 = 0.1
+        assert!((rows[0].availability - 0.1).abs() < 1e-9, "got {}", rows[0].availability);
+    }
+
+    #[test]
+    fn availability_floors_at_005_not_zero() {
+        // At/over capacity the key is deprioritized but never hard-excluded —
+        // true rate-limiting belongs to the cooldown layer (spec §7 orthogonality).
+        let mut pool = PoolRuntime::default();
+        let m = pool.metrics.entry("maxed".into()).or_default();
+        for _ in 0..15 {
+            m.req_times.push_back(Instant::now());
+        }
+        let mut rows = vec![k_row("maxed", 1.0, Some(10))];
+        fill_rows(&mut pool, &mut rows, Instant::now());
+        // sr = (0+2)/(0+2) = 1.0 (no success samples); headroom clamped to 0.05
+        assert!((rows[0].availability - AVAILABILITY_HEADROOM_FLOOR).abs() < 1e-9);
+    }
+
+    #[test]
+    fn availability_unknown_capacity_is_neutral() {
+        // No capacity estimate → headroom 1.0 → availability = smoothed sr.
+        let mut pool = PoolRuntime::default();
+        let m = pool.metrics.entry("plain".into()).or_default();
+        m.req_times.push_back(Instant::now());
+        m.success.push_back((Instant::now(), true));
+        m.success.push_back((Instant::now(), false));
+        let mut rows = vec![k_row("plain", 1.0, None)];
+        fill_rows(&mut pool, &mut rows, Instant::now());
+        // sr = (1+2)/(2+2) = 0.75; headroom 1.0
+        assert!((rows[0].availability - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn smoothing_damps_small_sample_failures() {
+        // The prior (mean 1.0, strength β=2) keeps all-success keys at 1.0
+        // regardless of sample size (no evidence to distinguish them), and
+        // damps small-sample failure rates: 1/2 (raw 0.5) reads 0.75, while a
+        // proven 9/10 key reads ~0.917 and outranks it.
+        let mut pool = PoolRuntime::default();
+        {
+            let m = pool.metrics.entry("coinflip".into()).or_default();
+            m.success.push_back((Instant::now(), true));
+            m.success.push_back((Instant::now(), false));
+        }
+        {
+            let m = pool.metrics.entry("veteran".into()).or_default();
+            for i in 0..10 {
+                m.success.push_back((Instant::now(), i != 0)); // 9 ok / 10
+            }
+        }
+        let mut rows = vec![k_row("coinflip", 1.0, None), k_row("veteran", 1.0, None)];
+        fill_rows(&mut pool, &mut rows, Instant::now());
+        assert!((rows[0].availability - 0.75).abs() < 1e-9, "coinflip: got {}", rows[0].availability);
+        assert!((rows[1].availability - 11.0 / 12.0).abs() < 1e-9, "veteran: got {}", rows[1].availability);
+        assert!(rows[1].availability > rows[0].availability);
+    }
+
+    // --- real-429 cooldown chain = v0.7.9 semantics (mark_rate_limited) ---
+
+    /// Remaining cooldown seconds for a key (test helper).
+    fn cooldown_remaining(app: &App, key_id: &str) -> u64 {
+        let pool = app.pool.lock().unwrap();
+        pool.cooling
+            .get(key_id)
+            .map(|u| u.saturating_duration_since(Instant::now()).as_secs())
+            .unwrap_or(0)
+    }
+
+    fn app_with_provider(learned: Option<u64>, per_key: Option<u64>) -> (App, String) {
+        let dir = std::env::temp_dir().join(format!("rl-test-{}-{:?}-{:?}", std::process::id(), learned, per_key));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cfg = Config::default(); // default_cooldown 60
+        cfg.providers.push(crate::config::Provider {
+            id: "p".into(),
+            name: "P".into(),
+            base_url: "http://p/v1".into(),
+            keys: vec![crate::config::ApiKey {
+                id: "k".into(),
+                key: "sk-x".into(),
+                label: "k".into(),
+                cooldown_secs: per_key,
+                learned_cooldown: learned,
+                seed_rpm: None,
+                seed_tpm: None,
+                seed_success_rate: None,
+                seed_avg_tftt_ms: None,
+                seed_tps: None,
+            }],
+            models: vec![],
+            model_allowlist_only: false,
+            aliases: Default::default(),
+            protocol: String::new(),
+            has_token_balance_api: false,
+            has_bill_balance_api: false,
+            price_table: Default::default(),
+            output_price_table: Default::default(),
+            rpm_limit: None,
+            tpm_limit: None,
+        });
+        let app = App::new(cfg, dir.join("gateway.json"));
+        (app, dir.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn real_429_applies_learned_as_is() {
+        // v0.7.9 chain: a small learned value applies directly (no floor —
+        // flooring collapsed the pool under load, PASS §30.3).
+        let (app, dir) = app_with_provider(Some(4), None);
+        app.mark_rate_limited("p", "k", None, "r");
+        assert!((3..=4).contains(&cooldown_remaining(&app, "k")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn real_429_long_learned_and_default_fallback() {
+        let (app, dir) = app_with_provider(Some(221), None);
+        app.mark_rate_limited("p", "k", None, "r");
+        assert!((219..=221).contains(&cooldown_remaining(&app, "k")));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (app2, dir2) = app_with_provider(None, None);
+        app2.mark_rate_limited("p", "k", None, "r");
+        assert!((59..=60).contains(&cooldown_remaining(&app2, "k")), "no learned → default 60");
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    #[test]
+    fn real_429_retry_after_and_per_key_precedence() {
+        // Chain: Retry-After → learned → per-key → default (v0.7.9 order).
+        let (app, dir) = app_with_provider(Some(4), None);
+        app.mark_rate_limited("p", "k", Some(10), "r");
+        assert!((9..=10).contains(&cooldown_remaining(&app, "k")), "Retry-After beats learned");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (app2, dir2) = app_with_provider(None, Some(15));
+        app2.mark_rate_limited("p", "k", None, "r");
+        assert!((14..=15).contains(&cooldown_remaining(&app2, "k")), "per-key used when no learned");
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    #[test]
+    fn extend_cooldown_at_least_never_shortens() {
+        let dir = std::env::temp_dir().join(format!("extend-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = App::new(Config::default(), dir.join("gateway.json"));
+        app.mark_rate_limited("p", "k", None, "r"); // 60s (default floor)
+        // A shorter probe hold must not shorten the AIMD cooldown.
+        app.extend_cooldown_at_least("k", 5);
+        assert!((59..=60).contains(&cooldown_remaining(&app, "k")), "must not shorten");
+        // A longer hold extends.
+        app.extend_cooldown_at_least("k", 120);
+        assert!((119..=120).contains(&cooldown_remaining(&app, "k")), "must extend");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -571,6 +808,33 @@ impl App {
         pool.last_error.insert(key_id.to_string(), reason.to_string());
     }
 
+    /// 429 cooldown for a REAL request — the v0.7.9 chain, unchanged:
+    /// `Retry-After` → `learned_cooldown` → per-key `cooldown_secs` → global
+    /// default. (A floor at the global default was tried and reverted: it
+    /// benched keys far longer than their real recovery time and collapsed the
+    /// pool under load — PASS §30.3.)
+    pub fn mark_rate_limited(&self, provider_id: &str, key_id: &str, retry_after_secs: Option<u64>, reason: &str) {
+        self.mark_cooldown(provider_id, key_id, retry_after_secs, reason);
+    }
+
+    /// Extend a key's cooling to at least `secs` from now — never shortens an
+    /// existing cooldown.
+    #[allow(dead_code)] // kept for future probe-hold designs; the prober must not
+                        // hold keys (benching during measurement collapses the pool
+                        // under 429 storms — see PASS §30.3)
+    pub fn extend_cooldown_at_least(&self, key_id: &str, secs: u64) {
+        let mut pool = self.pool.lock().unwrap();
+        let target = Instant::now() + Duration::from_secs(secs);
+        pool.cooling
+            .entry(key_id.to_string())
+            .and_modify(|u| {
+                if *u < target {
+                    *u = target;
+                }
+            })
+            .or_insert(target);
+    }
+
     /// Push a per-key outcome into the rolling success window (feeds the
     /// `success_rate` strategy sort attribute, spec §2.2). Folded into
     /// record_stat / record_key_stat so every key attempt's outcome is captured
@@ -828,6 +1092,8 @@ impl App {
                     "bill_balance": r.bill_balance,
                     "price": r.price,
                     "idx": r.idx,
+                    "capacity_rpm": r.capacity_rpm,
+                    "availability": r.availability,
                     "routed": routed_idx == Some(i),
                 })
             })
@@ -876,6 +1142,16 @@ impl App {
         pool.cooling.remove(key_id);
         pool.invalid.remove(key_id);
         pool.probing.remove(key_id);
+    }
+
+    /// Note that a probe measurement was attempted for this key (regardless of
+    /// outcome), so the RELEARN_AFTER_SECS guard also rate-limits failed
+    /// attempts — a permanently-failing key must not spawn a prober on every 429.
+    pub fn note_probe_attempt(&self, key_id: &str) {
+        self.learned_at
+            .lock()
+            .unwrap()
+            .insert(key_id.to_string(), std::time::Instant::now());
     }
 
     /// Record a measured cooldown (seconds) learned by post-429 probing into the key's

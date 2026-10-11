@@ -4,6 +4,8 @@
 //! - `sk-bad` key always returns 429 with Retry-After: 2
 //! - `sk-slow` key returns 429 unless at least `SLOW_WINDOW_SECS` have passed since its
 //!   first request (simulates a rate-limit window, for testing cooldown learning)
+//! - `sk-window-<N>` keys return 429 until N seconds have passed since THAT key's
+//!   first request (per-key fixed window, for prober timing-accuracy tests)
 //! - any other key returns a chat completion (SSE if "stream": true) and a model list.
 
 use axum::extract::State;
@@ -18,21 +20,38 @@ use std::time::Duration;
 /// Rate-limit window simulated for the `sk-slow` key (seconds).
 const SLOW_WINDOW_SECS: u64 = 8;
 
+/// Shared mock state: the sk-slow anchor (single global, as before) plus a
+/// per-key first-seen map for `sk-window-<N>` keys.
+#[derive(Default)]
+struct MockState {
+    slow_first: Option<std::time::Instant>,
+    windows: std::collections::HashMap<String, std::time::Instant>,
+}
+
+/// Parse a `sk-window-<N>` key into its window in seconds.
+fn window_secs(auth: &str) -> Option<u64> {
+    let pos = auth.find("sk-window-")?;
+    auth[pos + "sk-window-".len()..]
+        .trim_end_matches(|c: char| !c.is_ascii_digit())
+        .parse()
+        .ok()
+}
+
 #[tokio::main]
 async fn main() {
-    let slow_first = Arc::new(tokio::sync::Mutex::new(Option::<std::time::Instant>::None));
+    let state = Arc::new(tokio::sync::Mutex::new(MockState::default()));
     let app = Router::new()
         .route("/v1/chat/completions", post(chat))
         .route("/v1/messages", post(anthropic_messages))
         .route("/v1/messages/count_tokens", post(anthropic_count_tokens))
         .route("/v1/models", get(models))
-        .with_state(slow_first);
+        .with_state(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:9001").await.unwrap();
     println!("[mock-upstream] listening on 127.0.0.1:9001");
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn models(_state: State<Arc<tokio::sync::Mutex<Option<std::time::Instant>>>>) -> Response {
+async fn models(_state: State<Arc<tokio::sync::Mutex<MockState>>>) -> Response {
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -46,8 +65,29 @@ async fn models(_state: State<Arc<tokio::sync::Mutex<Option<std::time::Instant>>
         .into_response()
 }
 
+/// Window check shared by both protocols. Returns a 429 response (in the given
+/// protocol's error shape) while the key's window is still open.
+async fn window_429(
+    state: &Arc<tokio::sync::Mutex<MockState>>,
+    auth: &str,
+    anthropic: bool,
+) -> Option<Response> {
+    let secs = window_secs(auth)?;
+    let mut st = state.lock().await;
+    let t0 = *st.windows.entry(auth.to_string()).or_insert_with(std::time::Instant::now);
+    if t0.elapsed() < Duration::from_secs(secs) {
+        let body = if anthropic {
+            serde_json::json!({ "type": "error", "error": { "type": "rate_limit_error", "message": format!("rate limited (window {secs}s)") } })
+        } else {
+            serde_json::json!({ "error": { "message": format!("rate limited (window {secs}s)") } })
+        };
+        return Some((StatusCode::TOO_MANY_REQUESTS, Json(body)).into_response());
+    }
+    None
+}
+
 async fn chat(
-    State(slow_first): State<Arc<tokio::sync::Mutex<Option<std::time::Instant>>>>,
+    State(state): State<Arc<tokio::sync::Mutex<MockState>>>,
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
@@ -63,12 +103,24 @@ async fn chat(
         )
             .into_response();
     }
+    if auth.contains("sk-poor") {
+        // Quota exhausted (not a rate window): the gateway should quarantine
+        // this key (invalid), not cool it down and retry forever.
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({ "error": { "message": "token plan entitlement exhausted" } })),
+        )
+            .into_response();
+    }
+    if let Some(r) = window_429(&state, auth, false).await {
+        return r;
+    }
     if auth.contains("sk-slow") {
         // 429 until SLOW_WINDOW_SECS have elapsed since the key's first request;
         // then behave like a normal key. Lets the prober's bisection converge.
-        let mut first = slow_first.lock().await;
-        let t0 = *first.get_or_insert(std::time::Instant::now());
-        drop(first);
+        let mut st = state.lock().await;
+        let t0 = *st.slow_first.get_or_insert(std::time::Instant::now());
+        drop(st);
         if t0.elapsed() < Duration::from_secs(SLOW_WINDOW_SECS) {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
@@ -123,7 +175,7 @@ async fn chat(
 
 /// POST /v1/messages — Anthropic-format mirror of `chat`. Same key behaviors.
 async fn anthropic_messages(
-    State(slow_first): State<Arc<tokio::sync::Mutex<Option<std::time::Instant>>>>,
+    State(state): State<Arc<tokio::sync::Mutex<MockState>>>,
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
@@ -139,10 +191,20 @@ async fn anthropic_messages(
         )
             .into_response();
     }
+    if auth.contains("sk-poor") {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({ "type": "error", "error": { "type": "rate_limit_error", "message": "token plan entitlement exhausted" } })),
+        )
+            .into_response();
+    }
+    if let Some(r) = window_429(&state, auth, true).await {
+        return r;
+    }
     if auth.contains("sk-slow") {
-        let mut first = slow_first.lock().await;
-        let t0 = *first.get_or_insert(std::time::Instant::now());
-        drop(first);
+        let mut st = state.lock().await;
+        let t0 = *st.slow_first.get_or_insert(std::time::Instant::now());
+        drop(st);
         if t0.elapsed() < Duration::from_secs(SLOW_WINDOW_SECS) {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
