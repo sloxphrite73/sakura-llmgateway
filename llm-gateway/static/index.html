@@ -59,6 +59,13 @@ async function api(method, url, body){
   const txt = await r.text();
   return txt ? JSON.parse(txt) : null;
 }
+/* Raw-text variant for change-detected polling (stats 1s refresh): lets the
+   caller compare payloads byte-for-byte and skip the render when unchanged. */
+async function apiText(method, url){
+  const r = await fetch(url, { method });
+  if (!r.ok) throw new Error(''+r.status);
+  return r.text();
+}
 function copyText(s){
   if (navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(s).catch(()=>{}); }
   else { const ta = document.createElement('textarea'); ta.value = s; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch(e){} ta.remove(); }
@@ -1047,7 +1054,7 @@ async function saveAkSeed(kid){
   } catch(e){ console.error('saveAkSeed', e); toast(t('失败: ')+e.message); }
 }
 
-/* ---------- api key live status (5s poll, spec: 数据 5s 更新) ---------- */
+/* ---------- api key live status (1s poll) ---------- */
 // A full refresh() every second would re-render the whole page, reset the key
 // show/hide toggles, and disrupt the seed editor / add-key input mid-typing.
 // Instead: fetch only /api/status, re-adapt KEYS, then surgically patch the
@@ -1087,16 +1094,26 @@ function updateAkCells(){
   });
 }
 
-/* ---------- stats live refresh (5s poll, spec: 数据 5s 更新) ---------- */
-// Display-only panel (totals + 24h histogram + per-provider/key/model tables),
-// so a full re-render of the stats panel every 5s is safe — no inputs to disrupt.
-// Self-guards: only fetches on the Stats tab and when the page is visible.
+/* ---------- stats live refresh (1s poll, change-detected render) ---------- */
+// Display-only panel polled every 1s. To stay flicker-free at that cadence:
+// (1) skip the render entirely when the /api/stats payload is byte-identical
+// to the last rendered one (stats only move when a request completes — idle
+// seconds cost zero DOM work); (2) when it did change, preserve the scroller's
+// position across the full-board re-render so reading the long per-key table
+// isn't reset every second.
+let _lastStatsJson = '';
 async function refreshStats(){
   if (S.tab !== 'stats' || document.hidden) return;
   try {
-    STATS = await api('GET', '/api/stats');
+    const raw = await apiText('GET', '/api/stats');
+    if (raw === _lastStatsJson) return;   // no change → no render, no scroll jump
+    _lastStatsJson = raw;
+    STATS = JSON.parse(raw);
     adaptAll();
-    renderStats($('main'));
+    const m = $('main');
+    const top = m ? m.scrollTop : 0;
+    renderStats(m);
+    if (m) m.scrollTop = top;
   } catch(e){ /* transient; next tick retries */ }
 }
 /* ---------- api key smooth countdown (1s local tick, no fetch) ---------- */
@@ -1389,12 +1406,14 @@ S.lang = localStorage.getItem('lang')==='en' ? 'en' : 'zh';
 applyTheme(localStorage.getItem('theme')==='light' ? 'light' : 'dark');
 renderTopbar(); renderSidebar(); renderMain();
 refresh();
-// Live refresh cadence: API Key + Stats panels fetch every 5s (self-guarded to
-// their tab + page-visible). The API Key cooldown countdown additionally ticks
-// every 1s locally (no fetch) off each key's untilMs absolute timestamp, so it
-// decrements smoothly; reaching 0 triggers one debounced refreshAkStatus.
-setInterval(refreshAkStatus, 5000);
-setInterval(refreshStats, 5000);
+// Live refresh cadence: API Key + Stats panels fetch every 1s (self-guarded to
+// their tab + page-visible). The stats panel re-renders only when the payload
+// actually changed and preserves scroll position across the re-render. The API
+// Key cooldown countdown additionally ticks every 1s locally (no fetch) off
+// each key's untilMs absolute timestamp, so it decrements smoothly; reaching 0
+// triggers one debounced refreshAkStatus.
+setInterval(refreshAkStatus, 1000);
+setInterval(refreshStats, 1000);
 setInterval(tickAkCountdown, 1000);
 </script>
 </body>
