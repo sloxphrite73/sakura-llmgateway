@@ -211,6 +211,10 @@ const EN = {
   /* toast feedback strings for wired (real-API) mutations */
   '已保存':'Saved', '已删除':'Deleted', '添加成功':'Added', '添加失败: ':'Add failed: ',
   '导入成功':'Imported', '导入失败: ':'Import failed: ', '已触发下载':'Download started',
+  '安卓后台保活':'Android background keep-alive',
+  '为防止系统（尤其小米/澎湃）清理后台：① 免除电池优化；② 允许自启动；③ 在最近任务页把本应用加锁':'To stop the system (esp. Xiaomi/HyperOS) from killing the app in background: 1) exempt battery optimization; 2) allow autostart; 3) lock the app in recents',
+  '免除电池优化':'Exempt battery optimization', '打开自启动设置':'Open autostart settings',
+  '自启动权限只能由你手动开启（系统不允许应用代开）；另外建议在最近任务页长按本应用卡片选择「锁定」。开机后网关会自动启动。':'Autostart can only be enabled by you (apps cannot grant it themselves); also long-press this app\'s card in recents and choose "Lock". The gateway starts automatically after a reboot.',
   '未找到该 Key':'Key not found', '失败: ':'Failed: ',
   /* api-key metric seed editor (spec §2.2 手动 seed) */
   'Seed':'Seed', '预置':'Seed', '指标预置':'Metric seed',
@@ -1269,7 +1273,19 @@ function renderSettings(m){
         <div class="faint" style="font-size:0.75rem;margin-top:0.625rem">${t('gateway.json · 导入即时热生效')}</div>
         <div class="faint" style="font-size:0.75rem">${t('旧版导入：仅采纳提供商/Key/模型/智能冷却，保留当前全局设置')}</div>
       </div>
-    </div>`;
+    </div>
+    ${window.SakuraAndroid ? `
+    <div class="section">
+      <div class="section-title">${t('安卓后台保活')}</div>
+      <div class="card card-pad">
+        <div class="faint" style="font-size:0.8125rem">${t('为防止系统（尤其小米/澎湃）清理后台：① 免除电池优化；② 允许自启动；③ 在最近任务页把本应用加锁')}</div>
+        <div class="row" style="margin-top:0.875rem;gap:0.625rem;flex-wrap:wrap">
+          <button onclick="SakuraAndroid.openBatterySettings()">${t('免除电池优化')}</button>
+          <button onclick="SakuraAndroid.openAutostartSettings()">${t('打开自启动设置')}</button>
+        </div>
+        <div class="faint" style="font-size:0.75rem;margin-top:0.625rem">${t('自启动权限只能由你手动开启（系统不允许应用代开）；另外建议在最近任务页长按本应用卡片选择「锁定」。开机后网关会自动启动。')}</div>
+      </div>
+    </div>` : ''}`;
 }
 async function saveSettings(){
   try {

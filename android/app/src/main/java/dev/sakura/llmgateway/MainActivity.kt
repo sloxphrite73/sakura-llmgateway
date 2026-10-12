@@ -3,10 +3,15 @@ package dev.sakura.llmgateway
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.DownloadManager
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.OpenableColumns
+import android.provider.Settings
+import android.webkit.JavascriptInterface
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
@@ -327,6 +332,9 @@ class MainActivity : androidx.activity.ComponentActivity() {
                     // + stacked forms) never triggers on a phone.
                     settings.useWideViewPort = true
                     settings.loadWithOverviewMode = true
+                    // Keep-alive bridge: exposes the OEM battery/autostart settings
+                    // deep-links to the console's settings page as window.SakuraAndroid.
+                    addJavascriptInterface(KeepAliveBridge(this@MainActivity), "SakuraAndroid")
                     webChromeClient = object : WebChromeClient() {
                         // file input (导入配置 in the console)
                         override fun onShowFileChooser(
@@ -394,8 +402,7 @@ class MainActivity : androidx.activity.ComponentActivity() {
     }
 
     /** GET /api/status with a short timeout — used to gate the WebView on gateway readiness. */
-    private fun isGatewayUp(): Boolean {
-        return try {
+    private fun isGatewayUp(): Boolean {        return try {
             val conn = URL("http://127.0.0.1:8001/api/status").openConnection() as HttpURLConnection
             conn.connectTimeout = 1500
             conn.readTimeout = 1500
@@ -410,5 +417,75 @@ class MainActivity : androidx.activity.ComponentActivity() {
     override fun onBackPressed() {
         // WebView history stays internal to the console; default behavior is fine.
         super.onBackPressed()
+    }
+}
+
+/**
+ * JS bridge surfaced to the console as `window.SakuraAndroid` (absent on
+ * desktop, so the web UI gates its keep-alive card on its presence).
+ *
+ * What code can NOT do: grant the MIUI/HyperOS "autostart" permission or lock
+ * the app in recents — those are OEM-private toggles. We can only deep-link the
+ * user to the right settings page. Battery-optimization exemption is a real
+ * runtime flow (system dialog), no OEM lockout.
+ */
+class KeepAliveBridge(private val activity: Activity) {
+
+    /** System dialog: "allow this app to ignore battery optimizations". */
+    @JavascriptInterface
+    fun openBatterySettings() {
+        activity.runOnUiThread {
+            try {
+                val pm = activity.getSystemService(Context.POWER_SERVICE) as PowerManager
+                if (pm.isIgnoringBatteryOptimizations(activity.packageName)) {
+                    android.widget.Toast.makeText(activity, "已在电池优化白名单中", android.widget.Toast.LENGTH_SHORT).show()
+                    return@runOnUiThread
+                }
+                activity.startActivity(
+                    Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:${activity.packageName}")
+                    )
+                )
+            } catch (e: Exception) {
+                android.util.Log.w("KeepAliveBridge", "battery settings intent failed", e)
+                openAppDetails()
+            }
+        }
+    }
+
+    /** MIUI/HyperOS autostart manager; falls back to the app details page. */
+    @JavascriptInterface
+    fun openAutostartSettings() {
+        activity.runOnUiThread {
+            val candidates = listOf(
+                // MIUI / HyperOS
+                Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")),
+                // OPPO / realme
+                Intent().setComponent(ComponentName("com.coloros.safecenter", "com.coloros.safecenter.startupapp.StartupAppListActivity")),
+                // vivo
+                Intent().setComponent(ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity")),
+            )
+            for (i in candidates) {
+                try {
+                    activity.startActivity(i)
+                    return@runOnUiThread
+                } catch (_: Exception) { /* try the next OEM page */ }
+            }
+            openAppDetails()
+        }
+    }
+
+    private fun openAppDetails() {
+        try {
+            activity.startActivity(
+                Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:${activity.packageName}")
+                )
+            )
+        } catch (e: Exception) {
+            android.util.Log.w("KeepAliveBridge", "app details intent failed", e)
+        }
     }
 }

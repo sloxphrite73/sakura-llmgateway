@@ -182,6 +182,10 @@ jobs:
   release:
     needs: [build-windows, build-android]
     runs-on: ubuntu-latest
+    # Only tag pushes create a GitHub Release. workflow_dispatch runs still build
+    # and upload the artifacts (test APKs/exes) but publish nothing — that is the
+    # "user tests a candidate first, we release only on approval" flow.
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
