@@ -75,6 +75,7 @@ ABIs into a universal APK, and a foreground service runs and supervises it.
 | Console | A fullscreen WebView inside the app — the same page as `http://127.0.0.1:8001/`; in-page import/export and confirm dialogs work |
 | Endpoint | On-device agents/tools point at `http://127.0.0.1:8000/v1` |
 | Lifecycle | The service keeps running in the background; START_STICKY restarts it if the system kills it; a health watchdog (first check at 2s, then every 10s) restarts the gateway on hang or death |
+| Background keep-alive | The Settings page ends with an "Android background keep-alive" card (visible only inside the app): one-tap links to **battery-optimization exemption** and the **OEM autostart settings** (Xiaomi/HyperOS, OPPO, vivo; other devices get the app-details page). The gateway starts itself after a reboot once autostart is granted — that permission can only be granted by hand, no app may grant it for you. Swiping the app card away no longer kills the service. Also lock the app in recents (long-press its card) for good measure |
 | In-app import | The console's import button opens the system file picker; imports hot-reload |
 | System-level import | "Open with → Sakura LLM Gateway" on a `gateway.json` in any file manager; hot-reloads while the gateway runs |
 | Export | The console's export button opens the system "Save as" dialog |
