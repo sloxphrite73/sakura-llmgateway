@@ -50,7 +50,7 @@ fn error_response_for(status: StatusCode, message: String, inbound: Protocol) ->
 }
 
 /// Like `error_response_for`, but attaches a `Retry-After` header (delta-seconds)
-/// when given — used for the spec §6 "all-cooling" 429 so the client learns the
+/// when given 鈥?used for the spec 搂6 "all-cooling" 429 so the client learns the
 /// soonest a valid key recovers (learned_cooldown-driven; the OmniRoute
 /// differentiator: precise seconds, not a fixed dead value).
 fn error_response_with_retry(
@@ -68,8 +68,8 @@ fn error_response_with_retry(
     resp
 }
 
-/// Gateway-level auth. Accepts the token from `Authorization: Bearer <t>` or —
-/// for Anthropic clients (Claude Code etc.) — from `x-api-key: <t>`.
+/// Gateway-level auth. Accepts the token from `Authorization: Bearer <t>` or 鈥?
+/// for Anthropic clients (Claude Code etc.) 鈥?from `x-api-key: <t>`.
 fn extract_auth_token(headers: &HeaderMap) -> String {
     if let Some(v) = headers.get(axum::http::header::AUTHORIZATION) {
         if let Ok(s) = v.to_str() {
@@ -120,7 +120,7 @@ fn upstream_chat_url(base: &str, protocol: Protocol) -> String {
 }
 
 /// Apply the upstream's auth headers to a request builder.
-fn apply_upstream_auth(
+pub(crate) fn apply_upstream_auth(
     builder: reqwest::RequestBuilder,
     key: &str,
     protocol: Protocol,
@@ -190,7 +190,7 @@ pub async fn chat_completions(
 // POST /v1/messages (+ count_tokens)
 // ---------------------------------------------------------------------------
 
-/// POST /v1/messages — Anthropic Messages inbound.
+/// POST /v1/messages 鈥?Anthropic Messages inbound.
 pub async fn anthropic_messages(
     State(app): State<Arc<App>>,
     headers: HeaderMap,
@@ -210,7 +210,7 @@ pub async fn anthropic_messages(
     .await
 }
 
-/// POST /v1/messages/count_tokens — proxy to the upstream when it speaks
+/// POST /v1/messages/count_tokens 鈥?proxy to the upstream when it speaks
 /// Anthropic; local estimate otherwise (never 404: Claude Code depends on this).
 pub async fn anthropic_count_tokens(
     State(app): State<Arc<App>>,
@@ -244,7 +244,8 @@ pub async fn anthropic_count_tokens(
 
     match provider.protocol() {
         Protocol::Anthropic => {
-            let key = provider.keys.first().map(|k| k.key.clone()).unwrap_or_default();
+            // F3: first non-cooling, non-invalid key 鈥?not blindly keys[0].
+            let key = app.first_usable_key(&provider).unwrap_or_default();
             let base = provider.base_url.trim_end_matches('/');
             let url = if base.ends_with("/v1") {
                 format!("{base}/messages/count_tokens")
@@ -288,7 +289,7 @@ pub async fn anthropic_count_tokens(
 /// Build the request payload in the *upstream's* protocol, with the upstream
 /// model name substituted in. Extracted from the old inline block so the
 /// strategy layer can rebuild it per attempt when the selected candidate's
-/// provider/model differs (impl-spec §5.2: "按 attempt 调用").
+/// provider/model differs (impl-spec 搂5.2: "鎸?attempt 璋冪敤").
 fn build_upstream_payload(
     inbound_body: &serde_json::Value,
     inbound: Protocol,
@@ -315,9 +316,9 @@ fn build_upstream_payload(
 }
 
 /// Translate + dispatch + retry-loop shared by both inbound endpoints. Drives
-/// the strategy layer (spec §3-§6): candidates are built once, then each
+/// the strategy layer (spec 搂3-搂6): candidates are built once, then each
 /// attempt `select_strategy` re-walks the (cooling/invalid-updated) candidate
-/// set and returns either a routed row or a §6 terminal (AllCooling / NoValid /
+/// set and returns either a routed row or a 搂6 terminal (AllCooling / NoValid /
 /// Empty). `finish` renders the final success response in the client's protocol.
 async fn forward<F, Fut>(
     app: Arc<App>,
@@ -374,24 +375,23 @@ where
 
     // Retry budget: every key that fails is marked cooling/invalid, so
     // select_strategy never hands the same key again until it recovers. The
-    // budget is bounded by (one attempt per candidate) × max_attempts (D4:
+    // budget is bounded by (one attempt per candidate) 脳 max_attempts (D4:
     // candidate-set size replaces the old `provider.keys.len()`).
     let max_attempts = (cfg.max_attempts.clamp(1, 10) as usize)
         .saturating_mul(set.rows.len())
         .max(1);
     // Sort stack snapshot once (editing strategy mid-request is an edge case).
     let sorts = cfg.strategy.sort.clone();
-    let primary_provider = set.rows[0].provider_id.clone();
     drop(cfg); // re-read per attempt for the live provider (protocol may change)
 
     for _attempt in 1..=max_attempts {
         let row = match app.select_strategy(&set, &sorts) {
             SelectResult::Routed(r) => r,
             SelectResult::AllCooling { retry_after } => {
-                // §6: all valid keys are cooling → 429 + Retry-After (the soonest
+                // 搂6: all valid keys are cooling 鈫?429 + Retry-After (the soonest
                 // recovery, learned_cooldown-driven). Absent when none is merely
                 // cooling (invalid doesn't recover by waiting).
-                app.record_stat(false, None, &primary_provider, &client_model);
+                app.record_stat(false, None, "unknown", &client_model);
                 return error_response_with_retry(
                     StatusCode::TOO_MANY_REQUESTS,
                     "all candidate keys are rate-limited (cooling down)".into(),
@@ -400,9 +400,9 @@ where
                 );
             }
             SelectResult::NoValid => {
-                // §6: no valid row → 429 with no Retry-After (invalid keys
-                // don't recover by waiting, per spec §6 "无 valid 行").
-                app.record_stat(false, None, &primary_provider, &client_model);
+                // 搂6: no valid row 鈫?429 with no Retry-After (invalid keys
+                // don't recover by waiting, per spec 搂6 "鏃?valid 琛?).
+                app.record_stat(false, None, "unknown", &client_model);
                 return error_response_with_retry(
                     StatusCode::TOO_MANY_REQUESTS,
                     "all candidate keys are invalid (auth-failed)".into(),
@@ -462,7 +462,7 @@ where
         let status = resp.status();
         if status.is_success() {
             app.clear_error(&row.api_key_id);
-            // The `client_model` param of finish_generic is the per-model stats key —
+            // The `client_model` param of finish_generic is the per-model stats key 鈥?
             // pass the upstream model id (= the managed model id the UI's model card
             // shows) so per-model request/token/tftt buckets key on mo.id, not the
             // raw client string (which may be "provider/model" or an alias).
@@ -488,21 +488,21 @@ where
             app.record_rotation(&row.provider_id);
             if code == 429 {
                 // Quota-exhausted (not a rate window): the key is dead until the
-                // user tops up / the plan resets — quarantine it like an auth
+                // user tops up / the plan resets 鈥?quarantine it like an auth
                 // failure instead of cooling it for a minute and retrying forever.
                 let lower = snippet.to_lowercase();
                 let quota_dead = ["entitlement exhausted", "quota exhausted", "insufficient_quota",
-                    "exceeded your current quota", "insufficient balance", "余额不足"]
+                    "exceeded your current quota", "insufficient balance", "浣欓涓嶈冻"]
                     .iter().any(|m| lower.contains(m));
                 if quota_dead {
                     app.mark_invalid(&row.provider_id, &row.api_key_id, 30 * 60, &reason);
                     continue;
                 }
-                // Rate limited: v0.7.9 cooldown chain (Retry-After → learned →
-                // per-key → default). A background prober then measures the key's
+                // Rate limited: v0.7.9 cooldown chain (Retry-After 鈫?learned 鈫?
+                // per-key 鈫?default). A background prober then measures the key's
                 // real window.
                 app.mark_rate_limited(&row.provider_id, &row.api_key_id, retry_after, &reason);
-                // B-5: probe with the model that actually got 429'd — many
+                // B-5: probe with the model that actually got 429'd 鈥?many
                 // upstreams rate-limit per-model, so probing a different (first
                 // enabled) model would measure the wrong window.
                 spawn_prober(
@@ -523,7 +523,7 @@ where
             } else if code == 401 || code == 403 {
                 // Auth failure = the key itself is dead (invalid/revoked/out of quota
                 // tier). A 5s cooldown just lets round-robin feed it again forever;
-                // quarantine it for 30 minutes and surface it as 无效 in the UI.
+                // quarantine it for 30 minutes and surface it as 鏃犳晥 in the UI.
                 app.mark_invalid(&row.provider_id, &row.api_key_id, 30 * 60, &reason);
             } else {
                 // Other key-scoped errors (408/5xx): short rotate-out cooldown, long
@@ -534,8 +534,11 @@ where
             continue;
         }
 
-        // Request-scoped client error: same result on every key — don't burn the pool.
-        app.record_stat(false, Some(&row.api_key_id), &row.provider_id, &client_model);
+        // Request-scoped client error: same result on every key 鈥?don't burn the pool.
+        // F1: not attributed to the key either (the key served fine; the request was
+        // bad) 鈥?attributing it would dent the key's success_rate / K availability
+        // and its per-key fail tally for no fault of its own.
+        app.record_stat(false, None, &row.provider_id, &client_model);
         return error_response_for(
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
             format!("upstream error: {snippet}"),
@@ -544,9 +547,9 @@ where
     }
 
     // Only reachable if a short cooldown expires mid-loop and keys keep failing until the
-    // budget runs out. Never panic on the request path — fail fast with 429 instead.
-    // Same §6 Retry-After semantics, generalized to the candidate set (impl-spec §6, D6).
-    app.record_stat(false, None, &primary_provider, &client_model);
+    // budget runs out. Never panic on the request path 鈥?fail fast with 429 instead.
+    // Same 搂6 Retry-After semantics, generalized to the candidate set (impl-spec 搂6, D6).
+    app.record_stat(false, None, "unknown", &client_model);
     let retry = app.min_retry_after_candidates(&set);
     error_response_with_retry(
         StatusCode::TOO_MANY_REQUESTS,
@@ -557,7 +560,7 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Success rendering — OpenAI client
+// Success rendering 鈥?OpenAI client
 // ---------------------------------------------------------------------------
 
 fn finish_openai(
@@ -580,7 +583,7 @@ fn finish_openai(
 }
 
 // ---------------------------------------------------------------------------
-// Success rendering — Anthropic client
+// Success rendering 鈥?Anthropic client
 // ---------------------------------------------------------------------------
 
 fn finish_anthropic(
@@ -615,7 +618,7 @@ fn finish_generic(
     client_is_anthropic: bool,
 ) -> impl std::future::Future<Output = Response> {
     async move {
-        // Headers first — the client must receive them regardless of how the body ends.
+        // Headers first 鈥?the client must receive them regardless of how the body ends.
         let mut headers = HeaderMap::new();
         for (name, value) in resp.headers() {
             if name == reqwest::header::CONTENT_LENGTH || name == reqwest::header::TRANSFER_ENCODING {
@@ -667,9 +670,9 @@ fn finish_generic(
                             inbound,
                         ),
                     };
-                    // Strategy §2.2 `tpm` source: count tokens from the upstream's
+                    // Strategy 搂2.2 `tpm` source: count tokens from the upstream's
                     // reported `usage` (actual), falling back to a rough body estimate
-                    // when absent (decision ①A). Non-stream contributes to tpm only;
+                    // when absent (decision 鈶燗). Non-stream contributes to tpm only;
                     // tftt/tps are streaming-only (0 here, wired next chunk).
                     {
                         let up = upstream_proto_of(&app, &provider_id);
@@ -788,8 +791,8 @@ fn finish_generic(
 
 // ---------------------------------------------------------------------------
 // Streaming metrics: a transparent wrapper over the upstream bytes stream.
-// Records time-to-first-token (spec §2.2 `avg_tftt`, decision ②A), scans for the
-// upstream's `usage` chunk (decision ①A), and at stream end records token count
+// Records time-to-first-token (spec 搂2.2 `avg_tftt`, decision 鈶), scans for the
+// upstream's `usage` chunk (decision 鈶燗), and at stream end records token count
 // (`tpm`) + generation rate (`tps`). Wraps the raw upstream so the translation
 // state machines need no changes.
 // ---------------------------------------------------------------------------
@@ -822,9 +825,9 @@ fn scan_usage(chunk: &axum::body::Bytes, proto: Protocol) -> Option<(u64, u64)> 
 }
 
 /// Best-effort SSE first-token scanner: true when a `data:` line in this chunk
-/// carries the first piece of *generated content* — OpenAI `choices[0].delta.content`
+/// carries the first piece of *generated content* 鈥?OpenAI `choices[0].delta.content`
 /// (non-empty) or Anthropic `delta.text` (content_block_delta). Distinguishes the
-/// "首字延迟"/TFTT metric from the role/usage/stop chunks (which arrive immediately
+/// "棣栧瓧寤惰繜"/TFTT metric from the role/usage/stop chunks (which arrive immediately
 /// or at the end and carry no text). Same split-across-chunks caveat as `scan_usage`.
 fn scan_has_content(chunk: &axum::body::Bytes, proto: Protocol) -> bool {
     let text = match std::str::from_utf8(chunk) {
@@ -911,8 +914,8 @@ where
         let this = self.get_mut(); // safe: Self: Unpin
         match this.inner.poll_next_unpin(cx) {
             Poll::Ready(Some(Ok(chunk))) => {
-                // TFTT = time to the first *generated content* token (首字延迟),
-                // not the first chunk — OpenAI's role chunk and Anthropic's
+                // TFTT = time to the first *generated content* token (棣栧瓧寤惰繜),
+                // not the first chunk 鈥?OpenAI's role chunk and Anthropic's
                 // message_start arrive immediately and would read ~0. So wait for
                 // the first chunk whose data: line carries actual text.
                 if this.first && scan_has_content(&chunk, this.proto) {
@@ -1049,17 +1052,17 @@ fn find_event_end(buf: &[u8]) -> Option<usize> {
 
 /// Background prober: after a key gets 429'd, measure its real rate-limit window with a
 /// binary search. Start from T (the key's learned_cooldown if one exists, else the
-/// global default): probe at T — success means the window is shorter (explore [T/2, T]),
+/// global default): probe at T 鈥?success means the window is shorter (explore [T/2, T]),
 /// 429 means it is longer (explore [T, 2T]). Then bisect the bracket for a few rounds
 /// and store the result as the key's `learned_cooldown` (debounced config write).
 ///
-/// Timing model (B-1): all probe offsets are relative to `t0` = the 429 trigger time —
+/// Timing model (B-1): all probe offsets are relative to `t0` = the 429 trigger time 鈥?
 /// each round sleeps until `t0 + offset`, so wall-clock drift across rounds can't
 /// corrupt the measurement. Result (B-2): write `high + 1s` (the shortest offset
-/// proven to succeed), not the midpoint — underestimating loops the key back into
+/// proven to succeed), not the midpoint 鈥?underestimating loops the key back into
 /// 429s while the re-learn guard blocks recalibration. Overflow guard (B-3): if the
 /// first probe at PROBE_MAX_SECS still 429s, the window is beyond what probing can
-/// measure — write nothing (the key falls back to the Retry-After/default chain).
+/// measure 鈥?write nothing (the key falls back to the Retry-After/default chain).
 /// Negative cache (B-4): failed/aborted measurements also stamp `learned_at`, so a
 /// permanently-failing key doesn't spawn a prober on every 429.
 ///
@@ -1076,7 +1079,7 @@ fn spawn_prober(
 ) {
     /// Minimum window the search considers (seconds).
     const PROBE_MIN_SECS: u64 = 2;
-    /// Maximum window the search considers (seconds) — 15 min covers common per-minute
+    /// Maximum window the search considers (seconds) 鈥?15 min covers common per-minute
     /// and per-hour windows without probing all day.
     const PROBE_MAX_SECS: u64 = 900;
     /// Bisection iterations after the initial bracket is found.
@@ -1110,7 +1113,7 @@ fn spawn_prober(
         let mut probes_used = 0u32;
 
         // One probe at `offset` seconds after t0. Ok(true)=success, Ok(false)=still
-        // 429, Err=unlearnable (401/403/4xx/network) — abort without writing a value.
+        // 429, Err=unlearnable (401/403/4xx/network) 鈥?abort without writing a value.
         #[allow(clippy::too_many_arguments)]
         async fn probe(
             app: &Arc<App>,
@@ -1128,8 +1131,8 @@ fn spawn_prober(
             *probes_used += 1;
             // B-1: sleep until the absolute target t0+offset (not "offset from now").
             // NOTE: the prober deliberately does NOT hold the key in cooling during
-            // measurement (B-6 was reverted — benching keys for the whole probe
-            // duration collapsed the pool under 429 storms, PASS §30.3).
+            // measurement (B-6 was reverted 鈥?benching keys for the whole probe
+            // duration collapsed the pool under 429 storms, PASS 搂30.3).
             let wait_secs = offset_secs.saturating_sub(t0.elapsed().as_secs());
             tokio::time::sleep(Duration::from_secs(wait_secs)).await;
             let builder = apply_upstream_auth(
@@ -1146,14 +1149,17 @@ fn spawn_prober(
             }
         }
 
-        // Phase 1 — bracket the window around the initial guess T.
+        // Phase 1 鈥?bracket the window around the initial guess T.
         let (mut low, mut high) = match probe(&app, &url, &key_secret, &probe_body, t, t0, &mut probes_used, upstream_proto).await {
             Ok(true) => (t / 2, t), // window is shorter than T
             Ok(false) => {
-                // B-3: still limited at the search ceiling → the window is beyond
+                // B-3: still limited at the search ceiling 鈫?the window is beyond
                 // measurement (hourly/daily). Write nothing; keep the default chain.
+                // Also clear any stale learned value: it is provably wrong for this
+                // key and would otherwise keep outranking the default (F9).
                 if t >= PROBE_MAX_SECS {
                     app.note_probe_attempt(&key_id);
+                    app.clear_learned_cooldown(&provider_id, &key_id);
                     app.release_probe(&key_id);
                     return;
                 }
@@ -1166,7 +1172,7 @@ fn spawn_prober(
             }
         };
 
-        // Phase 2 — bisect [low, high] until the bracket is tight.
+        // Phase 2 鈥?bisect [low, high] until the bracket is tight.
         for _ in 0..PROBE_BISECT_ROUNDS {
             if high - low <= 1 {
                 break;
@@ -1181,7 +1187,7 @@ fn spawn_prober(
 
         app.release_probe(&key_id);
         // B-2: write the shortest PROVEN-successful offset (+1s margin), not the
-        // midpoint — cooling underestimates loop the key back into 429s, and the
+        // midpoint 鈥?cooling underestimates loop the key back into 429s, and the
         // re-learn guard would block recalibration for an hour.
         let learned = high + 1;
         if learned >= PROBE_MIN_SECS {
@@ -1193,7 +1199,7 @@ fn spawn_prober(
     });
 }
 
-/// GET /v1/models — serves the managed model catalog per provider (`provider/model`),
+/// GET /v1/models 鈥?serves the managed model catalog per provider (`provider/model`),
 /// plus aliases. Providers with no managed models (unmanaged) contribute nothing.
 pub async fn list_models(
     State(app): State<Arc<App>>,

@@ -131,6 +131,13 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Ceil a duration to whole seconds for client-facing Retry-After semantics:
+/// truncating (as_secs) would report "0s left" for a cooldown that still has
+/// a few hundred ms to run, telling clients to retry immediately (F11).
+fn ceil_secs(d: Duration) -> u64 {
+    (d.as_millis() as u64 + 999) / 1000
+}
+
 /// Fill candidate rows' runtime fields — cooldown-derived state (`valid` /
 /// `non_cooled` / `remaining_secs`, spec §2.3) + the metrics snapshot
 /// (`success_rate`/`rpm`/`tpm`/`avg_tftt`/`tps`/`token_balance`/`bill_balance`,
@@ -144,7 +151,7 @@ fn fill_rows(pool: &mut PoolRuntime, rows: &mut [crate::strategy::Row], now: Ins
         r.valid = !pool.invalid.contains_key(&r.api_key_id);
         if let Some(until) = pool.cooling.get(&r.api_key_id) {
             r.non_cooled = false;
-            r.remaining_secs = until.saturating_duration_since(now).as_secs();
+            r.remaining_secs = ceil_secs(until.saturating_duration_since(now));
         } else {
             r.non_cooled = true;
             r.remaining_secs = 0;
@@ -153,7 +160,7 @@ fn fill_rows(pool: &mut PoolRuntime, rows: &mut [crate::strategy::Row], now: Ins
         // live; token_balance is always None (no catalog provider exposes a
         // clean remaining-token-quota field); bill_balance is set by the balance
         // fetcher (None = +∞).
-        match pool.metrics.get(&r.api_key_id) {
+        match pool.metrics.get_mut(&r.api_key_id) {
             None => {
                 // No live history: keep the skeleton's seed values (spec §2.2
                 // "手动 seed" — set in build_candidates) for the measured
@@ -164,6 +171,16 @@ fn fill_rows(pool: &mut PoolRuntime, rows: &mut [crate::strategy::Row], now: Ins
                 r.availability = r.success_rate.clamp(0.0, 1.0);
             }
             Some(m) => {
+                // F5: prune the rolling windows on READ, not just on push —
+                // otherwise a key that stopped being routed keeps stale samples
+                // forever: rpm reads high (K's headroom sinks), success_rate is
+                // a stale-window rate. (Writes still prune on push; this makes
+                // the read path self-consistent for keys not recently pushed.)
+                let rpm_win = Duration::from_secs(METRIC_RPM_WINDOW_SECS);
+                let ok_win = Duration::from_secs(METRIC_SUCCESS_WINDOW_SECS);
+                m.req_times.retain(|t| now.duration_since(*t) <= rpm_win);
+                m.success.retain(|e| now.duration_since(e.0) <= ok_win);
+                m.token_events.retain(|(t, _)| now.duration_since(*t) <= Duration::from_secs(METRIC_TPM_WINDOW_SECS));
                 let total = m.success.len();
                 r.success_rate = if total == 0 {
                     1.0
@@ -380,6 +397,80 @@ mod tests {
         assert!((rows[0].availability - 0.75).abs() < 1e-9, "coinflip: got {}", rows[0].availability);
         assert!((rows[1].availability - 11.0 / 12.0).abs() < 1e-9, "veteran: got {}", rows[1].availability);
         assert!(rows[1].availability > rows[0].availability);
+    }
+
+    // --- F5/F9/F11 + first_usable_key (F3) ---
+
+    #[test]
+    fn ceil_secs_rounds_up_sub_second() {
+        assert_eq!(ceil_secs(Duration::from_millis(0)), 0);
+        assert_eq!(ceil_secs(Duration::from_millis(1)), 1, "1ms left must not say 0");
+        assert_eq!(ceil_secs(Duration::from_millis(1500)), 2);
+        assert_eq!(ceil_secs(Duration::from_secs(10)), 10);
+    }
+
+    #[test]
+    fn fill_rows_prunes_expired_windows_on_read() {
+        // F5: samples older than the window must not count even if no push has
+        // pruned them (the key hasn't been routed lately).
+        let mut pool = PoolRuntime::default();
+        let old = Instant::now() - Duration::from_secs(120); // beyond the 60s rpm window
+        {
+            let m = pool.metrics.entry("k".into()).or_default();
+            m.req_times.push_back(old);
+            m.req_times.push_back(old);
+            m.success.push_back((old, false));
+        }
+        let mut rows = vec![k_row("k", 1.0, Some(4))];
+        fill_rows(&mut pool, &mut rows, Instant::now());
+        assert_eq!(rows[0].rpm, 0, "expired rpm samples pruned on read");
+        // success window is 300s — the 120s-old failure still counts.
+        assert!((rows[0].success_rate - 0.0).abs() < 1e-9, "300s window keeps 120s-old sample");
+    }
+
+    #[test]
+    fn clear_learned_cooldown_removes_stale_value() {
+        let (app, dir) = app_with_provider(Some(5), None);
+        assert_eq!(app.learned_cooldown_of("p", "k"), Some(5));
+        app.clear_learned_cooldown("p", "k");
+        assert_eq!(app.learned_cooldown_of("p", "k"), None, "stale learned cleared");
+        // Clearing again is a no-op (and must not mark the config dirty).
+        app.clear_learned_cooldown("p", "k");
+        assert_eq!(app.learned_cooldown_of("p", "k"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn first_usable_key_skips_cooling_and_invalid() {
+        let dir = std::env::temp_dir().join(format!("fuk-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cfg = Config::default();
+        let key = |id: &str| crate::config::ApiKey {
+            id: id.into(), key: format!("sk-{id}"), label: id.into(),
+            cooldown_secs: None, learned_cooldown: None,
+            seed_rpm: None, seed_tpm: None, seed_success_rate: None,
+            seed_avg_tftt_ms: None, seed_tps: None,
+        };
+        cfg.providers.push(crate::config::Provider {
+            id: "p".into(), name: "P".into(), base_url: "http://p/v1".into(),
+            keys: vec![key("a"), key("b")],
+            models: vec![], model_allowlist_only: false,
+            aliases: Default::default(), protocol: String::new(),
+            has_token_balance_api: false, has_bill_balance_api: false,
+            price_table: Default::default(), output_price_table: Default::default(),
+            rpm_limit: None, tpm_limit: None,
+        });
+        let app = App::new(cfg, dir.join("gateway.json"));
+        let p = app.read_config().providers[0].clone();
+        // Both healthy → first key.
+        assert_eq!(app.first_usable_key(&p).as_deref(), Some("sk-a"));
+        // a cooling → skip to b.
+        app.mark_cooldown("p", "a", Some(30), "test");
+        assert_eq!(app.first_usable_key(&p).as_deref(), Some("sk-b"));
+        // b invalid, a cooling → both benched → fall back to first key.
+        app.mark_invalid("p", "b", 60, "test");
+        assert_eq!(app.first_usable_key(&p).as_deref(), Some("sk-a"), "all benched → first key");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // --- real-429 cooldown chain = v0.7.9 semantics (mark_rate_limited) ---
@@ -1012,13 +1103,14 @@ impl App {
         // the sort reorders the local copy only.
         let mut rows = set.rows.clone();
         let now = Instant::now();
+        // F8: one lock for fill + cursor read + select + cursor persist + rpm bump.
+        // select_pure is pure nanosecond-scale compute, so holding the pool lock
+        // across it is safe — and it closes the read-cursor → write-cursor race
+        // window where two concurrent requests could pick the same row.
         let mut pool = self.pool.lock().unwrap();
         fill_rows(&mut pool, &mut rows, now);
-        // D1 cursor: read under the same lock, advance inside select_pure, persist.
         let cursor = *pool.strategy_cursors.entry(set.cursor_key.clone()).or_insert(0);
-        drop(pool); // release before select_pure (pure; no pool access)
         let (result, new_cursor) = crate::strategy::select_pure(&mut rows, sorts, cursor);
-        let mut pool = self.pool.lock().unwrap();
         pool.strategy_cursors.insert(set.cursor_key.clone(), new_cursor);
         // A routed row bumps the rolling RPM window (matches pick_key's
         // req_times push, so the `rpm` sort attribute tracks live load).
@@ -1126,7 +1218,7 @@ impl App {
                 continue;
             }
             if let Some(until) = pool.cooling.get(&r.api_key_id) {
-                let secs = until.saturating_duration_since(now).as_secs();
+                let secs = ceil_secs(until.saturating_duration_since(now));
                 min = Some(min.map_or(secs, |m| m.min(secs)));
             }
         }
@@ -1137,11 +1229,30 @@ impl App {
         self.pool.lock().unwrap().last_error.remove(key_id);
     }
 
+    /// The first key of `provider` that is neither cooling nor invalid — for
+    /// auxiliary upstream calls (count_tokens, upstream model fetch) that don't
+    /// go through the strategy selector but still shouldn't hammer a benched
+    /// key (F3). Falls back to the first key when all are benched.
+    pub fn first_usable_key(&self, provider: &crate::config::Provider) -> Option<String> {
+        let now = Instant::now();
+        let mut pool = self.pool.lock().unwrap();
+        pool.cooling.retain(|_, u| *u > now);
+        pool.invalid.retain(|_, u| *u > now);
+        provider
+            .keys
+            .iter()
+            .find(|k| !pool.cooling.contains_key(&k.id) && !pool.invalid.contains_key(&k.id))
+            .or_else(|| provider.keys.first())
+            .map(|k| k.key.clone())
+    }
+
     pub fn clear_cooldown(&self, key_id: &str) {
         let mut pool = self.pool.lock().unwrap();
         pool.cooling.remove(key_id);
         pool.invalid.remove(key_id);
-        pool.probing.remove(key_id);
+        // NOTE: deliberately NOT clearing `probing` (F10) — a running prober
+        // keeps its dedup claim until it exits; clearing it here would let a
+        // second prober spawn and double-measure the key.
     }
 
     /// Note that a probe measurement was attempted for this key (regardless of
@@ -1154,10 +1265,29 @@ impl App {
             .insert(key_id.to_string(), std::time::Instant::now());
     }
 
+    /// Clear a key's learned_cooldown (machine-written value). Called when the
+    /// prober finds the window unlearnable (still 429 at the 900s ceiling): a
+    /// stale learned value would otherwise keep outranking the global default
+    /// in the cooldown chain while being provably wrong.
+    pub fn clear_learned_cooldown(&self, provider_id: &str, key_id: &str) {
+        let changed = {
+            let mut cfg = self.config.write().unwrap();
+            match cfg
+                .provider_by_id_mut(provider_id)
+                .and_then(|p| p.keys.iter_mut().find(|k| k.id == key_id))
+            {
+                Some(k) => k.learned_cooldown.take().is_some(),
+                None => false,
+            }
+        };
+        if changed {
+            self.mark_config_dirty();
+        }
+    }
+
     /// Record a measured cooldown (seconds) learned by post-429 probing into the key's
     /// config, and mark gateway.json dirty for the debounced flush.
-    pub fn set_learned_cooldown(&self, provider_id: &str, key_id: &str, secs: u64) {
-        // Write under the write lock directly; no immediate file save (debounced).
+    pub fn set_learned_cooldown(&self, provider_id: &str, key_id: &str, secs: u64) {        // Write under the write lock directly; no immediate file save (debounced).
         let mut cfg = self.config.write().unwrap();
         if let Some(p) = cfg.provider_by_id_mut(provider_id) {
             if let Some(k) = p.keys.iter_mut().find(|k| k.id == key_id) {

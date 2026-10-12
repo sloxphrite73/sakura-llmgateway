@@ -414,7 +414,10 @@ pub async fn toggle_model(
     }
 }
 
-/// GET /api/providers/{id}/upstream-models — fetch the provider's live /v1/models.
+/// GET /api/providers/{id}/upstream-models — fetch the provider's live model list.
+/// Protocol-aware (F2): OpenAI upstreams take `GET {base}/models` + Bearer;
+/// Anthropic upstreams take `GET {base}/v1/models` (base with a `/v1` suffix is
+/// trimmed first) + x-api-key.
 pub async fn upstream_models(
     State(app): State<std::sync::Arc<App>>,
     Path(id): Path<String>,
@@ -427,11 +430,19 @@ pub async fn upstream_models(
     if provider.keys.is_empty() {
         return err(StatusCode::BAD_REQUEST, "provider has no API keys configured");
     }
-    let url = format!("{}/models", provider.base_url.trim_end_matches('/'));
-    match app
-        .http
-        .get(&url)
-        .bearer_auth(&provider.keys[0].key)
+    let proto = provider.protocol();
+    let base = provider.base_url.trim_end_matches('/');
+    let url = match proto {
+        crate::protocol::Protocol::OpenAi => format!("{base}/models"),
+        crate::protocol::Protocol::Anthropic => {
+            let b = base.strip_suffix("/v1").unwrap_or(base);
+            format!("{b}/v1/models")
+        }
+    };
+    // F3: first non-cooling, non-invalid key — not blindly keys[0].
+    let key = app.first_usable_key(&provider).unwrap_or_default();
+    let req = crate::proxy::apply_upstream_auth(app.http.get(&url), &key, proto);
+    match req
         .timeout(std::time::Duration::from_secs(15))
         .send()
         .await
@@ -576,20 +587,17 @@ pub async fn export_config(State(app): State<std::sync::Arc<App>>) -> Response {
         .and_then(|n| n.to_str())
         .unwrap_or("gateway.json")
         .to_string();
-    (
-        StatusCode::OK,
-        [
-            ("content-type", "application/json; charset=utf-8"),
-            (
-                "content-disposition",
-                Box::leak(format!("attachment; filename=\"{filename}\"\0").into_boxed_str())
-                    .strip_suffix('\0')
-                    .unwrap_or("attachment"),
-            ),
-        ],
-        body,
-    )
-        .into_response()
+    let mut resp = (StatusCode::OK, body).into_response();
+    let headers = resp.headers_mut();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    // F6: build the disposition header value directly (no Box::leak, no NUL hack).
+    if let Ok(v) = axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{filename}\"")) {
+        headers.insert(axum::http::header::CONTENT_DISPOSITION, v);
+    }
+    resp
 }
 
 #[derive(serde::Deserialize)]

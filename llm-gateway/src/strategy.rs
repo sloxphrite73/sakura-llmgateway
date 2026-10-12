@@ -210,6 +210,12 @@ pub fn build_candidates(cfg: &Config, client_model: &str) -> Result<CandidateSet
 
     // Build the filtered entry list (§4 four modes). `price_key` = logical
     // model for group-derived rows, the upstream model id otherwise.
+    // F0: group-derived entries are additionally checked against the target
+    // provider's own allowlist/enabled state — a group entry must not smuggle
+    // in a model the provider has disabled.
+    let group_entry_allowed = |pid: &str, um: &str| -> bool {
+        cfg.provider_by_id(pid).map(|p| p.model_allowed(um)).unwrap_or(false)
+    };
     let entries: Vec<Entry> = match (filter.lock_model_group, lock_provider) {
         (true, true) => {
             // both ON: exact (resolved_provider, this model).
@@ -218,7 +224,7 @@ pub fn build_candidates(cfg: &Config, client_model: &str) -> Result<CandidateSet
                 Some(g) => g
                     .entries
                     .iter()
-                    .filter(|(p, _)| p == pid)
+                    .filter(|(p, um)| p == pid && group_entry_allowed(p, um))
                     .map(|(p, um)| (p.clone(), um.clone(), logical_model.clone()))
                     .collect(),
                 None => vec![(pid.clone(), logical_model.clone(), logical_model.clone())],
@@ -230,6 +236,7 @@ pub fn build_candidates(cfg: &Config, client_model: &str) -> Result<CandidateSet
                 Some(g) => g
                     .entries
                     .iter()
+                    .filter(|(p, um)| group_entry_allowed(p, um))
                     .map(|(p, um)| (p.clone(), um.clone(), logical_model.clone()))
                     .collect(),
                 None => {
@@ -945,5 +952,25 @@ mod tests {
         let cfg = cfg_two_providers();
         let set = build_candidates(&cfg, "pa/gpt-4o").unwrap();
         assert!(set.rows.iter().all(|r| r.capacity_rpm.is_none()));
+    }
+
+    #[test]
+    fn group_entries_respect_target_provider_allowlist() {
+        // F0: a group entry whose model is disabled on its provider (allowlist
+        // mode on) must not produce candidate rows — group membership does not
+        // override the provider's own model allowlist.
+        let mut cfg = cfg_two_providers();
+        let pa = cfg.providers.iter_mut().find(|p| p.id == "pa").unwrap();
+        pa.model_allowlist_only = true;
+        pa.models.iter_mut().find(|m| m.id == "gpt-4o").unwrap().enabled = false;
+        // model-first over group gpt-4o: pa's entries must be gone, pb's remain.
+        cfg.strategy.filter = Filter { lock_model_group: true, lock_provider: false };
+        let set = build_candidates(&cfg, "gpt-4o").unwrap();
+        assert_eq!(key_pairs(&set), vec![("pb".into(), "b1".into())], "pa's disabled entry excluded");
+        // both-ON with the group on "pa/gpt-4o": pa's entry is disallowed → but
+        // resolve_request already rejects (allowlist) before we get here, so
+        // build_candidates errors out. Verify that guard fires.
+        let cfg2 = cfg.clone();
+        assert!(build_candidates(&cfg2, "pa/gpt-4o").is_err(), "allowlist rejects at resolve");
     }
 }
