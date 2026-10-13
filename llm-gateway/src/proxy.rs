@@ -50,7 +50,7 @@ fn error_response_for(status: StatusCode, message: String, inbound: Protocol) ->
 }
 
 /// Like `error_response_for`, but attaches a `Retry-After` header (delta-seconds)
-/// when given 鈥?used for the spec 搂6 "all-cooling" 429 so the client learns the
+/// when given — used for the spec §6 "all-cooling" 429 so the client learns the
 /// soonest a valid key recovers (learned_cooldown-driven; the OmniRoute
 /// differentiator: precise seconds, not a fixed dead value).
 fn error_response_with_retry(
@@ -68,8 +68,8 @@ fn error_response_with_retry(
     resp
 }
 
-/// Gateway-level auth. Accepts the token from `Authorization: Bearer <t>` or 鈥?
-/// for Anthropic clients (Claude Code etc.) 鈥?from `x-api-key: <t>`.
+/// Gateway-level auth. Accepts the token from `Authorization: Bearer <t>` or —
+/// for Anthropic clients (Claude Code etc.) — from `x-api-key: <t>`.
 fn extract_auth_token(headers: &HeaderMap) -> String {
     if let Some(v) = headers.get(axum::http::header::AUTHORIZATION) {
         if let Ok(s) = v.to_str() {
@@ -190,7 +190,7 @@ pub async fn chat_completions(
 // POST /v1/messages (+ count_tokens)
 // ---------------------------------------------------------------------------
 
-/// POST /v1/messages 鈥?Anthropic Messages inbound.
+/// POST /v1/messages — Anthropic Messages inbound.
 pub async fn anthropic_messages(
     State(app): State<Arc<App>>,
     headers: HeaderMap,
@@ -210,7 +210,7 @@ pub async fn anthropic_messages(
     .await
 }
 
-/// POST /v1/messages/count_tokens 鈥?proxy to the upstream when it speaks
+/// POST /v1/messages/count_tokens — proxy to the upstream when it speaks
 /// Anthropic; local estimate otherwise (never 404: Claude Code depends on this).
 pub async fn anthropic_count_tokens(
     State(app): State<Arc<App>>,
@@ -244,7 +244,7 @@ pub async fn anthropic_count_tokens(
 
     match provider.protocol() {
         Protocol::Anthropic => {
-            // F3: first non-cooling, non-invalid key 鈥?not blindly keys[0].
+            // F3: first non-cooling, non-invalid key — not blindly keys[0].
             let key = app.first_usable_key(&provider).unwrap_or_default();
             let base = provider.base_url.trim_end_matches('/');
             let url = if base.ends_with("/v1") {
@@ -289,7 +289,7 @@ pub async fn anthropic_count_tokens(
 /// Build the request payload in the *upstream's* protocol, with the upstream
 /// model name substituted in. Extracted from the old inline block so the
 /// strategy layer can rebuild it per attempt when the selected candidate's
-/// provider/model differs (impl-spec 搂5.2: "鎸?attempt 璋冪敤").
+/// provider/model differs (impl-spec §5.2: "鎸?attempt 璋冪敤").
 fn build_upstream_payload(
     inbound_body: &serde_json::Value,
     inbound: Protocol,
@@ -316,9 +316,9 @@ fn build_upstream_payload(
 }
 
 /// Translate + dispatch + retry-loop shared by both inbound endpoints. Drives
-/// the strategy layer (spec 搂3-搂6): candidates are built once, then each
+/// the strategy layer (spec §3-§6): candidates are built once, then each
 /// attempt `select_strategy` re-walks the (cooling/invalid-updated) candidate
-/// set and returns either a routed row or a 搂6 terminal (AllCooling / NoValid /
+/// set and returns either a routed row or a §6 terminal (AllCooling / NoValid /
 /// Empty). `finish` renders the final success response in the client's protocol.
 async fn forward<F, Fut>(
     app: Arc<App>,
@@ -388,7 +388,7 @@ where
         let row = match app.select_strategy(&set, &sorts) {
             SelectResult::Routed(r) => r,
             SelectResult::AllCooling { retry_after } => {
-                // 搂6: all valid keys are cooling 鈫?429 + Retry-After (the soonest
+                // §6: all valid keys are cooling →429 + Retry-After (the soonest
                 // recovery, learned_cooldown-driven). Absent when none is merely
                 // cooling (invalid doesn't recover by waiting).
                 app.record_stat(false, None, "unknown", &client_model);
@@ -400,8 +400,8 @@ where
                 );
             }
             SelectResult::NoValid => {
-                // 搂6: no valid row 鈫?429 with no Retry-After (invalid keys
-                // don't recover by waiting, per spec 搂6 "鏃?valid 琛?).
+                // §6: no valid row →429 with no Retry-After (invalid keys
+                // don't recover by waiting, per spec §6 "鏃?valid 琛?).
                 app.record_stat(false, None, "unknown", &client_model);
                 return error_response_with_retry(
                     StatusCode::TOO_MANY_REQUESTS,
@@ -462,7 +462,7 @@ where
         let status = resp.status();
         if status.is_success() {
             app.clear_error(&row.api_key_id);
-            // The `client_model` param of finish_generic is the per-model stats key 鈥?
+            // The `client_model` param of finish_generic is the per-model stats key —
             // pass the upstream model id (= the managed model id the UI's model card
             // shows) so per-model request/token/tftt buckets key on mo.id, not the
             // raw client string (which may be "provider/model" or an alias).
@@ -488,7 +488,7 @@ where
             app.record_rotation(&row.provider_id);
             if code == 429 {
                 // Quota-exhausted (not a rate window): the key is dead until the
-                // user tops up / the plan resets 鈥?quarantine it like an auth
+                // user tops up / the plan resets — quarantine it like an auth
                 // failure instead of cooling it for a minute and retrying forever.
                 let lower = snippet.to_lowercase();
                 let quota_dead = ["entitlement exhausted", "quota exhausted", "insufficient_quota",
@@ -498,11 +498,11 @@ where
                     app.mark_invalid(&row.provider_id, &row.api_key_id, 30 * 60, &reason);
                     continue;
                 }
-                // Rate limited: v0.7.9 cooldown chain (Retry-After 鈫?learned 鈫?
-                // per-key 鈫?default). A background prober then measures the key's
+                // Rate limited: v0.7.9 cooldown chain (Retry-After →learned →
+                // per-key →default). A background prober then measures the key's
                 // real window.
                 app.mark_rate_limited(&row.provider_id, &row.api_key_id, retry_after, &reason);
-                // B-5: probe with the model that actually got 429'd 鈥?many
+                // B-5: probe with the model that actually got 429'd — many
                 // upstreams rate-limit per-model, so probing a different (first
                 // enabled) model would measure the wrong window.
                 spawn_prober(
@@ -534,9 +534,9 @@ where
             continue;
         }
 
-        // Request-scoped client error: same result on every key 鈥?don't burn the pool.
+        // Request-scoped client error: same result on every key — don't burn the pool.
         // F1: not attributed to the key either (the key served fine; the request was
-        // bad) 鈥?attributing it would dent the key's success_rate / K availability
+        // bad) — attributing it would dent the key's success_rate / K availability
         // and its per-key fail tally for no fault of its own.
         app.record_stat(false, None, &row.provider_id, &client_model);
         return error_response_for(
@@ -547,8 +547,8 @@ where
     }
 
     // Only reachable if a short cooldown expires mid-loop and keys keep failing until the
-    // budget runs out. Never panic on the request path 鈥?fail fast with 429 instead.
-    // Same 搂6 Retry-After semantics, generalized to the candidate set (impl-spec 搂6, D6).
+    // budget runs out. Never panic on the request path — fail fast with 429 instead.
+    // Same §6 Retry-After semantics, generalized to the candidate set (impl-spec §6, D6).
     app.record_stat(false, None, "unknown", &client_model);
     let retry = app.min_retry_after_candidates(&set);
     error_response_with_retry(
@@ -560,7 +560,7 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Success rendering 鈥?OpenAI client
+// Success rendering — OpenAI client
 // ---------------------------------------------------------------------------
 
 fn finish_openai(
@@ -583,7 +583,7 @@ fn finish_openai(
 }
 
 // ---------------------------------------------------------------------------
-// Success rendering 鈥?Anthropic client
+// Success rendering — Anthropic client
 // ---------------------------------------------------------------------------
 
 fn finish_anthropic(
@@ -618,7 +618,7 @@ fn finish_generic(
     client_is_anthropic: bool,
 ) -> impl std::future::Future<Output = Response> {
     async move {
-        // Headers first 鈥?the client must receive them regardless of how the body ends.
+        // Headers first — the client must receive them regardless of how the body ends.
         let mut headers = HeaderMap::new();
         for (name, value) in resp.headers() {
             if name == reqwest::header::CONTENT_LENGTH || name == reqwest::header::TRANSFER_ENCODING {
@@ -670,7 +670,7 @@ fn finish_generic(
                             inbound,
                         ),
                     };
-                    // Strategy 搂2.2 `tpm` source: count tokens from the upstream's
+                    // Strategy §2.2 `tpm` source: count tokens from the upstream's
                     // reported `usage` (actual), falling back to a rough body estimate
                     // when absent (decision 鈶燗). Non-stream contributes to tpm only;
                     // tftt/tps are streaming-only (0 here, wired next chunk).
@@ -791,7 +791,7 @@ fn finish_generic(
 
 // ---------------------------------------------------------------------------
 // Streaming metrics: a transparent wrapper over the upstream bytes stream.
-// Records time-to-first-token (spec 搂2.2 `avg_tftt`, decision 鈶), scans for the
+// Records time-to-first-token (spec §2.2 `avg_tftt`, decision 鈶), scans for the
 // upstream's `usage` chunk (decision 鈶燗), and at stream end records token count
 // (`tpm`) + generation rate (`tps`). Wraps the raw upstream so the translation
 // state machines need no changes.
@@ -825,7 +825,7 @@ fn scan_usage(chunk: &axum::body::Bytes, proto: Protocol) -> Option<(u64, u64)> 
 }
 
 /// Best-effort SSE first-token scanner: true when a `data:` line in this chunk
-/// carries the first piece of *generated content* 鈥?OpenAI `choices[0].delta.content`
+/// carries the first piece of *generated content* — OpenAI `choices[0].delta.content`
 /// (non-empty) or Anthropic `delta.text` (content_block_delta). Distinguishes the
 /// "棣栧瓧寤惰繜"/TFTT metric from the role/usage/stop chunks (which arrive immediately
 /// or at the end and carry no text). Same split-across-chunks caveat as `scan_usage`.
@@ -915,7 +915,7 @@ where
         match this.inner.poll_next_unpin(cx) {
             Poll::Ready(Some(Ok(chunk))) => {
                 // TFTT = time to the first *generated content* token (棣栧瓧寤惰繜),
-                // not the first chunk 鈥?OpenAI's role chunk and Anthropic's
+                // not the first chunk — OpenAI's role chunk and Anthropic's
                 // message_start arrive immediately and would read ~0. So wait for
                 // the first chunk whose data: line carries actual text.
                 if this.first && scan_has_content(&chunk, this.proto) {
@@ -1050,19 +1050,127 @@ fn find_event_end(buf: &[u8]) -> Option<usize> {
 // Background prober (binary-search cooldown learning)
 // ---------------------------------------------------------------------------
 
+/// Binary search over "seconds since the 429" — pure decision logic, split out
+/// of the async driver for unit testing.
+///
+/// The critical rule: `conclusion()` may only produce a value when some probe
+/// actually SUCCEEDED (i.e. `high` is a proven-working wait). A search where
+/// every probe 429'd must NOT fabricate `high+1` — the bracket's high was
+/// never proven, and writing it parks the key for ~900s+ per 429, which
+/// collapses the pool during a global saturation period (the "day-two
+/// fail-all" incident, PASS §35).
+struct WindowSearch {
+    t: u64,
+    low: u64,
+    high: u64,
+    /// A probe succeeded at the current `high` (so `high` is a proven wait).
+    proven: bool,
+    probes_used: u32,
+    bisects_done: u32,
+    bracketed: bool,
+    /// First probe at the ceiling still 429'd — window beyond measurement.
+    beyond_ceiling: bool,
+    /// Offset of the in-flight probe (what `record` refers to during bisection).
+    pending: u64,
+    /// Abort flag set by `abort` (probe-channel failure: keep the bracket).
+    done: bool,
+}
+
+impl WindowSearch {
+    const MAX_SECS: u64 = 900;
+    const BISECT_ROUNDS: u32 = 5;
+    const MAX_PROBES: u32 = 10;
+
+    fn new(t: u64) -> Self {
+        let t = t.clamp(2, Self::MAX_SECS);
+        Self {
+            t,
+            low: 0,
+            high: 0,
+            proven: false,
+            probes_used: 0,
+            bisects_done: 0,
+            bracketed: false,
+            beyond_ceiling: false,
+            pending: t,
+            done: false,
+        }
+    }
+
+    /// Offset (seconds after t0) of the next probe, or None when the search ended.
+    fn next_offset(&mut self) -> Option<u64> {
+        if self.done || self.beyond_ceiling || self.probes_used >= Self::MAX_PROBES {
+            return None;
+        }
+        if !self.bracketed {
+            self.pending = self.t;
+            return Some(self.t);
+        }
+        if self.high - self.low <= 1 || self.bisects_done >= Self::BISECT_ROUNDS {
+            return None;
+        }
+        self.pending = (self.low + self.high) / 2;
+        Some(self.pending)
+    }
+
+    /// Record the outcome of the probe at the last `next_offset()` value.
+    fn record(&mut self, success: bool) {
+        self.probes_used += 1;
+        if !self.bracketed {
+            self.bracketed = true;
+            if success {
+                self.low = self.t / 2;
+                self.high = self.t;
+                self.proven = true;
+            } else if self.t >= Self::MAX_SECS {
+                // B-3: still limited at the ceiling → unlearnable.
+                self.beyond_ceiling = true;
+            } else {
+                self.low = self.t;
+                self.high = (self.t * 2).min(Self::MAX_SECS);
+            }
+            return;
+        }
+        self.bisects_done += 1;
+        if success {
+            self.high = self.pending;
+            self.proven = true;
+        } else {
+            self.low = self.pending;
+        }
+    }
+
+    /// Probe-channel failure (network/4xx): stop the search, keep the bracket.
+    fn abort(&mut self) {
+        self.done = true;
+    }
+
+    /// The learned cooldown: `high + 1` ONLY when `high` was proven by an
+    /// actual successful probe. None = unlearnable (never write a fabricated
+    /// value — that was the pool-collapsing bug).
+    fn conclusion(&self) -> Option<u64> {
+        if self.proven {
+            Some(self.high + 1)
+        } else {
+            None
+        }
+    }
+}
+
+
 /// Background prober: after a key gets 429'd, measure its real rate-limit window with a
 /// binary search. Start from T (the key's learned_cooldown if one exists, else the
-/// global default): probe at T 鈥?success means the window is shorter (explore [T/2, T]),
+/// global default): probe at T — success means the window is shorter (explore [T/2, T]),
 /// 429 means it is longer (explore [T, 2T]). Then bisect the bracket for a few rounds
 /// and store the result as the key's `learned_cooldown` (debounced config write).
 ///
-/// Timing model (B-1): all probe offsets are relative to `t0` = the 429 trigger time 鈥?
+/// Timing model (B-1): all probe offsets are relative to `t0` = the 429 trigger time —
 /// each round sleeps until `t0 + offset`, so wall-clock drift across rounds can't
 /// corrupt the measurement. Result (B-2): write `high + 1s` (the shortest offset
-/// proven to succeed), not the midpoint 鈥?underestimating loops the key back into
+/// proven to succeed), not the midpoint — underestimating loops the key back into
 /// 429s while the re-learn guard blocks recalibration. Overflow guard (B-3): if the
 /// first probe at PROBE_MAX_SECS still 429s, the window is beyond what probing can
-/// measure 鈥?write nothing (the key falls back to the Retry-After/default chain).
+/// measure — write nothing (the key falls back to the Retry-After/default chain).
 /// Negative cache (B-4): failed/aborted measurements also stamp `learned_at`, so a
 /// permanently-failing key doesn't spawn a prober on every 429.
 ///
@@ -1079,7 +1187,7 @@ fn spawn_prober(
 ) {
     /// Minimum window the search considers (seconds).
     const PROBE_MIN_SECS: u64 = 2;
-    /// Maximum window the search considers (seconds) 鈥?15 min covers common per-minute
+    /// Maximum window the search considers (seconds) — 15 min covers common per-minute
     /// and per-hour windows without probing all day.
     const PROBE_MAX_SECS: u64 = 900;
     /// Bisection iterations after the initial bracket is found.
@@ -1110,11 +1218,9 @@ fn spawn_prober(
 
         // B-1: anchor every probe offset to the 429 trigger moment.
         let t0 = std::time::Instant::now();
-        let mut probes_used = 0u32;
 
         // One probe at `offset` seconds after t0. Ok(true)=success, Ok(false)=still
-        // 429, Err=unlearnable (401/403/4xx/network) 鈥?abort without writing a value.
-        #[allow(clippy::too_many_arguments)]
+        // 429, Err=unlearnable (401/403/4xx/network) — abort, keep the bracket.
         async fn probe(
             app: &Arc<App>,
             url: &str,
@@ -1122,17 +1228,12 @@ fn spawn_prober(
             body: &serde_json::Value,
             offset_secs: u64,
             t0: std::time::Instant,
-            probes_used: &mut u32,
             proto: Protocol,
         ) -> Result<bool, ()> {
-            if *probes_used >= PROBE_MAX_PROBES {
-                return Err(());
-            }
-            *probes_used += 1;
             // B-1: sleep until the absolute target t0+offset (not "offset from now").
             // NOTE: the prober deliberately does NOT hold the key in cooling during
-            // measurement (B-6 was reverted 鈥?benching keys for the whole probe
-            // duration collapsed the pool under 429 storms, PASS 搂30.3).
+            // measurement (B-6 was reverted — benching keys for the whole probe
+            // duration collapsed the pool under 429 storms, PASS §30.3).
             let wait_secs = offset_secs.saturating_sub(t0.elapsed().as_secs());
             tokio::time::sleep(Duration::from_secs(wait_secs)).await;
             let builder = apply_upstream_auth(
@@ -1149,57 +1250,46 @@ fn spawn_prober(
             }
         }
 
-        // Phase 1 鈥?bracket the window around the initial guess T.
-        let (mut low, mut high) = match probe(&app, &url, &key_secret, &probe_body, t, t0, &mut probes_used, upstream_proto).await {
-            Ok(true) => (t / 2, t), // window is shorter than T
-            Ok(false) => {
-                // B-3: still limited at the search ceiling 鈫?the window is beyond
-                // measurement (hourly/daily). Write nothing; keep the default chain.
-                // Also clear any stale learned value: it is provably wrong for this
-                // key and would otherwise keep outranking the default (F9).
-                if t >= PROBE_MAX_SECS {
-                    app.note_probe_attempt(&key_id);
-                    app.clear_learned_cooldown(&provider_id, &key_id);
-                    app.release_probe(&key_id);
-                    return;
+        // Drive the pure search state machine.
+        let mut search = WindowSearch::new(t);
+        while let Some(offset) = search.next_offset() {
+            match probe(&app, &url, &key_secret, &probe_body, offset, t0, upstream_proto).await {
+                Ok(success) => search.record(success),
+                Err(()) => {
+                    search.abort();
+                    break;
                 }
-                (t, (t * 2).min(PROBE_MAX_SECS))
-            }
-            Err(()) => {
-                app.note_probe_attempt(&key_id); // B-4: negative-cache the failed attempt
-                app.release_probe(&key_id);
-                return;
-            }
-        };
-
-        // Phase 2 鈥?bisect [low, high] until the bracket is tight.
-        for _ in 0..PROBE_BISECT_ROUNDS {
-            if high - low <= 1 {
-                break;
-            }
-            let mid = (low + high) / 2;
-            match probe(&app, &url, &key_secret, &probe_body, mid, t0, &mut probes_used, upstream_proto).await {
-                Ok(true) => high = mid,
-                Ok(false) => low = mid,
-                Err(()) => break, // keep whatever bracket we have; still write high
             }
         }
 
         app.release_probe(&key_id);
-        // B-2: write the shortest PROVEN-successful offset (+1s margin), not the
-        // midpoint 鈥?cooling underestimates loop the key back into 429s, and the
-        // re-learn guard would block recalibration for an hour.
-        let learned = high + 1;
-        if learned >= PROBE_MIN_SECS {
-            app.set_learned_cooldown(&provider_id, &key_id, learned);
-            app.clear_error(&key_id);
-        } else {
-            app.note_probe_attempt(&key_id);
+        match search.conclusion() {
+            // B-2: write the shortest PROVEN-successful offset (+1s margin).
+            Some(learned) if learned >= PROBE_MIN_SECS => {
+                app.set_learned_cooldown(&provider_id, &key_id, learned);
+                app.clear_error(&key_id);
+            }
+            _ => {
+                // Unlearnable: no probe ever succeeded (or the channel died before
+                // any success). NEVER write a value — an unproven high+1 fabricates
+                // a ~900s cooldown (the day-two pool-collapse bug, PASS §35).
+                // B-4: negative-cache the attempt. If a stale learned value itself
+                // claims a beyond-ceiling window (an artifact of that bug), clear
+                // it so the key falls back to the default chain.
+                app.note_probe_attempt(&key_id);
+                let stale = app
+                    .learned_cooldown_of(&provider_id, &key_id)
+                    .map(|v| v >= PROBE_MAX_SECS)
+                    .unwrap_or(false);
+                if stale {
+                    app.clear_learned_cooldown(&provider_id, &key_id);
+                }
+            }
         }
     });
 }
 
-/// GET /v1/models 鈥?serves the managed model catalog per provider (`provider/model`),
+/// GET /v1/models — serves the managed model catalog per provider (`provider/model`),
 /// plus aliases. Providers with no managed models (unmanaged) contribute nothing.
 pub async fn list_models(
     State(app): State<Arc<App>>,
@@ -1245,4 +1335,78 @@ pub async fn list_models(
         axum::Json(serde_json::json!({ "object": "list", "data": out, "created": now_ms() / 1000 })),
     )
         .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drive a WindowSearch against a scripted window size: a probe at offset d
+    /// "succeeds" iff d >= window. Returns the concluded learned value.
+    fn run_search(t: u64, window: u64) -> Option<u64> {
+        let mut s = WindowSearch::new(t);
+        while let Some(off) = s.next_offset() {
+            s.record(off >= window);
+        }
+        s.conclusion()
+    }
+
+    #[test]
+    fn search_learns_a_30s_window() {
+        // t=60: probe@60 ok → [30,60]; bisect 45 ok → [30,45]; 37 ok → [30,37];
+        // 33 ok → [30,33]; 31 ok → [30,31] tight. high=31 proven → 32.
+        assert_eq!(run_search(60, 30), Some(32));
+    }
+
+    #[test]
+    fn search_learns_a_window_above_the_guess() {
+        // t=60, window=100: @60 429 → [60,120]; @90 429 → [90,120]; @105 ok →
+        // [90,105]; @97 429 → [97,105]; @101 ok → [97,101]; tight? 101-97=4,
+        // rounds exhausted. high=101 proven → 102.
+        assert_eq!(run_search(60, 100), Some(102));
+    }
+
+    #[test]
+    fn never_successful_search_writes_nothing() {
+        // The day-two bug: window beyond the ceiling, every probe 429s.
+        // Old code wrote high+1 (~901); now it must write NOTHING.
+        assert_eq!(run_search(60, 10_000), None, "all-429 search is unlearnable");
+        // Even starting AT the ceiling.
+        assert_eq!(run_search(900, 10_000), None);
+    }
+
+    #[test]
+    fn abort_keeps_a_proven_bracket() {
+        // First probe ok (t=60 → bracket [30,60] proven), then the channel dies:
+        // abort → conclusion still uses the proven high.
+        let mut s = WindowSearch::new(60);
+        let off = s.next_offset().unwrap();
+        s.record(off >= 30); // success
+        s.abort();
+        assert_eq!(s.next_offset(), None);
+        assert_eq!(s.conclusion(), Some(61));
+    }
+
+    #[test]
+    fn probe_cap_is_respected() {
+        // A window just under the ceiling with t=2: the bracket [2,900] needs
+        // log2(900)≈10 bisections; the 10-probe cap must stop it — and since a
+        // success DID happen along the way (offsets ≥ window succeed), the
+        // conclusion is the proven high, not a fabricated one.
+        let mut s = WindowSearch::new(2);
+        let mut n = 0;
+        while let Some(off) = s.next_offset() {
+            n += 1;
+            s.record(off >= 890);
+        }
+        assert!(n <= 10, "probe cap: {n}");
+        if let Some(v) = s.conclusion() {
+            // 890 window: offsets 451 (ok) → high proven; learned = proven high+1.
+            assert!(v >= 891, "learned {v} must not be below the real window");
+        }
+    }
 }
