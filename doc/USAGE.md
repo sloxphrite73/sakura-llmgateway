@@ -287,12 +287,16 @@ api_key_id)` triple table and, per request:
    attempt" score: `smoothed success_rate × capacity headroom`. The success
    rate is Bayesian-smoothed as `(ok + 2) / (n + 2)` over the 5-min rolling
    window (no history → 1.0, so new keys are never penalized). Headroom =
-   `1 − current RPM / capacity`, clamped to `[0.05, 1]` — a key near its limit
-   is heavily deprioritized but never excluded (true rate-limiting is the
-   cooldown layer's job). Capacity resolution: the key's `seed_rpm` first, else
-   the provider's `rpm_limit` split evenly across its keys, else unknown →
-   headroom 1.0 (K then ranks by success alone). When every candidate scores
-   equal, K degenerates to the round-robin tiebreak.
+   `1 − max(RPM utilization, TPM utilization)`, clamped to `[0.05, 1]` — a key
+   near its limit is heavily deprioritized but never excluded (true
+   rate-limiting is the cooldown layer's job). Capacity resolution:
+   **measured** (every real 429 samples the key's 60s-window (rpm, tpm) usage;
+   the min of the last 20 samples estimates the capacity's lower bound,
+   persisted in `stats.key_metrics`) → the key's `seed_rpm` → the provider's
+   `rpm_limit`/`tpm_limit` split evenly across its keys → unknown → headroom
+   1.0 (K then ranks by success alone). When every candidate scores equal, K
+   degenerates to the round-robin tiebreak. The API Key page has a
+   "Utilization" column (hover shows the measured capacity).
 4. **Walk** — scan top-down, take the first `valid + non-cooled` row; route it.
 5. **Terminal**:
    - routed → serve that `(provider, model, api_key_id)`;

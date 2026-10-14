@@ -64,7 +64,12 @@ pub struct Row {
     /// The key's RPM capacity estimate, resolved in `build_candidates`:
     /// the key's `seed_rpm` when set, else the provider's `rpm_limit` divided
     /// evenly across its keys, else None (unknown → headroom stays neutral).
+    /// `fill_rows` overrides this with the *measured* capacity (min of 429
+    /// samples, then persisted) when available (PASS §36).
     pub capacity_rpm: Option<u32>,
+    /// TPM capacity: measured 429 samples (fill_rows), else the provider's
+    /// tpm_limit split across its keys, else None.
+    pub capacity_tpm: Option<u32>,
     /// Composite availability score for sort key K (filled by
     /// `state.rs::fill_rows`): smoothed success_rate × capacity headroom.
     /// 1.0 when nothing is known (new key / no capacity data) — neutral, so K
@@ -278,6 +283,9 @@ pub fn build_candidates(cfg: &Config, client_model: &str) -> Result<CandidateSet
         let shared_capacity = provider
             .rpm_limit
             .map(|l| l / (provider.keys.len() as u32).max(1));
+        let shared_tpm_capacity = provider
+            .tpm_limit
+            .map(|l| l / (provider.keys.len() as u32).max(1));
         for k in &provider.keys {
             rows.push(Row {
                 provider_id: pid.clone(),
@@ -302,6 +310,7 @@ pub fn build_candidates(cfg: &Config, client_model: &str) -> Result<CandidateSet
                 price,
                 idx: 0,
                 capacity_rpm: k.seed_rpm.or(shared_capacity),
+                capacity_tpm: shared_tpm_capacity,
                 availability: 1.0,
             });
         }
@@ -541,6 +550,7 @@ mod tests {
             price: 0.0,
             idx,
             capacity_rpm: None,
+            capacity_tpm: None,
             availability: 1.0,
         }
     }

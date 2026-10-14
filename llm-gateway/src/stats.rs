@@ -62,6 +62,12 @@ pub struct KeyMetricsPersisted {
     pub success_rate: f64, // [0,1]; 1.0 when no history
     pub avg_tftt_ms: u32,
     pub tps: f32,
+    /// Measured capacity (min of 429-at-load samples, PASS §36). None = unknown.
+    /// Persisted so a restart keeps the estimates until fresh 429s re-measure.
+    #[serde(default)]
+    pub capacity_rpm: Option<u32>,
+    #[serde(default)]
+    pub capacity_tpm: Option<u32>,
 }
 
 /// Request statistics. Persisted into gateway.json (under the `stats` field, merged

@@ -919,6 +919,9 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                             "tps": m.tps,
                             "token_balance": m.token_balance,
                             "bill_balance": m.bill_balance,
+                            "capacity_rpm": m.capacity_rpm,
+                            "capacity_tpm": m.capacity_tpm,
+                            "utilization": m.utilization,
                         },
                     })
                 })
