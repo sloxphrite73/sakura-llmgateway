@@ -1068,11 +1068,13 @@ async function saveAkSeed(kid){
 // (a key cooling/recovering) are re-synced on the next full render (any
 // action) or by re-clicking a filter chip.
 async function refreshAkStatus(){
-  if (S.tab !== 'apikeys' || document.hidden) return;
+  if (document.hidden) return;
   try {
     STATUS = await api('GET', '/api/status');
     const oldCount = KEYS.length;
     adaptAll();
+    renderSideFoot(); // sidebar key-pool counts follow the 1s cadence on every tab
+    if (S.tab !== 'apikeys') return; // table patching only on the apikeys tab
     if (KEYS.length !== oldCount) {
       renderMain(); // key count changed (added/deleted/empty→populated) — re-render
     } else {
@@ -1120,6 +1122,7 @@ async function refreshStats(){
     const top = m ? m.scrollTop : 0;
     renderStats(m);
     if (m) m.scrollTop = top;
+    renderSideFoot(); // sidebar key-pool counts follow the same 1s cadence
   } catch(e){ /* transient; next tick retries */ }
 }
 /* ---------- api key smooth countdown (1s local tick, no fetch) ---------- */

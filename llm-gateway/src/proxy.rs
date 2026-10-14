@@ -384,6 +384,16 @@ where
     let sorts = cfg.strategy.sort.clone();
     drop(cfg); // re-read per attempt for the live provider (protocol may change)
 
+    // Per-model stats key: the RESOLVED upstream model id when the candidate set
+    // has one, so failures land in the same bucket as successes (finish() keys
+    // them by upstream_model). Only unresolvable models fall back to the raw
+    // client string.
+    let stats_model = set
+        .rows
+        .first()
+        .map(|r| r.upstream_model.clone())
+        .unwrap_or_else(|| client_model.clone());
+
     for _attempt in 1..=max_attempts {
         let row = match app.select_strategy(&set, &sorts) {
             SelectResult::Routed(r) => r,
@@ -391,7 +401,7 @@ where
                 // §6: all valid keys are cooling →429 + Retry-After (the soonest
                 // recovery, learned_cooldown-driven). Absent when none is merely
                 // cooling (invalid doesn't recover by waiting).
-                app.record_stat(false, None, "unknown", &client_model);
+                app.record_stat(false, None, "unknown", &stats_model);
                 return error_response_with_retry(
                     StatusCode::TOO_MANY_REQUESTS,
                     "all candidate keys are rate-limited (cooling down)".into(),
@@ -401,8 +411,8 @@ where
             }
             SelectResult::NoValid => {
                 // §6: no valid row →429 with no Retry-After (invalid keys
-                // don't recover by waiting, per spec §6 "鏃?valid 琛?).
-                app.record_stat(false, None, "unknown", &client_model);
+                // don't recover by waiting, per spec §6 "无 valid 行").
+                app.record_stat(false, None, "unknown", &stats_model);
                 return error_response_with_retry(
                     StatusCode::TOO_MANY_REQUESTS,
                     "all candidate keys are invalid (auth-failed)".into(),
@@ -412,7 +422,7 @@ where
             }
             SelectResult::Empty => {
                 // Shouldn't happen (no-keys checked before the loop), but handle.
-                app.record_stat(false, None, "unknown", &client_model);
+                app.record_stat(false, None, "unknown", &stats_model);
                 return error_response_with_retry(
                     StatusCode::TOO_MANY_REQUESTS,
                     "no candidate keys available".into(),
@@ -429,7 +439,7 @@ where
             Some(p) => p.clone(),
             None => {
                 // Provider vanished mid-request (edited out): fail fast.
-                app.record_stat(false, Some(&row.api_key_id), &row.provider_id, &client_model);
+                app.record_stat(false, Some(&row.api_key_id), &row.provider_id, &row.upstream_model);
                 return error_response_for(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "provider disappeared".into(),
@@ -523,7 +533,7 @@ where
             } else if code == 401 || code == 403 {
                 // Auth failure = the key itself is dead (invalid/revoked/out of quota
                 // tier). A 5s cooldown just lets round-robin feed it again forever;
-                // quarantine it for 30 minutes and surface it as 鏃犳晥 in the UI.
+                // quarantine it for 30 minutes and surface it as 无效 in the UI.
                 app.mark_invalid(&row.provider_id, &row.api_key_id, 30 * 60, &reason);
             } else {
                 // Other key-scoped errors (408/5xx): short rotate-out cooldown, long
@@ -538,7 +548,7 @@ where
         // F1: not attributed to the key either (the key served fine; the request was
         // bad) — attributing it would dent the key's success_rate / K availability
         // and its per-key fail tally for no fault of its own.
-        app.record_stat(false, None, &row.provider_id, &client_model);
+        app.record_stat(false, None, &row.provider_id, &row.upstream_model);
         return error_response_for(
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
             format!("upstream error: {snippet}"),
@@ -549,7 +559,7 @@ where
     // Only reachable if a short cooldown expires mid-loop and keys keep failing until the
     // budget runs out. Never panic on the request path — fail fast with 429 instead.
     // Same §6 Retry-After semantics, generalized to the candidate set (impl-spec §6, D6).
-    app.record_stat(false, None, "unknown", &client_model);
+    app.record_stat(false, None, "unknown", &stats_model);
     let retry = app.min_retry_after_candidates(&set);
     error_response_with_retry(
         StatusCode::TOO_MANY_REQUESTS,
