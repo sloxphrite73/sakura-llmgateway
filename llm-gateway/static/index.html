@@ -187,6 +187,7 @@ const EN = {
   '全局设置 · 端口修改后重启生效':'Global settings · port changes need restart', '基本':'Basic',
   '默认冷却时间（秒）':'Default cooldown (s)', '每请求最大尝试次数':'Max attempts per request', 'API 端口':'API port', 'UI 端口':'UI port',
   '启用本地 API 鉴权':'Enable local API auth', '鉴权 Key，逗号分隔':'Auth keys, comma-separated', '保存设置':'Save settings',
+  '全冷却最长等待（秒）':'Max hold when all cooling (s)',
   '配置文件':'Config file', '导出配置':'Export config', '导入配置':'Import config', '导入旧版配置':'Import legacy config', 'gateway.json · 导入即时热生效':'gateway.json · import hot-reloads', '旧版导入：仅采纳提供商/Key/模型/智能冷却，保留当前全局设置':'Legacy import: adopts only providers/keys/models/learned-cooldown; keeps current global settings', '导入旧版配置 {n}？仅采纳提供商/Key/模型/智能冷却，保留当前全局设置。':'Import legacy config {n}? Adopts only providers/keys/models/learned-cooldown; keeps current global settings.',
   '添加提供商':'Add provider', '从免费目录选一家，或自定义填入':'Pick from the free catalog, or fill in custom',
   '自定义提供商':'Custom provider', '手动填写 base_url、协议与模型':'Manually fill base_url, protocol, models',
@@ -1255,6 +1256,7 @@ function renderSettings(m){
         <div class="form-grid">
           <label class="field"><span>${t('默认冷却时间（秒）')}</span><input id="s-cooldown" type="number" value="${s.default_cooldown_secs!=null?s.default_cooldown_secs:60}"></label>
           <label class="field"><span>${t('每请求最大尝试次数')}</span><input id="s-attempts" type="number" value="${s.max_attempts!=null?s.max_attempts:3}"></label>
+          <label class="field"><span>${t('全冷却最长等待（秒）')}</span><input id="s-hold" type="number" value="${s.max_hold_secs!=null?s.max_hold_secs:120}"></label>
           <label class="field"><span>${t('API 端口')}</span><input id="s-apiport" type="number" value="${s.api_port||8000}"></label>
           <label class="field"><span>${t('UI 端口')}</span><input id="s-uiport" type="number" value="${s.ui_port||8001}"></label>
         </div>
@@ -1297,6 +1299,7 @@ async function saveSettings(){
     await api('PUT', '/api/settings', {
       default_cooldown_secs: +$('s-cooldown').value || 60,
       max_attempts: +$('s-attempts').value || 3,
+      max_hold_secs: +$('s-hold').value,
       api_port: +$('s-apiport').value || 8000,
       ui_port: +$('s-uiport').value || 8001,
       auth: { enabled: $('s-auth').checked, keys: $('s-authkeys').value.split(',').map(s=>s.trim()).filter(Boolean) }
@@ -1364,11 +1367,10 @@ function adaptAll(){
         kid: k.id, prov: p.id, model: '-',
         valid: !k.invalid, cool: !!k.cooling, cd,
         untilMs: k.cooling ? k.cooling.until_ms : 0,
-        // 智能冷却时长 (生效值, spec §7 + 偏离②保留链): learned → per-key
-        // cooldown_secs → global default. Always a number (default always set).
-        cdDur: k.learned_cooldown != null ? k.learned_cooldown
-             : (k.cooldown_secs != null ? k.cooldown_secs
-             : (STATUS.default_cooldown_secs != null ? STATUS.default_cooldown_secs : 0)),
+        // 生效冷却时长: 每 Key 覆盖 → 全局默认（learned_cooldown 已随探测器
+        // 移除而弃用，PASS §38；冷却主要来自 429 时的窗口推算，不落盘）。
+        cdDur: k.cooldown_secs != null ? k.cooldown_secs
+             : (STATUS.default_cooldown_secs != null ? STATUS.default_cooldown_secs : 0),
         // masked key (status exposes mask(&k.key) = prefix+••••+suffix); shown
         // in the seed-edit card title and (later) the table's hidden state.
         masked: k.key || '••••',

@@ -555,6 +555,8 @@ pub async fn set_model_images(
 pub struct SettingsInput {
     pub default_cooldown_secs: u64,
     pub max_attempts: u32,
+    #[serde(default)]
+    pub max_hold_secs: Option<u64>,
     pub auth: AuthSettings,
     pub api_port: u16,
     pub ui_port: u16,
@@ -567,6 +569,9 @@ pub async fn update_settings(
     let cfg = app.write_config(|c| {
         c.default_cooldown_secs = input.default_cooldown_secs.max(1);
         c.max_attempts = input.max_attempts.clamp(1, 10);
+        if let Some(h) = input.max_hold_secs {
+            c.max_hold_secs = h;
+        }
         c.auth = input.auth;
         c.api_port = input.api_port;
         c.ui_port = input.ui_port;
@@ -959,6 +964,7 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
         "now_ms": now_ms(),
         "default_cooldown_secs": cfg.default_cooldown_secs,
         "max_attempts": cfg.max_attempts,
+        "max_hold_secs": cfg.max_hold_secs,
         "auth": cfg.auth,
         "api_port": api_port,
         "ui_port": ui_port,

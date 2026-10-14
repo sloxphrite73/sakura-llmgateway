@@ -264,7 +264,7 @@ async fn anthropic_messages(
 }
 
 /// POST /v1/messages/count_tokens — deterministic mock count.
-async fn anthropic_count_tokens(Json(body): Json<serde_json::Value>) -> Response {
+async fn anthropic_count_tokens(Json(_body): Json<serde_json::Value>) -> Response {
     (
         StatusCode::OK,
         Json(serde_json::json!({ "input_tokens": 42 })),

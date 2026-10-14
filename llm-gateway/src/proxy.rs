@@ -133,19 +133,6 @@ pub(crate) fn apply_upstream_auth(
     }
 }
 
-/// Build the probe body for the cooldown prober in the provider's protocol.
-fn probe_body_for(protocol: Protocol, model: &str) -> serde_json::Value {
-    match protocol {
-        Protocol::OpenAi => serde_json::json!({
-            "model": model, "messages": [{"role": "user", "content": "1"}], "max_tokens": 1,
-        }),
-        Protocol::Anthropic => serde_json::json!({
-            "model": model, "messages": [{"role": "user", "content": [{"type": "text", "text": "1"}]}],
-            "max_tokens": 1,
-        }),
-    }
-}
-
 /// One upstream chat call with the given key. Returns the raw reqwest response.
 async fn call_upstream(
     app: &App,
@@ -373,13 +360,15 @@ where
         .and_then(|s| s.as_bool())
         .unwrap_or(false);
 
-    // Retry budget: every key that fails is marked cooling/invalid, so
-    // select_strategy never hands the same key again until it recovers. The
-    // budget is bounded by (one attempt per candidate) 脳 max_attempts (D4:
-    // candidate-set size replaces the old `provider.keys.len()`).
-    let max_attempts = (cfg.max_attempts.clamp(1, 10) as usize)
-        .saturating_mul(set.rows.len())
-        .max(1);
+    // Retry budget note: every key that fails is marked cooling/invalid, so
+    // select_strategy never hands the same key back until it recovers. There is
+    // no attempt counter — between holds the ready set strictly shrinks, and
+    // each hold strictly spends the hold budget, so the loop always terminates.
+    // Zero-failure mode (PASS §38): when every valid key is cooling, HOLD the
+    // request until the soonest key recovers instead of 429ing the client —
+    // the client sees latency, not failure. Total hold bounded by
+    // max_hold_secs; beyond it we finally 429 with Retry-After.
+    let max_hold_ms = cfg.max_hold_secs.saturating_mul(1000);
     // Sort stack snapshot once (editing strategy mid-request is an edge case).
     let sorts = cfg.strategy.sort.clone();
     drop(cfg); // re-read per attempt for the live provider (protocol may change)
@@ -394,24 +383,40 @@ where
         .map(|r| r.upstream_model.clone())
         .unwrap_or_else(|| client_model.clone());
 
-    for _attempt in 1..=max_attempts {
+    // No attempt counter: every failed attempt marks its key cooling/invalid,
+    // so the ready set strictly shrinks between holds, and each hold strictly
+    // spends the hold budget — the loop always terminates (PASS §38). The
+    // legacy max_attempts budget is superseded by the hold budget.
+    let mut held_ms = 0u64;
+    loop {
         let row = match app.select_strategy(&set, &sorts) {
             SelectResult::Routed(r) => r,
             SelectResult::AllCooling { retry_after } => {
-                // §6: all valid keys are cooling →429 + Retry-After (the soonest
-                // recovery, learned_cooldown-driven). Absent when none is merely
-                // cooling (invalid doesn't recover by waiting).
-                app.record_stat(false, None, "unknown", &stats_model);
-                return error_response_with_retry(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    "all candidate keys are rate-limited (cooling down)".into(),
-                    inbound,
-                    retry_after,
-                );
+                match retry_after {
+                    // A valid key recovers soon and the hold budget allows it:
+                    // wait for it and re-walk the table (does NOT consume an
+                    // attempt — no key was tried).
+                    Some(secs) if held_ms.saturating_add(secs * 1000) <= max_hold_ms => {
+                        let wait_ms = secs.saturating_mul(1000).saturating_add(500);
+                        tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                        held_ms += wait_ms;
+                        continue;
+                    }
+                    _ => {
+                        // No recovery in sight (or hold budget spent) → 429 + Retry-After.
+                        app.record_stat(false, None, "unknown", &stats_model);
+                        return error_response_with_retry(
+                            StatusCode::TOO_MANY_REQUESTS,
+                            "all candidate keys are rate-limited (cooling down)".into(),
+                            inbound,
+                            retry_after,
+                        );
+                    }
+                }
             }
             SelectResult::NoValid => {
-                // §6: no valid row →429 with no Retry-After (invalid keys
-                // don't recover by waiting, per spec §6 "无 valid 行").
+                // §6: no valid row → 429 with no Retry-After (invalid keys
+                // don't recover by waiting — holding would never help).
                 app.record_stat(false, None, "unknown", &stats_model);
                 return error_response_with_retry(
                     StatusCode::TOO_MANY_REQUESTS,
@@ -502,28 +507,17 @@ where
                 // failure instead of cooling it for a minute and retrying forever.
                 let lower = snippet.to_lowercase();
                 let quota_dead = ["entitlement exhausted", "quota exhausted", "insufficient_quota",
-                    "exceeded your current quota", "insufficient balance", "浣欓涓嶈冻"]
+                    "exceeded your current quota", "insufficient balance", "余额不足"]
                     .iter().any(|m| lower.contains(m));
                 if quota_dead {
                     app.mark_invalid(&row.provider_id, &row.api_key_id, 30 * 60, &reason);
                     continue;
                 }
-                // Rate limited: v0.7.9 cooldown chain (Retry-After →learned →
-                // per-key →default). A background prober then measures the key's
-                // real window.
+                // Rate limited: cooldown = Retry-After → per-key override →
+                // window-drain estimate → global default (PASS §38; the active
+                // prober was removed — it burned the limited keys' own RPM to
+                // measure them, and 1-token probes never matched real payloads).
                 app.mark_rate_limited(&row.provider_id, &row.api_key_id, retry_after, &reason);
-                // B-5: probe with the model that actually got 429'd — many
-                // upstreams rate-limit per-model, so probing a different (first
-                // enabled) model would measure the wrong window.
-                spawn_prober(
-                    app.clone(),
-                    row.provider_id,
-                    row.api_key_id,
-                    row.key_secret,
-                    url.clone(),
-                    probe_body_for(upstream_proto, &row.upstream_model),
-                    upstream_proto,
-                );
                 // Short politeness gap before trying the next key. The old 1500ms
                 // backoff dated from the single-provider era (guard against shared
                 // account-level TPM cascades); observed pools are per-key limited,
@@ -555,18 +549,6 @@ where
             inbound,
         );
     }
-
-    // Only reachable if a short cooldown expires mid-loop and keys keep failing until the
-    // budget runs out. Never panic on the request path — fail fast with 429 instead.
-    // Same §6 Retry-After semantics, generalized to the candidate set (impl-spec §6, D6).
-    app.record_stat(false, None, "unknown", &stats_model);
-    let retry = app.min_retry_after_candidates(&set);
-    error_response_with_retry(
-        StatusCode::TOO_MANY_REQUESTS,
-        "retry budget exhausted (all candidate keys failing)".into(),
-        inbound,
-        retry,
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1056,249 +1038,6 @@ fn find_event_end(buf: &[u8]) -> Option<usize> {
         .or_else(|| buf.windows(2).position(|w| w == b"\n\n").map(|p| p + 2))
 }
 
-// ---------------------------------------------------------------------------
-// Background prober (binary-search cooldown learning)
-// ---------------------------------------------------------------------------
-
-/// Binary search over "seconds since the 429" — pure decision logic, split out
-/// of the async driver for unit testing.
-///
-/// The critical rule: `conclusion()` may only produce a value when some probe
-/// actually SUCCEEDED (i.e. `high` is a proven-working wait). A search where
-/// every probe 429'd must NOT fabricate `high+1` — the bracket's high was
-/// never proven, and writing it parks the key for ~900s+ per 429, which
-/// collapses the pool during a global saturation period (the "day-two
-/// fail-all" incident, PASS §35).
-struct WindowSearch {
-    t: u64,
-    low: u64,
-    high: u64,
-    /// A probe succeeded at the current `high` (so `high` is a proven wait).
-    proven: bool,
-    probes_used: u32,
-    bisects_done: u32,
-    bracketed: bool,
-    /// First probe at the ceiling still 429'd — window beyond measurement.
-    beyond_ceiling: bool,
-    /// Offset of the in-flight probe (what `record` refers to during bisection).
-    pending: u64,
-    /// Abort flag set by `abort` (probe-channel failure: keep the bracket).
-    done: bool,
-}
-
-impl WindowSearch {
-    const MAX_SECS: u64 = 900;
-    const BISECT_ROUNDS: u32 = 5;
-    const MAX_PROBES: u32 = 10;
-
-    fn new(t: u64) -> Self {
-        let t = t.clamp(2, Self::MAX_SECS);
-        Self {
-            t,
-            low: 0,
-            high: 0,
-            proven: false,
-            probes_used: 0,
-            bisects_done: 0,
-            bracketed: false,
-            beyond_ceiling: false,
-            pending: t,
-            done: false,
-        }
-    }
-
-    /// Offset (seconds after t0) of the next probe, or None when the search ended.
-    fn next_offset(&mut self) -> Option<u64> {
-        if self.done || self.beyond_ceiling || self.probes_used >= Self::MAX_PROBES {
-            return None;
-        }
-        if !self.bracketed {
-            self.pending = self.t;
-            return Some(self.t);
-        }
-        if self.high - self.low <= 1 || self.bisects_done >= Self::BISECT_ROUNDS {
-            return None;
-        }
-        self.pending = (self.low + self.high) / 2;
-        Some(self.pending)
-    }
-
-    /// Record the outcome of the probe at the last `next_offset()` value.
-    fn record(&mut self, success: bool) {
-        self.probes_used += 1;
-        if !self.bracketed {
-            self.bracketed = true;
-            if success {
-                self.low = self.t / 2;
-                self.high = self.t;
-                self.proven = true;
-            } else if self.t >= Self::MAX_SECS {
-                // B-3: still limited at the ceiling → unlearnable.
-                self.beyond_ceiling = true;
-            } else {
-                self.low = self.t;
-                self.high = (self.t * 2).min(Self::MAX_SECS);
-            }
-            return;
-        }
-        self.bisects_done += 1;
-        if success {
-            self.high = self.pending;
-            self.proven = true;
-        } else {
-            self.low = self.pending;
-        }
-    }
-
-    /// Probe-channel failure (network/4xx): stop the search, keep the bracket.
-    fn abort(&mut self) {
-        self.done = true;
-    }
-
-    /// The learned cooldown: `high + 1` ONLY when `high` was proven by an
-    /// actual successful probe. None = unlearnable (never write a fabricated
-    /// value — that was the pool-collapsing bug).
-    fn conclusion(&self) -> Option<u64> {
-        if self.proven {
-            Some(self.high + 1)
-        } else {
-            None
-        }
-    }
-}
-
-
-/// Background prober: after a key gets 429'd, measure its real rate-limit window with a
-/// binary search. Start from T (the key's learned_cooldown if one exists, else the
-/// global default): probe at T — success means the window is shorter (explore [T/2, T]),
-/// 429 means it is longer (explore [T, 2T]). Then bisect the bracket for a few rounds
-/// and store the result as the key's `learned_cooldown` (debounced config write).
-///
-/// Timing model (B-1): all probe offsets are relative to `t0` = the 429 trigger time —
-/// each round sleeps until `t0 + offset`, so wall-clock drift across rounds can't
-/// corrupt the measurement. Result (B-2): write `high + 1s` (the shortest offset
-/// proven to succeed), not the midpoint — underestimating loops the key back into
-/// 429s while the re-learn guard blocks recalibration. Overflow guard (B-3): if the
-/// first probe at PROBE_MAX_SECS still 429s, the window is beyond what probing can
-/// measure — write nothing (the key falls back to the Retry-After/default chain).
-/// Negative cache (B-4): failed/aborted measurements also stamp `learned_at`, so a
-/// permanently-failing key doesn't spawn a prober on every 429.
-///
-/// Bounded: bisection rounds and probe count are capped so a dead/limited key doesn't
-/// burn quota forever; only one prober per key runs at a time (`claim_probe`).
-fn spawn_prober(
-    app: Arc<App>,
-    provider_id: String,
-    key_id: String,
-    key_secret: String,
-    url: String,
-    probe_body: serde_json::Value,
-    upstream_proto: Protocol,
-) {
-    /// Minimum window the search considers (seconds).
-    const PROBE_MIN_SECS: u64 = 2;
-    /// Maximum window the search considers (seconds) — 15 min covers common per-minute
-    /// and per-hour windows without probing all day.
-    const PROBE_MAX_SECS: u64 = 900;
-    /// Bisection iterations after the initial bracket is found.
-    const PROBE_BISECT_ROUNDS: u32 = 5;
-    /// Hard cap on probes per measurement (bracketing + bisection).
-    const PROBE_MAX_PROBES: u32 = 10;
-    /// Re-learn interval: recalibrate only if the last measurement is older than this.
-    const RELEARN_AFTER_SECS: u64 = 3600;
-
-    if !app.claim_probe(&key_id) {
-        return; // a prober is already measuring this key
-    }
-    tokio::spawn(async move {
-        // Skip re-learning when a fresh measurement (or recent failed attempt) exists.
-        if app.learned_cooldown_age_secs(&provider_id, &key_id)
-            .map(|age| age < RELEARN_AFTER_SECS)
-            .unwrap_or(false)
-        {
-            app.release_probe(&key_id);
-            return;
-        }
-
-        // Initial guess: previous learned value, else the global default cooldown.
-        let t = app
-            .learned_cooldown_of(&provider_id, &key_id)
-            .unwrap_or_else(|| app.default_cooldown_secs())
-            .clamp(PROBE_MIN_SECS, PROBE_MAX_SECS);
-
-        // B-1: anchor every probe offset to the 429 trigger moment.
-        let t0 = std::time::Instant::now();
-
-        // One probe at `offset` seconds after t0. Ok(true)=success, Ok(false)=still
-        // 429, Err=unlearnable (401/403/4xx/network) — abort, keep the bracket.
-        async fn probe(
-            app: &Arc<App>,
-            url: &str,
-            key_secret: &str,
-            body: &serde_json::Value,
-            offset_secs: u64,
-            t0: std::time::Instant,
-            proto: Protocol,
-        ) -> Result<bool, ()> {
-            // B-1: sleep until the absolute target t0+offset (not "offset from now").
-            // NOTE: the prober deliberately does NOT hold the key in cooling during
-            // measurement (B-6 was reverted — benching keys for the whole probe
-            // duration collapsed the pool under 429 storms, PASS §30.3).
-            let wait_secs = offset_secs.saturating_sub(t0.elapsed().as_secs());
-            tokio::time::sleep(Duration::from_secs(wait_secs)).await;
-            let builder = apply_upstream_auth(
-                app.http.post(url).timeout(Duration::from_secs(20)),
-                key_secret,
-                proto,
-            );
-            let result = builder.json(body).send().await;
-            match result {
-                Ok(r) if r.status().is_success() => Ok(true),
-                Ok(r) if r.status().as_u16() == 429 => Ok(false),
-                Ok(r) if r.status().as_u16() == 401 || r.status().as_u16() == 403 => Err(()),
-                Ok(_) | Err(_) => Err(()), // unknown model / upstream hiccup: inconclusive
-            }
-        }
-
-        // Drive the pure search state machine.
-        let mut search = WindowSearch::new(t);
-        while let Some(offset) = search.next_offset() {
-            match probe(&app, &url, &key_secret, &probe_body, offset, t0, upstream_proto).await {
-                Ok(success) => search.record(success),
-                Err(()) => {
-                    search.abort();
-                    break;
-                }
-            }
-        }
-
-        app.release_probe(&key_id);
-        match search.conclusion() {
-            // B-2: write the shortest PROVEN-successful offset (+1s margin).
-            Some(learned) if learned >= PROBE_MIN_SECS => {
-                app.set_learned_cooldown(&provider_id, &key_id, learned);
-                app.clear_error(&key_id);
-            }
-            _ => {
-                // Unlearnable: no probe ever succeeded (or the channel died before
-                // any success). NEVER write a value — an unproven high+1 fabricates
-                // a ~900s cooldown (the day-two pool-collapse bug, PASS §35).
-                // B-4: negative-cache the attempt. If a stale learned value itself
-                // claims a beyond-ceiling window (an artifact of that bug), clear
-                // it so the key falls back to the default chain.
-                app.note_probe_attempt(&key_id);
-                let stale = app
-                    .learned_cooldown_of(&provider_id, &key_id)
-                    .map(|v| v >= PROBE_MAX_SECS)
-                    .unwrap_or(false);
-                if stale {
-                    app.clear_learned_cooldown(&provider_id, &key_id);
-                }
-            }
-        }
-    });
-}
-
 /// GET /v1/models — serves the managed model catalog per provider (`provider/model`),
 /// plus aliases. Providers with no managed models (unmanaged) contribute nothing.
 pub async fn list_models(
@@ -1347,76 +1086,3 @@ pub async fn list_models(
         .into_response()
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Drive a WindowSearch against a scripted window size: a probe at offset d
-    /// "succeeds" iff d >= window. Returns the concluded learned value.
-    fn run_search(t: u64, window: u64) -> Option<u64> {
-        let mut s = WindowSearch::new(t);
-        while let Some(off) = s.next_offset() {
-            s.record(off >= window);
-        }
-        s.conclusion()
-    }
-
-    #[test]
-    fn search_learns_a_30s_window() {
-        // t=60: probe@60 ok → [30,60]; bisect 45 ok → [30,45]; 37 ok → [30,37];
-        // 33 ok → [30,33]; 31 ok → [30,31] tight. high=31 proven → 32.
-        assert_eq!(run_search(60, 30), Some(32));
-    }
-
-    #[test]
-    fn search_learns_a_window_above_the_guess() {
-        // t=60, window=100: @60 429 → [60,120]; @90 429 → [90,120]; @105 ok →
-        // [90,105]; @97 429 → [97,105]; @101 ok → [97,101]; tight? 101-97=4,
-        // rounds exhausted. high=101 proven → 102.
-        assert_eq!(run_search(60, 100), Some(102));
-    }
-
-    #[test]
-    fn never_successful_search_writes_nothing() {
-        // The day-two bug: window beyond the ceiling, every probe 429s.
-        // Old code wrote high+1 (~901); now it must write NOTHING.
-        assert_eq!(run_search(60, 10_000), None, "all-429 search is unlearnable");
-        // Even starting AT the ceiling.
-        assert_eq!(run_search(900, 10_000), None);
-    }
-
-    #[test]
-    fn abort_keeps_a_proven_bracket() {
-        // First probe ok (t=60 → bracket [30,60] proven), then the channel dies:
-        // abort → conclusion still uses the proven high.
-        let mut s = WindowSearch::new(60);
-        let off = s.next_offset().unwrap();
-        s.record(off >= 30); // success
-        s.abort();
-        assert_eq!(s.next_offset(), None);
-        assert_eq!(s.conclusion(), Some(61));
-    }
-
-    #[test]
-    fn probe_cap_is_respected() {
-        // A window just under the ceiling with t=2: the bracket [2,900] needs
-        // log2(900)≈10 bisections; the 10-probe cap must stop it — and since a
-        // success DID happen along the way (offsets ≥ window succeed), the
-        // conclusion is the proven high, not a fabricated one.
-        let mut s = WindowSearch::new(2);
-        let mut n = 0;
-        while let Some(off) = s.next_offset() {
-            n += 1;
-            s.record(off >= 890);
-        }
-        assert!(n <= 10, "probe cap: {n}");
-        if let Some(v) = s.conclusion() {
-            // 890 window: offsets 451 (ok) → high proven; learned = proven high+1.
-            assert!(v >= 891, "learned {v} must not be below the real window");
-        }
-    }
-}

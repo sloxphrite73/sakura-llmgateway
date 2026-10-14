@@ -203,45 +203,46 @@ Each row shows:
 
 1. Requests are distributed round-robin across the provider's keys.
 2. A key that receives **429** is benched: cooldown = upstream `Retry-After`
-   header → `learned_cooldown` (learned via binary-search probing, see §4.1) →
-   per-key override → global default. The gateway waits **250ms** and retries
-   the same request on the next key. A 429 whose body reports **exhausted
-   quota** (e.g. "entitlement exhausted" / "insufficient_quota" / "余额不足") is
-   not a rate window — the key is quarantined for 30 minutes like an auth
-   failure.
+   header → per-key override → **window-drain estimate** (see §4.1) → global
+   default. The gateway waits **250ms** and retries the same request on the
+   next key. A 429 whose body reports **exhausted quota** (e.g. "entitlement
+   exhausted" / "insufficient_quota" / "余额不足") is not a rate window — the
+   key is quarantined for 30 minutes like an auth failure.
 
-### 4.1 Cooldown learning (binary-search prober)
+### 4.1 Cooldown window estimation (passive, zero probing)
 
-After a key gets a 429, a background prober measures its real rate-limit window
-and stores it as `learned_cooldown` (visible in the console and config file):
+At the 429 moment the key's recovery time is computed from data the gateway
+already has — **no probe requests are sent** (probing burned the limited key's
+own RPM, and a 1-token probe's recovery time never matched real payloads):
 
-1. **Initial T** = the previous learned value (else the global default), clamped
-   to 2–900 seconds.
-2. **Bracket**: all probe timings are anchored to the 429 moment `t0` (each
-   round sleeps until `t0 + offset`, so wall-clock drift can't skew the
-   measurement). The probe replays the model that was actually 429'd with
-   `max_tokens: 1` — success means the window is shorter, bracketing
-   `[T/2, T]`; another 429 means longer, bracketing `[T, 2T]` (900s cap; still
-   429 at 900s = unlearnable, nothing is stored).
-3. **Bisect**: bisect the bracket for ~5 rounds (probe the midpoint; success takes
-   the upper half, 429 the lower), converging to ±1 second.
-4. **Store**: the bracket's **upper bound + 1s** becomes the key's
-   `learned_cooldown` (the shortest offset proven to succeed; debounced config
-   write).
+- Capacity comes from **configuration** (the key's seed RPM > the provider's
+  RPM/TPM limits split across its keys); with no capacity configured there is
+  no estimate and the global default cooldown applies;
+- RPM: recovery is when the (n−capacity+1)-oldest request slides out of the
+  60s window;
+- TPM: recovery is when the window's token total has drained enough room for
+  one average-size request;
+- The larger of the two wins, biased 10% low (an underestimate costs one cheap
+  250ms rotation and self-corrects on the next 429; an overestimate benches a
+  key for too long), clamped to 2–900s.
 
-Guard rails: at most 10 probes per measurement; 401/403/other 4xx/network errors
-are "unlearnable" and abort the search; each key recalibrates at most once per
-hour — and failed attempts count against that budget too, so a permanently
-failing key doesn't spawn a prober on every 429; only one prober per key at a
-time.
+After the cooldown, **the first real request is the probe**: success means
+recovered; another 429 just re-estimates with fresher data.
+
+> The old background binary-search prober and the `learned_cooldown` field are
+> removed/deprecated; learned values in old configs are no longer read.
+
 3. **401/403** (invalid key) quarantines the key for 30 minutes instead —
    retrying a dead key just wastes calls.
 4. Other key-scoped errors (408/5xx, network errors) bench the key for 5s and
    rotate.
 5. Request-scoped errors (e.g. **400** bad body) are returned to the client
    immediately — they would fail identically on every key.
-6. Only when **every** key is cooling/invalid does the client get a `429` with
-   a list of the benched keys (fail fast, no waiting).
+6. When **every** key is cooling, the request **waits for the soonest key to
+   recover** (the client sees latency, not a failure); only when the total
+   wait exceeds "max hold when all cooling" (default 120s, configurable in
+   Settings) does the client get `429 + Retry-After`. When every key is
+   invalid (401/403/quota-dead) it 429s immediately — waiting can't help.
 7. Once the first response byte has been forwarded, the stream is passed
    through untouched — no mid-stream key switching (it would corrupt output).
 8. Every failed request in an agent conversation is just another

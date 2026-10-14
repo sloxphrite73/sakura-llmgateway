@@ -86,8 +86,6 @@ pub(crate) struct PoolRuntime {
     last_error: HashMap<String, String>,
     /// key id -> total requests routed through this key
     requests: HashMap<String, u64>,
-    /// key ids currently being probe-measured by a background task (dedup guard)
-    probing: std::collections::HashSet<String>,
     /// Per-key rolling metrics (success_rate / rpm now; tpm/tps/tftt/balance later).
     metrics: HashMap<String, KeyMetrics>,
     /// Per-model time-to-first-token samples (ms), last `METRIC_SAMPLE_CAP`; the
@@ -124,9 +122,6 @@ pub struct App {
     stats_migrated: std::sync::atomic::AtomicBool,
     /// Set when learned-cooldown values changed and gateway.json needs a debounced flush.
     config_dirty: Mutex<bool>,
-    /// key id -> Instant when its learned_cooldown was last written (in-process only;
-    /// used to rate-limit re-learning probes, not persisted).
-    learned_at: Mutex<std::collections::HashMap<String, std::time::Instant>>,
     /// Free-provider catalog: session cache for a remote refresh (embedded catalog
     /// is compile-time and needs no state).
     pub catalog: crate::free_catalog::CatalogCache,
@@ -162,7 +157,6 @@ fn fill_rows(
     pool: &mut PoolRuntime,
     rows: &mut [crate::strategy::Row],
     now: Instant,
-    persisted: &std::collections::BTreeMap<String, crate::stats::KeyMetricsPersisted>,
 ) {
     pool.cooling.retain(|_, until| *until > now);
     pool.invalid.retain(|_, until| *until > now);
@@ -175,16 +169,11 @@ fn fill_rows(
             r.non_cooled = true;
             r.remaining_secs = 0;
         }
-        // Capacity resolution for K's headroom (PASS §36): measured (min of 429
-        // samples) > persisted measurement > the skeleton (seed_rpm / provider
-        // limit split). Per metric independently.
-        let per = persisted.get(&r.api_key_id);
-        let (est_rpm, est_tpm) = match pool.metrics.get(&r.api_key_id) {
-            Some(m) => App::capacity_est(m),
-            None => (None, None),
-        };
-        r.capacity_rpm = est_rpm.or_else(|| per.and_then(|p| p.capacity_rpm)).or(r.capacity_rpm);
-        r.capacity_tpm = est_tpm.or_else(|| per.and_then(|p| p.capacity_tpm)).or(r.capacity_tpm);
+        // Capacity for K's headroom comes ONLY from config (the skeleton set by
+        // build_candidates: seed_rpm > provider limit split). The 429 samples
+        // are kept for diagnostics but provably can't measure capacity (a 429
+        // says rpm≥limit OR tpm≥limit — a disjunction that can't assign either;
+        // samples pinned utilization at 100% in practice, PASS §38).
         // Metrics snapshot (spec §2.2): success_rate/rpm/tpm/avg_tftt/tps are
         // live; token_balance is always None (no catalog provider exposes a
         // clean remaining-token-quota field); bill_balance is set by the balance
@@ -360,7 +349,7 @@ mod tests {
         // (headroom 1.0: no load). A brand-new key (seed None → 1.0) scores 1.0.
         let mut pool = PoolRuntime::default();
         let mut rows = vec![k_row("seeded", 0.85, Some(10)), k_row("fresh", 1.0, None)];
-        fill_rows(&mut pool, &mut rows, Instant::now(), &Default::default());
+        fill_rows(&mut pool, &mut rows, Instant::now());
         assert!((rows[0].availability - 0.85).abs() < 1e-9);
         assert!((rows[1].availability - 1.0).abs() < 1e-9);
     }
@@ -376,7 +365,7 @@ mod tests {
             m.success.push_back((Instant::now(), true));
         }
         let mut rows = vec![k_row("hot", 1.0, Some(10))];
-        fill_rows(&mut pool, &mut rows, Instant::now(), &Default::default());
+        fill_rows(&mut pool, &mut rows, Instant::now());
         // sr = (9+2)/(9+2) = 1.0; headroom = 1 - 9/10 = 0.1
         assert!((rows[0].availability - 0.1).abs() < 1e-9, "got {}", rows[0].availability);
     }
@@ -391,7 +380,7 @@ mod tests {
             m.req_times.push_back(Instant::now());
         }
         let mut rows = vec![k_row("maxed", 1.0, Some(10))];
-        fill_rows(&mut pool, &mut rows, Instant::now(), &Default::default());
+        fill_rows(&mut pool, &mut rows, Instant::now());
         // sr = (0+2)/(0+2) = 1.0 (no success samples); headroom clamped to 0.05
         assert!((rows[0].availability - AVAILABILITY_HEADROOM_FLOOR).abs() < 1e-9);
     }
@@ -405,7 +394,7 @@ mod tests {
         m.success.push_back((Instant::now(), true));
         m.success.push_back((Instant::now(), false));
         let mut rows = vec![k_row("plain", 1.0, None)];
-        fill_rows(&mut pool, &mut rows, Instant::now(), &Default::default());
+        fill_rows(&mut pool, &mut rows, Instant::now());
         // sr = (1+2)/(2+2) = 0.75; headroom 1.0
         assert!((rows[0].availability - 0.75).abs() < 1e-9);
     }
@@ -429,7 +418,7 @@ mod tests {
             }
         }
         let mut rows = vec![k_row("coinflip", 1.0, None), k_row("veteran", 1.0, None)];
-        fill_rows(&mut pool, &mut rows, Instant::now(), &Default::default());
+        fill_rows(&mut pool, &mut rows, Instant::now());
         assert!((rows[0].availability - 0.75).abs() < 1e-9, "coinflip: got {}", rows[0].availability);
         assert!((rows[1].availability - 11.0 / 12.0).abs() < 1e-9, "veteran: got {}", rows[1].availability);
         assert!(rows[1].availability > rows[0].availability);
@@ -457,22 +446,10 @@ mod tests {
             m.success.push_back((old, false));
         }
         let mut rows = vec![k_row("k", 1.0, Some(4))];
-        fill_rows(&mut pool, &mut rows, Instant::now(), &Default::default());
+        fill_rows(&mut pool, &mut rows, Instant::now());
         assert_eq!(rows[0].rpm, 0, "expired rpm samples pruned on read");
         // success window is 300s — the 120s-old failure still counts.
         assert!((rows[0].success_rate - 0.0).abs() < 1e-9, "300s window keeps 120s-old sample");
-    }
-
-    #[test]
-    fn clear_learned_cooldown_removes_stale_value() {
-        let (app, dir) = app_with_provider(Some(5), None);
-        assert_eq!(app.learned_cooldown_of("p", "k"), Some(5));
-        app.clear_learned_cooldown("p", "k");
-        assert_eq!(app.learned_cooldown_of("p", "k"), None, "stale learned cleared");
-        // Clearing again is a no-op (and must not mark the config dirty).
-        app.clear_learned_cooldown("p", "k");
-        assert_eq!(app.learned_cooldown_of("p", "k"), None);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -555,25 +532,22 @@ mod tests {
     }
 
     #[test]
-    fn real_429_applies_learned_as_is() {
-        // v0.7.9 chain: a small learned value applies directly (no floor —
-        // flooring collapsed the pool under load, PASS §30.3).
+    fn real_429_learned_is_ignored_default_applies() {
+        // PASS §38: learned_cooldown is deprecated (the prober was removed) —
+        // a stale learned value must NOT affect the chain; with no window data
+        // the global default applies.
         let (app, dir) = app_with_provider(Some(4), None);
         app.mark_rate_limited("p", "k", None, "r");
-        assert!((3..=4).contains(&cooldown_remaining(&app, "k")));
+        assert!((59..=60).contains(&cooldown_remaining(&app, "k")), "learned ignored → default 60");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn real_429_long_learned_and_default_fallback() {
+    fn real_429_default_when_no_window_data() {
         let (app, dir) = app_with_provider(Some(221), None);
         app.mark_rate_limited("p", "k", None, "r");
-        assert!((219..=221).contains(&cooldown_remaining(&app, "k")));
+        assert!((59..=60).contains(&cooldown_remaining(&app, "k")), "no metrics → default 60");
         let _ = std::fs::remove_dir_all(&dir);
-        let (app2, dir2) = app_with_provider(None, None);
-        app2.mark_rate_limited("p", "k", None, "r");
-        assert!((59..=60).contains(&cooldown_remaining(&app2, "k")), "no learned → default 60");
-        let _ = std::fs::remove_dir_all(&dir2);
     }
 
     #[test]
@@ -638,21 +612,70 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // --- window-drain recovery estimate (PASS §38) ---
+
     #[test]
-    fn capacity_est_takes_per_metric_min_skipping_zeros() {
+    fn window_recovery_rpm_oldest_must_age_out() {
+        // cap 3 rpm; 3 requests (chronological: oldest first) at now−32/−31/−30s →
+        // the oldest ages out in 28s; ×0.9 bias → ceil(25.2) = 26.
         let mut m = KeyMetrics::default();
-        for s in [(10u32, 0u32), (6, 4000), (12, 2500)] {
-            m.capacity_samples.push_back(s);
+        let now = Instant::now();
+        for i in [32, 31, 30] {
+            m.req_times.push_back(now - Duration::from_secs(i));
         }
-        let (r, t) = App::capacity_est(&m);
-        assert_eq!(r, Some(6), "min of positive rpm samples");
-        assert_eq!(t, Some(2500), "min of positive tpm samples");
+        assert_eq!(window_recovery_secs(&m, now, Some(3), None), Some(26));
     }
 
     #[test]
-    fn fill_rows_measured_capacity_beats_seed_and_uses_worst_dimension() {
-        // Skeleton seed capacity_rpm=1000, but a 429 sample says the real limit
-        // is 10 rpm. Live load = 5 rpm → utilization 0.5 → availability halves.
+    fn window_recovery_tpm_drains_oldest_events() {
+        // cap 1000 tok/min; events 600@(now−30s) + 600@(now−10s), avg req 600 →
+        // need 800 drained → both events must expire → recovery = 50s → ×0.9 = 45.
+        let mut m = KeyMetrics::default();
+        let now = Instant::now();
+        m.req_times.push_back(now - Duration::from_secs(30));
+        m.req_times.push_back(now - Duration::from_secs(10));
+        m.token_events.push_back((now - Duration::from_secs(30), 600));
+        m.token_events.push_back((now - Duration::from_secs(10), 600));
+        assert_eq!(window_recovery_secs(&m, now, None, Some(1000)), Some(45));
+    }
+
+    #[test]
+    fn window_recovery_none_without_capacity_or_explanation() {
+        let mut m = KeyMetrics::default();
+        let now = Instant::now();
+        m.req_times.push_back(now);
+        // No capacity configured → None (caller falls back to the default).
+        assert_eq!(window_recovery_secs(&m, now, None, None), None);
+        // Capacity configured but window usage is BELOW it (the 429 came from
+        // something the window can't explain) → None too.
+        assert_eq!(window_recovery_secs(&m, now, Some(10), None), None);
+    }
+
+    #[test]
+    fn window_recovery_caps_at_900_and_floors_at_2() {
+        // A 429 an instant ago at capacity → oldest ages out in ~60s (fine).
+        // Cap: huge tpm backlog → clamped to 900. Floor: tiny wait → 2s.
+        let mut m = KeyMetrics::default();
+        let now = Instant::now();
+        m.req_times.push_back(now);
+        assert_eq!(window_recovery_secs(&m, now, Some(1), None), Some(54)); // 60×0.9
+        // TPM floor: total=800, avg=400, cap=1000 → need 200 drained → oldest
+        // event expires in 1s → ×0.9 → clamp to 2s.
+        let mut m3 = KeyMetrics::default();
+        m3.req_times.push_back(now - Duration::from_secs(59));
+        m3.req_times.push_back(now - Duration::from_secs(58));
+        m3.token_events.push_back((now - Duration::from_secs(59), 400));
+        m3.token_events.push_back((now - Duration::from_secs(58), 400));
+        // total=800, avg=400, cap=1000 → need 800+400-1000=200 → oldest event
+        // (400 ≥ 200) expires in 1s → ×0.9 = 0.9 → ceil 1 → clamp 2s.
+        assert_eq!(window_recovery_secs(&m3, now, None, Some(1000)), Some(2));
+    }
+
+    #[test]
+    fn fill_rows_uses_configured_capacity_not_429_samples() {
+        // PASS §38: 429 samples provably can't measure capacity (a 429 says
+        // rpm≥limit OR tpm≥limit — the disjunction can't assign either), so
+        // they must NOT feed the headroom. The seed stays the capacity.
         let mut pool = PoolRuntime::default();
         {
             let m = pool.metrics.entry("k".into()).or_default();
@@ -662,26 +685,10 @@ mod tests {
             m.capacity_samples.push_back((10, 0));
         }
         let mut rows = vec![k_row("k", 1.0, Some(1000))];
-        fill_rows(&mut pool, &mut rows, Instant::now(), &Default::default());
-        assert_eq!(rows[0].capacity_rpm, Some(10), "measured beats seed");
-        // sr = (0+2)/(0+2) = 1.0 (no success samples); headroom = 1 - 5/10 = 0.5
-        assert!((rows[0].availability - 0.5).abs() < 1e-9, "got {}", rows[0].availability);
-    }
-
-    #[test]
-    fn fill_rows_falls_back_to_persisted_capacity() {
-        // No live metrics at all → persisted estimate feeds the headroom... but
-        // with no live load the row keeps seed availability (rpm=0 → util 0).
-        let mut persisted: std::collections::BTreeMap<String, crate::stats::KeyMetricsPersisted> = Default::default();
-        persisted.insert("k".into(), crate::stats::KeyMetricsPersisted {
-            rpm: 0, tpm: 0, success_rate: 1.0, avg_tftt_ms: 0, tps: 0.0,
-            capacity_rpm: Some(42), capacity_tpm: None,
-        });
-        let mut pool = PoolRuntime::default();
-        let mut rows = vec![k_row("k", 0.9, None)];
-        fill_rows(&mut pool, &mut rows, Instant::now(), &persisted);
-        assert_eq!(rows[0].capacity_rpm, Some(42), "persisted estimate surfaces");
-        assert!((rows[0].availability - 0.9).abs() < 1e-9, "no live load → seed sr stands");
+        fill_rows(&mut pool, &mut rows, Instant::now());
+        assert_eq!(rows[0].capacity_rpm, Some(1000), "seed wins; samples are diagnostics only");
+        // sr = (0+2)/(0+2) = 1.0 (no success samples); headroom = 1 - 5/1000 = 0.995
+        assert!((rows[0].availability - 0.995).abs() < 1e-9, "got {}", rows[0].availability);
     }
 }
 
@@ -711,22 +718,10 @@ impl App {
             stats_path,
             stats_migrated: std::sync::atomic::AtomicBool::new(migrated),
             config_dirty: Mutex::new(false),
-            learned_at: Mutex::new(std::collections::HashMap::new()),
             catalog: crate::free_catalog::CatalogCache::new(),
             bound_api_port: std::sync::atomic::AtomicU16::new(0),
             bound_ui_port: std::sync::atomic::AtomicU16::new(0),
         }
-    }
-
-    /// Try to claim the probe slot for a key. Returns false when a probe task is
-    /// already measuring this key (dedup: one prober per key at a time).
-    pub fn claim_probe(&self, key_id: &str) -> bool {
-        let mut pool = self.pool.lock().unwrap();
-        pool.probing.insert(key_id.to_string())
-    }
-
-    pub fn release_probe(&self, key_id: &str) {
-        self.pool.lock().unwrap().probing.remove(key_id);
     }
 
     /// Record a finished request (success = upstream returned 2xx and the client got it).
@@ -771,8 +766,11 @@ impl App {
         self.save_all();
     }
 
-    /// Mark gateway.json dirty (learned-cooldown changed); the background flusher
-    /// writes it once the debounce window has passed without further changes.
+    /// Mark gateway.json dirty; the background flusher writes it once the
+    /// debounce window has passed without further changes.
+    /// Currently unused (the learned-cooldown writer went away with the
+    /// prober, PASS §38) — kept as the generic dirty-flush mechanism.
+    #[allow(dead_code)]
     pub fn mark_config_dirty(&self) {
         *self.config_dirty.lock().unwrap() = true;
     }
@@ -796,33 +794,6 @@ impl App {
             *last_change = Some(Instant::now());
         }
         due
-    }
-
-    /// Global default cooldown (prober's initial guess when nothing was learned yet).
-    pub fn default_cooldown_secs(&self) -> u64 {
-        self.read_config().default_cooldown_secs
-    }
-
-    /// The key's current learned_cooldown, if any.
-    pub fn learned_cooldown_of(&self, provider_id: &str, key_id: &str) -> Option<u64> {
-        self.read_config()
-            .provider_by_id(provider_id)?
-            .keys
-            .iter()
-            .find(|k| k.id == key_id)?
-            .learned_cooldown
-    }
-
-    /// Seconds since learned_cooldown was last written for this key (None = never).
-    /// learned_cooldown_changed_at is updated by set_learned_cooldown.
-    pub fn learned_cooldown_age_secs(&self, _provider_id: &str, key_id: &str) -> Option<u64> {
-        let at = *self
-            .learned_at
-            .lock()
-            .unwrap()
-            .get(key_id)?;
-        let elapsed = std::time::Instant::now().saturating_duration_since(at);
-        Some(elapsed.as_secs())
     }
 
     pub fn read_config(&self) -> Config {
@@ -879,7 +850,16 @@ impl App {
     /// since startup, else the persisted `stats.key_metrics` value (so the API Key
     /// page shows the last-known RPM/TPM/success_rate/avg_tftt/tps after a restart).
     /// Returns a KeyMetricsSnapshot (includes token_balance/bill_balance from live).
+    /// Capacity + utilization come from the CONFIGURED capacity (seed/provider
+    /// limits), the only sound source (PASS §38).
     pub fn detected_key_metrics_for(&self, key_id: &str) -> KeyMetricsSnapshot {
+        let cfg = self.read_config();
+        let (cap_rpm, cap_tpm) = cfg
+            .providers
+            .iter()
+            .find(|p| p.keys.iter().any(|k| k.id == key_id))
+            .map(|p| configured_capacity(&cfg, &p.id, key_id))
+            .unwrap_or((None, None));
         {
             let pool = self.pool.lock().unwrap();
             if let Some(lm) = key_live_metrics_from_pool(&pool, key_id) {
@@ -892,9 +872,9 @@ impl App {
                     tps: lm.tps,
                     token_balance: None,
                     bill_balance,
-                    capacity_rpm: lm.capacity_rpm,
-                    capacity_tpm: lm.capacity_tpm,
-                    utilization: utilization_of(lm.rpm, lm.tpm, lm.capacity_rpm, lm.capacity_tpm),
+                    capacity_rpm: cap_rpm,
+                    capacity_tpm: cap_tpm,
+                    utilization: utilization_of(lm.rpm, lm.tpm, cap_rpm, cap_tpm),
                 };
             }
         }
@@ -908,9 +888,9 @@ impl App {
                 tps: pm.tps,
                 token_balance: None,
                 bill_balance: None,
-                capacity_rpm: pm.capacity_rpm,
-                capacity_tpm: pm.capacity_tpm,
-                utilization: utilization_of(pm.rpm, pm.tpm, pm.capacity_rpm, pm.capacity_tpm),
+                capacity_rpm: cap_rpm,
+                capacity_tpm: cap_tpm,
+                utilization: utilization_of(pm.rpm, pm.tpm, cap_rpm, cap_tpm),
             };
         }
         KeyMetricsSnapshot {
@@ -999,6 +979,8 @@ impl App {
     }
 
     /// Mark a key as cooling down. `retry_after_secs` wins if present.
+    /// (learned_cooldown is no longer read anywhere — PASS §38 removed the
+    /// prober; the field stays in the schema for backward compatibility.)
     pub fn mark_cooldown(&self, provider_id: &str, key_id: &str, retry_after_secs: Option<u64>, reason: &str) {
         let cfg = self.read_config();
         let default_secs = cfg.default_cooldown_secs;
@@ -1006,14 +988,7 @@ impl App {
             .provider_by_id(provider_id)
             .and_then(|p| p.keys.iter().find(|k| k.id == key_id))
             .and_then(|k| k.cooldown_secs);
-        // A learned cooldown (measured by post-429 probing) beats the static defaults:
-        // it reflects the key's real rate-limit window.
-        let learned = cfg
-            .provider_by_id(provider_id)
-            .and_then(|p| p.keys.iter().find(|k| k.id == key_id))
-            .and_then(|k| k.learned_cooldown);
         let secs = retry_after_secs
-            .or(learned)
             .or(per_key)
             .unwrap_or(default_secs)
             .max(1);
@@ -1030,20 +1005,30 @@ impl App {
         pool.last_error.insert(key_id.to_string(), reason.to_string());
     }
 
-    /// 429 cooldown for a REAL request — the v0.7.9 chain, unchanged:
-    /// `Retry-After` → `learned_cooldown` → per-key `cooldown_secs` → global
-    /// default. (A floor at the global default was tried and reverted: it
-    /// benched keys far longer than their real recovery time and collapsed the
-    /// pool under load — PASS §30.3.)
+    /// 429 cooldown for a REAL request. Chain: `Retry-After` (upstream is
+    /// authoritative) → per-key `cooldown_secs` (explicit user intent) →
+    /// **window-drain estimate** (when enough of the 60s usage window slides
+    /// out for the next request to fit, given the configured capacity) →
+    /// global default. The active prober was removed (PASS §38): it burned the
+    /// limited keys' own RPM to measure them, and 1-token probes never matched
+    /// real payloads. Real requests after cooldown ARE the probe now.
     ///
     /// Also samples the key's 60s-window (rpm, tpm) usage at the 429 moment —
-    /// every real 429 is a free capacity probe (PASS §36): that load is an
-    /// observed lower bound of the key's capacity, and the min over recent
-    /// samples estimates the limit. Skips uninformative (0, 0) samples.
+    /// kept for diagnostics (PASS §36 sampling; §38: NOT a capacity source).
     pub fn mark_rate_limited(&self, provider_id: &str, key_id: &str, retry_after_secs: Option<u64>, reason: &str) {
+        let cfg = self.read_config();
+        let default_secs = cfg.default_cooldown_secs;
+        let key_cfg = cfg
+            .provider_by_id(provider_id)
+            .and_then(|p| p.keys.iter().find(|k| k.id == key_id));
+        let per_key = key_cfg.and_then(|k| k.cooldown_secs);
+        let (cap_rpm, cap_tpm) = configured_capacity(&cfg, provider_id, key_id);
+
+        let mut pool = self.pool.lock().unwrap();
+        // Diagnostic sample of the load at the 429 moment. (0,0) is
+        // uninformative (the limit was hit by traffic outside our window).
         {
             let now = Instant::now();
-            let mut pool = self.pool.lock().unwrap();
             let m = pool.metrics.entry(key_id.to_string()).or_default();
             m.req_times.retain(|t| now.duration_since(*t) <= Duration::from_secs(METRIC_RPM_WINDOW_SECS));
             m.token_events
@@ -1057,16 +1042,20 @@ impl App {
                 }
             }
         }
-        self.mark_cooldown(provider_id, key_id, retry_after_secs, reason);
-    }
-
-    /// Capacity estimate from 429 samples: per-metric min (conservative — a
-    /// 429 means the limit was hit at that load). A metric with no positive
-    /// samples is None (unknown → that metric doesn't constrain headroom).
-    fn capacity_est(m: &KeyMetrics) -> (Option<u32>, Option<u32>) {
-        let rpm = m.capacity_samples.iter().filter(|s| s.0 > 0).map(|s| s.0).min();
-        let tpm = m.capacity_samples.iter().filter(|s| s.1 > 0).map(|s| s.1).min();
-        (rpm, tpm)
+        let secs = match retry_after_secs {
+            Some(ra) => ra.max(1),
+            None => match per_key {
+                Some(pk) => pk.max(1),
+                None => pool
+                    .metrics
+                    .get(key_id)
+                    .and_then(|m| window_recovery_secs(m, Instant::now(), cap_rpm, cap_tpm))
+                    .unwrap_or(default_secs)
+                    .max(1),
+            },
+        };
+        pool.cooling.insert(key_id.to_string(), Instant::now() + Duration::from_secs(secs));
+        pool.last_error.insert(key_id.to_string(), reason.to_string());
     }
 
     /// Extend a key's cooling to at least `secs` from now — never shortens an
@@ -1190,57 +1179,6 @@ impl App {
         m.bill_balance = usd;
     }
 
-    /// Snapshot of a key's rolling metrics for the strategy layer (spec §2.2).
-    /// success_rate/rpm/tpm are live (tpm from non-stream now; streaming next);
-    /// avg_tftt/tps land with streaming timing; bill_balance with the fetcher.
-    #[allow(dead_code)] // consumed by the strategy layer once implemented (step2 impl-spec §3)
-    pub fn metrics_of(&self, _provider_id: &str, key_id: &str) -> KeyMetricsSnapshot {
-        let pool = self.pool.lock().unwrap();
-        match pool.metrics.get(key_id) {
-            None => KeyMetricsSnapshot {
-                success_rate: 1.0, // no history = don't penalize (valid default)
-                ..Default::default()
-            },
-            Some(m) => {
-                let total = m.success.len();
-                let success_rate = if total == 0 {
-                    1.0
-                } else {
-                    let ok = m.success.iter().filter(|e| e.1).count() as f64;
-                    ok / total as f64
-                };
-                let tpm = m.token_events.iter().map(|(_, n)| *n).sum::<u64>() as u32;
-                let avg_tftt_ms = if m.tftt_samples.is_empty() {
-                    0
-                } else {
-                    (m.tftt_samples.iter().map(|&v| v as u64).sum::<u64>()
-                        / m.tftt_samples.len() as u64) as u32
-                };
-                let tps = if m.tps_samples.is_empty() {
-                    0.0
-                } else {
-                    m.tps_samples.iter().map(|&v| v).sum::<f32>() / m.tps_samples.len() as f32
-                };
-                let (cap_rpm, cap_tpm) = App::capacity_est(m);
-                let rpm = m.req_times.len() as u32;
-                KeyMetricsSnapshot {
-                    success_rate,
-                    rpm,
-                    tpm,
-                    avg_tftt_ms,
-                    tps,
-                    token_balance: None, // +∞ — no catalog provider exposes a clean
-                                        // remaining-token-quota field (see
-                                        // doc/research/provider-balance-apis.md)
-                    bill_balance: m.bill_balance,
-                    capacity_rpm: cap_rpm,
-                    capacity_tpm: cap_tpm,
-                    utilization: utilization_of(rpm, tpm, cap_rpm, cap_tpm),
-                }
-            }
-        }
-    }
-
     /// Per-model price (CNY / 1M tok) from the provider's `price_table`.
     /// Missing entry = 0 (free). Feeds the `price` strategy sort attribute (I, §2.2).
     #[allow(dead_code)] // consumed by the strategy layer once implemented
@@ -1269,15 +1207,12 @@ impl App {
         // the sort reorders the local copy only.
         let mut rows = set.rows.clone();
         let now = Instant::now();
-        // Persisted capacity estimates (restart fallback) — snapshot before the
-        // pool lock (no nesting; the map is small).
-        let persisted = self.stats.lock().unwrap().key_metrics.clone();
         // F8: one lock for fill + cursor read + select + cursor persist + rpm bump.
         // select_pure is pure nanosecond-scale compute, so holding the pool lock
         // across it is safe — and it closes the read-cursor → write-cursor race
         // window where two concurrent requests could pick the same row.
         let mut pool = self.pool.lock().unwrap();
-        fill_rows(&mut pool, &mut rows, now, &persisted);
+        fill_rows(&mut pool, &mut rows, now);
         let cursor = *pool.strategy_cursors.entry(set.cursor_key.clone()).or_insert(0);
         let (result, new_cursor) = crate::strategy::select_pure(&mut rows, sorts, cursor);
         pool.strategy_cursors.insert(set.cursor_key.clone(), new_cursor);
@@ -1309,9 +1244,8 @@ impl App {
     ) -> serde_json::Value {
         let mut rows = set.rows.clone();
         let now = Instant::now();
-        let persisted = self.stats.lock().unwrap().key_metrics.clone();
         let mut pool = self.pool.lock().unwrap();
-        fill_rows(&mut pool, &mut rows, now, &persisted);
+        fill_rows(&mut pool, &mut rows, now);
         let cursor = *pool.strategy_cursors.entry(set.cursor_key.clone()).or_insert(0);
         drop(pool);
         let (result, routed_idx, _new_cursor) =
@@ -1421,57 +1355,8 @@ impl App {
         let mut pool = self.pool.lock().unwrap();
         pool.cooling.remove(key_id);
         pool.invalid.remove(key_id);
-        // NOTE: deliberately NOT clearing `probing` (F10) — a running prober
-        // keeps its dedup claim until it exits; clearing it here would let a
-        // second prober spawn and double-measure the key.
     }
 
-    /// Note that a probe measurement was attempted for this key (regardless of
-    /// outcome), so the RELEARN_AFTER_SECS guard also rate-limits failed
-    /// attempts — a permanently-failing key must not spawn a prober on every 429.
-    pub fn note_probe_attempt(&self, key_id: &str) {
-        self.learned_at
-            .lock()
-            .unwrap()
-            .insert(key_id.to_string(), std::time::Instant::now());
-    }
-
-    /// Clear a key's learned_cooldown (machine-written value). Called when the
-    /// prober finds the window unlearnable (still 429 at the 900s ceiling): a
-    /// stale learned value would otherwise keep outranking the global default
-    /// in the cooldown chain while being provably wrong.
-    pub fn clear_learned_cooldown(&self, provider_id: &str, key_id: &str) {
-        let changed = {
-            let mut cfg = self.config.write().unwrap();
-            match cfg
-                .provider_by_id_mut(provider_id)
-                .and_then(|p| p.keys.iter_mut().find(|k| k.id == key_id))
-            {
-                Some(k) => k.learned_cooldown.take().is_some(),
-                None => false,
-            }
-        };
-        if changed {
-            self.mark_config_dirty();
-        }
-    }
-
-    /// Record a measured cooldown (seconds) learned by post-429 probing into the key's
-    /// config, and mark gateway.json dirty for the debounced flush.
-    pub fn set_learned_cooldown(&self, provider_id: &str, key_id: &str, secs: u64) {        // Write under the write lock directly; no immediate file save (debounced).
-        let mut cfg = self.config.write().unwrap();
-        if let Some(p) = cfg.provider_by_id_mut(provider_id) {
-            if let Some(k) = p.keys.iter_mut().find(|k| k.id == key_id) {
-                k.learned_cooldown = Some(secs);
-            }
-        }
-        drop(cfg);
-        self.learned_at
-            .lock()
-            .unwrap()
-            .insert(key_id.to_string(), std::time::Instant::now());
-        self.mark_config_dirty();
-    }
     /// Pool status snapshot for the UI: per key -> { cooling_until_ms, requests, last_error }.
     pub fn status(&self) -> serde_json::Value {
         let mut pool = self.pool.lock().unwrap();
@@ -1518,6 +1403,79 @@ impl App {
             "last_error": pool.last_error,
         })
     }
+}
+
+/// A key's configured capacity: seed_rpm wins per key; else the provider's
+/// rpm_limit/tpm_limit split evenly across its keys. This is the ONLY capacity
+/// source — 429 samples provably can't measure limits (PASS §38).
+fn configured_capacity(
+    cfg: &Config,
+    provider_id: &str,
+    key_id: &str,
+) -> (Option<u32>, Option<u32>) {
+    let p = match cfg.provider_by_id(provider_id) {
+        Some(p) => p,
+        None => return (None, None),
+    };
+    let n = (p.keys.len() as u32).max(1);
+    let seed = p.keys.iter().find(|k| k.id == key_id).and_then(|k| k.seed_rpm);
+    (seed.or_else(|| p.rpm_limit.map(|l| l / n)), p.tpm_limit.map(|l| l / n))
+}
+
+/// Passive window-drain recovery estimate (PASS §38): the key recovers when
+/// enough of its 60s-window usage slides out for one more request to fit under
+/// the configured capacity. No probe requests are burned — the window contents
+/// are already known. Returns None when no capacity is configured or the
+/// windows don't explain the 429 (caller falls back to the global default).
+///
+/// Bias low (×0.9): underestimating costs one cheap rotation and the next 429
+/// re-estimates with fresher data; overestimating parks a key (the forbidden
+/// direction, §30.3).
+fn window_recovery_secs(
+    m: &KeyMetrics,
+    now: Instant,
+    cap_rpm: Option<u32>,
+    cap_tpm: Option<u32>,
+) -> Option<u64> {
+    let win = Duration::from_secs(METRIC_RPM_WINDOW_SECS);
+    let mut parts: Vec<u64> = Vec::new();
+
+    if let Some(c) = cap_rpm.filter(|c| *c > 0) {
+        let n = m.req_times.len();
+        let c = c as usize;
+        if n >= c {
+            // The oldest (n−c+1) requests must age out; the newest of those sits
+            // at index n−c. Recovery = its timestamp + window − now.
+            let idx = n - c;
+            let t = m.req_times[idx];
+            parts.push(ceil_secs(win.saturating_sub(now.saturating_duration_since(t))));
+        }
+    }
+    if let Some(c) = cap_tpm.filter(|c| *c > 0) {
+        let total: u64 = m.token_events.iter().map(|(_, n)| *n).sum();
+        let avg_req = {
+            let reqs = m.req_times.len() as u64;
+            if reqs > 0 { (total / reqs).max(1) } else { 2000 }
+        };
+        if total + avg_req > c as u64 {
+            let need_drain = total + avg_req - c as u64;
+            let mut acc = 0u64;
+            for (t, n) in &m.token_events {
+                acc += n;
+                if acc >= need_drain {
+                    parts.push(win.saturating_sub(now.saturating_duration_since(*t)).as_secs());
+                    break;
+                }
+            }
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    // max over the constrained dimensions, ×0.9 bias-low, clamped [2, 900].
+    let est = *parts.iter().max().unwrap();
+    let biased = (est as f64 * 0.9).ceil() as u64;
+    Some(biased.clamp(2, 900))
 }
 
 /// Current utilization (max of the rpm/tpm dimensions) against known capacities.
@@ -1648,15 +1606,16 @@ fn key_live_metrics_from_pool(
     } else {
         m.tps_samples.iter().map(|&v| v).sum::<f32>() / m.tps_samples.len() as f32
     };
-    let (capacity_rpm, capacity_tpm) = App::capacity_est(m);
+    // capacity_* stay None: the 429-sample estimate was unsound (PASS §38) and
+    // nothing reads it anymore; capacity comes from configured limits.
     Some(crate::stats::KeyMetricsPersisted {
         rpm: m.req_times.len() as u32,
         tpm,
         success_rate,
         avg_tftt_ms,
         tps,
-        capacity_rpm,
-        capacity_tpm,
+        capacity_rpm: None,
+        capacity_tpm: None,
     })
 }
 

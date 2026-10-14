@@ -56,6 +56,11 @@ fn bool_true() -> bool {
     true
 }
 
+/// Default total hold budget for zero-failure mode (seconds).
+fn default_max_hold_secs() -> u64 {
+    120
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
     #[serde(default = "crate::new_id")]
@@ -253,6 +258,12 @@ pub struct Config {
     pub default_cooldown_secs: u64,
     /// Max attempts per client request (retry on 429/5xx/timeout before first byte).
     pub max_attempts: u32,
+    /// Zero-failure mode (PASS §38): when every valid key is cooling, hold the
+    /// request until the soonest key recovers instead of 429ing the client —
+    /// bounded by this total hold budget (seconds). 0 = never hold (old
+    /// behavior: immediate 429).
+    #[serde(default = "default_max_hold_secs")]
+    pub max_hold_secs: u64,
     pub auth: AuthSettings,
     pub providers: Vec<Provider>,
     /// Currency -> USD rate (e.g. `{"CNY": 0.14}`), for normalizing `bill_balance`
@@ -278,6 +289,7 @@ impl Default for Config {
             ui_port: 8001,
             default_cooldown_secs: 60,
             max_attempts: 3,
+            max_hold_secs: default_max_hold_secs(),
             auth: AuthSettings::default(),
             providers: Vec::new(),
             currency_rates: std::collections::BTreeMap::new(),
@@ -346,10 +358,6 @@ impl Config {
 
     pub fn provider_by_id(&self, id: &str) -> Option<&Provider> {
         self.providers.iter().find(|p| p.id == id)
-    }
-
-    pub fn provider_by_id_mut(&mut self, id: &str) -> Option<&mut Provider> {
-        self.providers.iter_mut().find(|p| p.id == id)
     }
 
     /// Resolve a client-supplied `model` string to (provider, upstream model).
