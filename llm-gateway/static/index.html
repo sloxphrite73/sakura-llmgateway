@@ -113,6 +113,7 @@ const S = {
   addDraft: null,         // { name, base_url, protocol, models[], key, source }
   akEdit: null,           // api-key id whose metric-seed card is open (spec §2.2)
   recycled: 0,
+  histSel: null,          // {chart:'req'|'tok', i} — selected histogram bar
 };
 
 /* ============ sort comparators (A-J) ============ */
@@ -292,6 +293,7 @@ function renderMain(){
   else if (S.tab==='stats') renderStats(m);
   else if (S.tab==='settings') renderSettings(m);
   renderSideFoot();
+  syncOrientation();
 }
 function renderSideFoot(){
   const ok = KEYS.filter(k=>k.valid&&!k.cool).length, cool = KEYS.filter(k=>k.cool).length, off = KEYS.filter(k=>!k.valid).length;
@@ -997,10 +999,10 @@ function renderApiKeys(m){
     <div class="chips" style="margin-bottom:0.875rem;flex:none">
       ${chips.map(c=>`<span class="chip ${f===c[0]?'active':''}" onclick="S.keyFilter='${c[0]}';renderMain()">${c[1]}</span>`).join('')}
     </div>
-    <div class="card ak-table-card"><div class="tbl-scroll"><table>
+    <div class="card ak-table-card"><div class="tbl-scroll"><table class="cards">
       <tr><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('智能冷却时长')}</th><th>${t('状态')}</th><th>RPM</th><th>TPM</th><th>${t('利用率')}</th><th>${t('avg_TFTT')}</th><th>${t('token 余额')}</th><th>${t('账单')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
       ${list.map(k=>`
-      <tr>
+      <tr class="${!k.valid?'ak-off':(k.cool?'ak-cool':'')}">`
         <td data-label="${t('Key')}"><span class="keytag" data-ak="${esc(k.kid)}" data-shown="0">${esc(k.masked||'••••')}</span></td>
         <td data-label="${t('提供商')}">${esc(PNAME(k.prov))}</td>
         <td data-label="${t('智能冷却时长')}" class="num">${k.cdDur}s</td>
@@ -1089,6 +1091,8 @@ function updateAkCells(){
     if (!k) return;
     const tr = span.closest('tr'); if (!tr) return;
     const c = tr.children;
+    tr.classList.toggle('ak-off', !k.valid);
+    tr.classList.toggle('ak-cool', !!k.valid && !!k.cool);
     // cols: 0 Key 1 提供商 2 冷却 3 状态 4 RPM 5 TPM 6 利用率 7 TFTT 8 token余额 9 账单 10 请求数 11 错误 12 操作
     if (c[2]) c[2].innerHTML = k.cdDur + 's';
     if (c[3]) c[3].innerHTML = keyStatus(k);
@@ -1146,8 +1150,9 @@ function tickAkCountdown(){
     k.cd = cd;
     const c = tr.children;
     if (c[3]) c[3].innerHTML = keyStatus(k);
-    if (cd === 0) anyExpired = true;
-  });
+    tr.classList.toggle('ak-off', !k.valid);
+    tr.classList.toggle('ak-cool', !!k.valid && cd > 0);
+    if (cd === 0) anyExpired = true;  });
   if (anyExpired && !S._akSyncing) {
     S._akSyncing = true;
     refreshAkStatus().finally(() => { S._akSyncing = false; });
@@ -1194,6 +1199,16 @@ function renderStats(m){
   const keyStats = Object.entries((STATS && STATS.keys) || {});
   const statRow = (entries, cols, render) => entries.length ? entries.map(render).join('') : `<tr><td colspan="${cols}" class="faint">${t('暂无数据')}</td></tr>`;
   const hh = h => { try { return new Date(h.hour_ms).getHours(); } catch(_){ return 0; } };
+  // Inline detail strip under a histogram when a bar is selected (S.histSel).
+  const histDetail = (histArr, chart) => {
+    if (!S.histSel || S.histSel.chart !== chart) return '';
+    const h = histArr[S.histSel.i];
+    if (!h) return '';
+    const body = chart === 'req'
+      ? `${hh(h)}:00 · ${t('成功')} <b>${h.success}</b> / ${t('失败')} <b>${h.fail}</b> · <b>${(h.tokens||0).toLocaleString()}</b> tok`
+      : `${hh(h)}:00 · <b>${(h.tokens||0).toLocaleString()}</b> tok`;
+    return `<div class="hist-detail">${body}</div>`;
+  };
   m.innerHTML = `
     <h2 class="board-title">${t('统计')}</h2>
     <div class="board-note">${t('请求与 Token 用量 · 数据持久化，重启不丢失')}</div>
@@ -1210,15 +1225,19 @@ function renderStats(m){
     <div class="section">
       <div class="section-title">${t('过去 24 小时请求')} <span class="note">${t('每小时一柱 · 绿=成功 红=失败')}</span></div>
       <div class="card card-pad">
-        ${hist.length ? `<div class="hist">${hist.map(h=>{ const okH=(h.success/peakReq*100).toFixed(2); const failH=(h.fail/peakReq*100).toFixed(2); return `<div class="bar-wrap" title="${t('{h}:00 · 成功 {ok} / 失败 {fail}').replace('{h}',hh(h)).replace('{ok}',h.success).replace('{fail}',h.fail)}">${h.fail?`<div class="bar fail" style="height:${failH}%"></div>`:''}${h.success?`<div class="bar ok" style="height:${okH}%"></div>`:''}</div>`; }).join('')}</div>
-        <div class="hist-x">${hist.map((h,i)=>(i%4===0)?`<span>${hh(h)}:00</span>`:'<span></span>').join('')}</div>` : `<div class="empty">${t('暂无数据')}</div>`}
+        ${hist.length ? `<div class="hist-scroll"><div class="hist">${hist.map((h,i)=>{ const okH=(h.success/peakReq*100).toFixed(2); const failH=(h.fail/peakReq*100).toFixed(2); return `<div class="bar-wrap ${S.histSel&&S.histSel.chart==='req'&&S.histSel.i===i?'sel':''}" data-hchart="req" data-hidx="${i}" title="${t('{h}:00 · 成功 {ok} / 失败 {fail}').replace('{h}',hh(h)).replace('{ok}',h.success).replace('{fail}',h.fail)}">${h.fail?`<div class="bar fail" style="height:${failH}%"></div>`:''}${h.success?`<div class="bar ok" style="height:${okH}%"></div>`:''}</div>`; }).join('')}</div>
+        <div class="hist-x">${hist.map((h,i)=>(i%4===0)?`<span>${hh(h)}:00</span>`:'<span></span>').join('')}</div></div>
+        ${histDetail(hist, 'req')}
+        ` : `<div class="empty">${t('暂无数据')}</div>`}
       </div>
     </div>
     <div class="section">
       <div class="section-title">${t('过去 24 小时 Token 用量')} <span class="note">${t('每小时一柱')}</span></div>
       <div class="card card-pad">
-        ${hist.length ? `<div class="hist">${hist.map(h=>{ const tH=((h.tokens||0)/peakTok*100).toFixed(2); return `<div class="bar-wrap" title="${t('{h}:00 · {n} tok').replace('{h}',hh(h)).replace('{n}',(h.tokens||0).toLocaleString())}">${(h.tokens||0)?`<div class="bar tok" style="height:${tH}%"></div>`:''}</div>`; }).join('')}</div>
-        <div class="hist-x">${hist.map((h,i)=>(i%4===0)?`<span>${hh(h)}:00</span>`:'<span></span>').join('')}</div>` : `<div class="empty">${t('暂无数据')}</div>`}
+        ${hist.length ? `<div class="hist-scroll"><div class="hist">${hist.map((h,i)=>{ const tH=((h.tokens||0)/peakTok*100).toFixed(2); return `<div class="bar-wrap ${S.histSel&&S.histSel.chart==='tok'&&S.histSel.i===i?'sel':''}" data-hchart="tok" data-hidx="${i}" title="${t('{h}:00 · {n} tok').replace('{h}',hh(h)).replace('{n}',(h.tokens||0).toLocaleString())}">${(h.tokens||0)?`<div class="bar tok" style="height:${tH}%"></div>`:''}</div>`; }).join('')}</div>
+        <div class="hist-x">${hist.map((h,i)=>(i%4===0)?`<span>${hh(h)}:00</span>`:'<span></span>').join('')}</div></div>
+        ${histDetail(hist, 'tok')}
+        ` : `<div class="empty">${t('暂无数据')}</div>`}
       </div>
     </div>
     <div class="section">
@@ -1421,7 +1440,23 @@ async function refresh(){
 }
 
 /* ============ theme + collapse ============ */
-function applyTheme(t){ document.documentElement.dataset.theme=t; try{ localStorage.setItem('theme', t); }catch(_){} $('theme-toggle').innerHTML = t==='light'?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>'; }
+function applyTheme(t){
+  document.documentElement.dataset.theme=t;
+  try{ localStorage.setItem('theme', t); }catch(_){}
+  $('theme-toggle').innerHTML = t==='light'?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>';
+  // Android shell: theme the system status/navigation bars to match.
+  try { if (window.SakuraAndroid) SakuraAndroid.setBarsTheme(t); } catch(_) {}
+}
+/* Android shell: landscape while a wide form is open (add-provider flow,
+   model editor, group editor); system default otherwise. Desktop: no bridge. */
+function syncOrientation(){
+  try {
+    if (!window.SakuraAndroid) return;
+    const wide = (S.tab==='providers' && !!S.addState)
+      || (S.tab==='models' && (S.editingModel!=null || !!S.groupEdit));
+    SakuraAndroid.setLandscape(wide);
+  } catch(_) {}
+}
 $('theme-toggle').addEventListener('click',()=>applyTheme(document.documentElement.dataset.theme==='light'?'dark':'light'));
 $('hamburger').addEventListener('click',()=>{
   S.collapsed = !S.collapsed;
@@ -1431,6 +1466,18 @@ $('hamburger').addEventListener('click',()=>{
 /* ============ boot ============ */
 S.lang = localStorage.getItem('lang')==='en' ? 'en' : 'zh';
 applyTheme(localStorage.getItem('theme')==='light' ? 'light' : 'dark');
+// Histogram bar click → inline detail strip (delegated; bars re-render 1/s).
+document.addEventListener('click', e => {
+  const bw = e.target.closest('.bar-wrap[data-hchart]');
+  if (!bw) return;
+  const chart = bw.dataset.hchart, i = +bw.dataset.hidx;
+  S.histSel = (S.histSel && S.histSel.chart === chart && S.histSel.i === i) ? null : { chart, i };
+  if (S.tab === 'stats') {
+    const m = $('main'); const top = m ? m.scrollTop : 0;
+    renderStats(m);
+    if (m) m.scrollTop = top;
+  }
+});
 renderTopbar(); renderSidebar(); renderMain();
 refresh();
 // Live refresh cadence: API Key + Stats panels fetch every 1s (self-guarded to

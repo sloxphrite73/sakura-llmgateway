@@ -488,4 +488,35 @@ class KeepAliveBridge(private val activity: Activity) {
             android.util.Log.w("KeepAliveBridge", "app details intent failed", e)
         }
     }
+
+    /**
+     * Theme the system bars to match the console (dark #0d0e13 / light
+     * #edf1f6), called by the web UI on boot and on every theme toggle.
+     */
+    @JavascriptInterface
+    fun setBarsTheme(theme: String) {
+        activity.runOnUiThread {
+            val light = theme == "light"
+            val color = if (light) 0xFFEDF1F6.toInt() else 0xFF0D0E13.toInt()
+            activity.window.statusBarColor = color
+            activity.window.navigationBarColor = color
+            val c = androidx.core.view.WindowInsetsControllerCompat(activity.window, activity.window.decorView)
+            c.isAppearanceLightStatusBars = light
+            c.isAppearanceLightNavigationBars = light
+        }
+    }
+
+    /**
+     * Auto-landscape while the user is in a wide form (add provider / model
+     * edit / model-group editor); restore the system default on exit.
+     */
+    @JavascriptInterface
+    fun setLandscape(on: Boolean) {
+        activity.runOnUiThread {
+            activity.requestedOrientation = if (on)
+                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            else
+                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
 }

@@ -377,6 +377,17 @@ button[disabled], button:disabled { opacity: 0.5; cursor: default; pointer-event
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 @media (max-width: 640px) { table { display: block; overflow-x: auto; } th, td { white-space: nowrap; } }   /* unconverted tables keep horizontal scroll */
+/* ≤640px: histograms get a fixed bar width and scroll horizontally instead of
+   compressing 24 bars into the viewport; clicking a bar shows the detail strip. */
+@media (max-width: 640px) {
+  .hist-scroll { overflow-x: auto; }
+  .hist-scroll .hist { min-width: 34rem; }
+  .hist-scroll .hist-x { min-width: 34rem; }
+}
+.hist .bar-wrap { cursor: pointer; }
+.hist .bar-wrap.sel { outline: 0.1875rem solid var(--color-border-focus); outline-offset: 0.0625rem; border-radius: 0.1875rem; }
+.hist-detail { margin-top: 0.625rem; font-size: 0.8125rem; color: var(--color-text-secondary); }
+.hist-detail b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 @media (max-width: 640px) {
   /* tables marked class="cards" -> stacked card-lists (no horizontal scroll). Each
      <tr> a card, each <td> a label:value row via data-label (label left, value
@@ -391,8 +402,15 @@ button[disabled], button:disabled { opacity: 0.5; cursor: default; pointer-event
   table.cards td { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 0.3125rem 0; border: none; text-align: right; white-space: normal; }
   table.cards td::before { content: attr(data-label); color: var(--color-text-tertiary); font-family: var(--font-sans); font-size: 0.75rem; font-weight: 500; text-align: left; flex: none; }
   table.cards td:not([data-label])::before { content: none; }
+  /* sticky first/last columns are for horizontal-scroll tables; inert them in card mode */
+  table.cards td:first-child, table.cards th:first-child,
+  table.cards td:last-child, table.cards th:last-child { position: static; box-shadow: none; }
   table.cards td[colspan] { justify-content: center; color: var(--color-text-tertiary); }
   table.cards td[colspan]::before { content: none; }
+  /* api-keys table in card mode: the 4-button ops row wraps; status tints the card */
+  table.cards td.ak-actions { flex-wrap: wrap; justify-content: flex-end; }
+  table.cards tr.ak-cool { border-color: var(--color-feedback-warning-border); background: var(--color-feedback-warning-bg); }
+  table.cards tr.ak-off { border-color: var(--color-feedback-error-border); background: var(--color-feedback-error-bg); }
 }
 @media (max-width: 900px) {
   .main > .prov-board { flex-direction: column; gap: 1rem; }
