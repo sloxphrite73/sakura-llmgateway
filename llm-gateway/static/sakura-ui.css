@@ -415,7 +415,9 @@ button[disabled], button:disabled { opacity: 0.5; cursor: default; pointer-event
 @media (max-width: 900px) {
   .main > .prov-board { flex-direction: column; gap: 1rem; }
   .main > .prov-board .prov-list-col { width: 100%; flex-direction: row; overflow-x: auto; }
-  .pl-head { display: none; }
+  /* .pl-head stays visible: it carries the only "+ 添加" affordance — hiding it
+     made adding a provider impossible on narrow screens (esp. with an empty
+     provider list, where the detail pane's hint pointed at an invisible button). */
 }
 @media (max-width: 560px) {
   /* mobile: hide the left sidebar + its hamburger; navigate via the bottom tab bar */
