@@ -14,6 +14,8 @@ $env:JAVA_HOME = "$tc\jdk\jdk-17"
 $env:ANDROID_HOME = $sdk
 $env:ANDROID_SDK_ROOT = $sdk
 $env:ANDROID_NDK_LATEST_HOME = "$sdk\ndk\26.3.11579264"
+$env:ANDROID_NDK_HOME = $env:ANDROID_NDK_LATEST_HOME   # cargo-ndk asks for this one
+$env:ANDROID_NDK = $env:ANDROID_NDK_LATEST_HOME
 $env:PATH = "$tc\gradle\bin;$sdk\platform-tools;$sdk\cmdline-tools\latest\bin;$env:JAVA_HOME\bin;$env:USERPROFILE\.cargo\bin;$env:PATH"
 
 function Check($ok, $msg) { if (-not $ok) { Write-Host "MISSING: $msg" -ForegroundColor Red; exit 1 } }
@@ -50,21 +52,21 @@ foreach ($abi in 'arm64-v8a','armeabi-v7a','x86_64') {
 Write-Host '== gradle assembleRelease =='
 # Sign with the local dev keystore when present (a truly unsigned APK is
 # uninstallable: "no certificates"). Dev key only — release signing stays in CI.
+# NOTE: pass -P args literally, NOT via array splat — PS5.1 mangles splatted
+# args containing '=' into one blob and gradle then reads a garbage keystore path.
 $ks = "$tc\dev-keystore.jks"
-$gradleArgs = @('assembleRelease')
+Push-Location "$root\android"
 if (Test-Path $ks) {
-  $gradleArgs += @(
-    '-Pandroid.keystore.path=' + $ks,
-    '-Pandroid.keystore.password=sakura-dev',
-    '-Pandroid.keystore.alias=sakura-dev',
-    '-Pandroid.keystore.keypassword=sakura-dev'
-  )
   Write-Host 'signing with local dev keystore'
+  & "$tc\gradle\bin\gradle.bat" --no-daemon --console=plain assembleRelease `
+    "-Pandroid.keystore.path=$ks" `
+    "-Pandroid.keystore.password=sakura-dev" `
+    "-Pandroid.keystore.alias=sakura-dev" `
+    "-Pandroid.keystore.keypassword=sakura-dev"
 } else {
   Write-Host 'WARNING: no dev keystore -> APK will be unsigned and uninstallable'
+  & "$tc\gradle\bin\gradle.bat" --no-daemon --console=plain assembleRelease
 }
-Push-Location "$root\android"
-& "$tc\gradle\bin\gradle.bat" @gradleArgs
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location
 
