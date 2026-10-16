@@ -47,9 +47,24 @@ foreach ($abi in 'arm64-v8a','armeabi-v7a','x86_64') {
   Copy-Item "$root\llm-gateway\target\$target\release\llm-gateway" "$dst\libllmgateway.so" -Force
 }
 
-Write-Host '== gradle assembleRelease (unsigned) =='
+Write-Host '== gradle assembleRelease =='
+# Sign with the local dev keystore when present (a truly unsigned APK is
+# uninstallable: "no certificates"). Dev key only — release signing stays in CI.
+$ks = "$tc\dev-keystore.jks"
+$gradleArgs = @('assembleRelease')
+if (Test-Path $ks) {
+  $gradleArgs += @(
+    '-Pandroid.keystore.path=' + $ks,
+    '-Pandroid.keystore.password=sakura-dev',
+    '-Pandroid.keystore.alias=sakura-dev',
+    '-Pandroid.keystore.keypassword=sakura-dev'
+  )
+  Write-Host 'signing with local dev keystore'
+} else {
+  Write-Host 'WARNING: no dev keystore -> APK will be unsigned and uninstallable'
+}
 Push-Location "$root\android"
-& "$tc\gradle\bin\gradle.bat" assembleRelease
+& "$tc\gradle\bin\gradle.bat" @gradleArgs
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location
 
