@@ -1002,7 +1002,7 @@ function renderApiKeys(m){
     <div class="card ak-table-card"><div class="tbl-scroll"><table class="cards">
       <tr><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('智能冷却时长')}</th><th>${t('状态')}</th><th>RPM</th><th>TPM</th><th>${t('利用率')}</th><th>${t('avg_TFTT')}</th><th>${t('token 余额')}</th><th>${t('账单')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
       ${list.map(k=>`
-      <tr class="${!k.valid?'ak-off':(k.cool?'ak-cool':'')}">`
+      <tr class="${!k.valid?'ak-off':(k.cool?'ak-cool':'')}">
         <td data-label="${t('Key')}"><span class="keytag" data-ak="${esc(k.kid)}" data-shown="0">${esc(k.masked||'••••')}</span></td>
         <td data-label="${t('提供商')}">${esc(PNAME(k.prov))}</td>
         <td data-label="${t('智能冷却时长')}" class="num">${k.cdDur}s</td>

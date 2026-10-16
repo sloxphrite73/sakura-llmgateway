@@ -33,6 +33,20 @@ jobs:
           key: cargo-release-${{ hashFiles('llm-gateway/Cargo.lock') }}
           restore-keys: cargo-release-
 
+      - name: Console JS syntax gate (node --check)
+        working-directory: llm-gateway
+        shell: pwsh
+        run: |
+          # A syntax error in the single-file console = blank page everywhere
+          # (shipped once as a blank APK). Cheap gate: extract the inline
+          # <script> and parse it with the runner's built-in Node.
+          $html = Get-Content static/index.html -Raw
+          $m = [regex]::Match($html, '(?s)<script>(.*)</script>')
+          if (-not $m.Success) { throw "no inline script found" }
+          [System.IO.File]::WriteAllText("$env:TEMP\inline.js", $m.Groups[1].Value)
+          node --check "$env:TEMP\inline.js"
+          if ($LASTEXITCODE -ne 0) { throw "console JS syntax error" }
+
       - name: Build release binary
         working-directory: llm-gateway
         run: cargo build --release
