@@ -350,15 +350,16 @@ function renderProviders(m){
   S.localProv = sel;
   const p = PROVIDERS.find(x=>x.id===sel);
   m.innerHTML = `
-    <div class="prov-board">
+    <h2 class="board-title prov-board-title">${t('提供商')}</h2>
+    <div class="prov-board ${PROVIDERS.length ? '' : 'empty'}">
       <div class="prov-list-col">
-        <div class="pl-head"><span>${t('提供商')}</span><span class="add" onclick="enterAdd()">${t('+ 添加')}</span></div>
+        <div class="pl-head"><span class="pl-head-label">${t('提供商')}</span><button class="small" onclick="enterAdd()">${t('+ 添加')}</button></div>
         ${PROVIDERS.length ? PROVIDERS.map(p=>{ const kc=KEYS.filter(k=>k.prov===p.id).length; return `
         <div class="pl-item ${sel===p.id?'active':''}" onclick="setLocalProv('${p.id}')">
           <span class="pdot" style="background:${p.dot}"></span>
           <span class="pl-name">${esc(p.name)}</span>
           <span class="pl-badge">${kc}</span>
-        </div>`; }).join('') : `<div class="faint" style="padding:0.75rem 1rem">${t('暂无数据')}</div>`}
+        </div>`; }).join('') : `<div class="faint pl-empty">${t('暂无提供商，点击「+ 添加」创建')}</div>`}
       </div>
       <div class="prov-detail-col">
         ${S.addState ? renderAddView() : (p ? `<h2 class="board-title">${esc(p.name)}</h2><div class="board-note">${t('基本信息 + 限额（已归并到提供商下）')}</div>${providerDetail(p)}` : `<h2 class="board-title">${t('提供商')}</h2><div class="board-note">${t('暂无提供商，点击「+ 添加」创建')}</div>`)}

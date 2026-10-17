@@ -418,7 +418,24 @@ button[disabled], button:disabled { opacity: 0.5; cursor: default; pointer-event
   /* .pl-head stays visible: it carries the only "+ 添加" affordance — hiding it
      made adding a provider impossible on narrow screens (esp. with an empty
      provider list, where the detail pane's hint pointed at an invisible button). */
+  /* Page-level board title above the whole prov-board; the detail column's own
+     big title (the provider name) is hidden here — it used to land UNDER the
+     provider list once the board stacked vertically (landscape/portrait bug). */
+  .prov-detail-col > h2.board-title { display: none; }
+  /* pl-head: the tiny "提供商" label duplicates the page-level title; keep just
+     the add action, as a real button with breathing room (was a cramped inline
+     text link mashed against the label). */
+  .pl-head { padding: 0 0.125rem 0.75rem; }
+  .pl-head .pl-head-label { display: none; }
+  .pl-head { justify-content: flex-end; }
+  /* empty state: the call-to-action lives in the list area; the floating
+     detail-pane hint would just dangle mid-page. */
+  .prov-board.empty .prov-detail-col { display: none; }
+  .pl-empty { padding: 1.25rem 1rem; }
 }
+/* the page-level providers title only exists for the stacked (≤900px) layout */
+.prov-board-title { display: none; }
+@media (max-width: 900px) { .prov-board-title { display: block; } }
 @media (max-width: 560px) {
   /* mobile: hide the left sidebar + its hamburger; navigate via the bottom tab bar */
   .sidebar { display: none; }
