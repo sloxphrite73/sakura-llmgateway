@@ -429,8 +429,13 @@ button[disabled], button:disabled { opacity: 0.5; cursor: default; pointer-event
   .pl-head .pl-head-label { display: none; }
   .pl-head { justify-content: flex-end; }
   /* empty state: the call-to-action lives in the list area; the floating
-     detail-pane hint would just dangle mid-page. */
+     detail-pane hint would just dangle mid-page. BUT the detail column also
+     hosts the add flow (choose/catalog/form) — hiding it when empty made
+     "+ 添加" open an invisible view. Only collapse it when NOT adding. */
   .prov-board.empty .prov-detail-col { display: none; }
+  .prov-board.empty.adding .prov-detail-col { display: block; }
+  /* while the add flow runs, the list head/empty-hint step aside */
+  .prov-board.adding .pl-head, .prov-board.adding .pl-empty { display: none; }
   .pl-empty { padding: 1.25rem 1rem; }
 }
 /* the page-level providers title only exists for the stacked (≤900px) layout */

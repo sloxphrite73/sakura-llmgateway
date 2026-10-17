@@ -294,6 +294,7 @@ function renderMain(){
   else if (S.tab==='settings') renderSettings(m);
   renderSideFoot();
   syncOrientation();
+  saveUiState();
 }
 function renderSideFoot(){
   const ok = KEYS.filter(k=>k.valid&&!k.cool).length, cool = KEYS.filter(k=>k.cool).length, off = KEYS.filter(k=>!k.valid).length;
@@ -351,9 +352,9 @@ function renderProviders(m){
   const p = PROVIDERS.find(x=>x.id===sel);
   m.innerHTML = `
     <h2 class="board-title prov-board-title">${t('提供商')}</h2>
-    <div class="prov-board ${PROVIDERS.length ? '' : 'empty'}">
+    <div class="prov-board ${PROVIDERS.length ? '' : 'empty'}${S.addState ? ' adding' : ''}">
       <div class="prov-list-col">
-        <div class="pl-head"><span class="pl-head-label">${t('提供商')}</span><button class="small" onclick="enterAdd()">${t('+ 添加')}</button></div>
+        <div class="pl-head"><span class="pl-head-label">${t('提供商')}</span><span class="add" onclick="enterAdd()">${t('+ 添加')}</span></div>
         ${PROVIDERS.length ? PROVIDERS.map(p=>{ const kc=KEYS.filter(k=>k.prov===p.id).length; return `
         <div class="pl-item ${sel===p.id?'active':''}" onclick="setLocalProv('${p.id}')">
           <span class="pdot" style="background:${p.dot}"></span>
@@ -1464,9 +1465,34 @@ $('hamburger').addEventListener('click',()=>{
   $('sidebar').classList.toggle('collapsed', S.collapsed);
 });
 
+/* ============ UI state persistence (survive Android rotation reloads) ============ */
+/* The Android shell lets rotation recreate the WebView (a live WebView does NOT
+   relayout on rotate — content + touch targets go stale). Persist enough UI
+   state to land back where the user was after the reload. */
+const UI_STATE_KEYS = ['tab','addState','editingModel','groupEdit','keyFilter','modelFilter','modelTab','reqModel','reqProv'];
+function saveUiState(){
+  try {
+    const o = {};
+    for (const k of UI_STATE_KEYS) o[k] = S[k];
+    if (S.addDraft) o.addDraft = S.addDraft;      // add-provider form syncs into addDraft oninput already
+    if (S.groupEdit) o.groupEdit = S.groupEdit;
+    localStorage.setItem('uiState', JSON.stringify(o));
+  } catch(_) {}
+}
+function restoreUiState(){
+  try {
+    const o = JSON.parse(localStorage.getItem('uiState') || 'null');
+    if (!o) return;
+    for (const k of UI_STATE_KEYS) if (o[k] !== undefined && o[k] !== null) S[k] = o[k];
+    if (o.addDraft) S.addDraft = o.addDraft;
+    if (o.groupEdit) S.groupEdit = o.groupEdit;
+  } catch(_) {}
+}
+
 /* ============ boot ============ */
 S.lang = localStorage.getItem('lang')==='en' ? 'en' : 'zh';
 applyTheme(localStorage.getItem('theme')==='light' ? 'light' : 'dark');
+restoreUiState();
 // Histogram bar click → inline detail strip (delegated; bars re-render 1/s).
 document.addEventListener('click', e => {
   const bw = e.target.closest('.bar-wrap[data-hchart]');
