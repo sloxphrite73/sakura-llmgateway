@@ -50,22 +50,41 @@ foreach ($abi in 'arm64-v8a','armeabi-v7a','x86_64') {
 }
 
 Write-Host '== gradle assembleRelease =='
-# Sign with the local dev keystore when present (a truly unsigned APK is
-# uninstallable: "no certificates"). Dev key only — release signing stays in CI.
-# NOTE: pass -P args literally, NOT via array splat — PS5.1 mangles splatted
-# args containing '=' into one blob and gradle then reads a garbage keystore path.
+# versionName from git describe (tag) / versionCode = commit count, like CI.
+Push-Location $root
+$verName = (git describe --tags --always --dirty) -replace '^v',''
+$verCode = (git rev-list --count HEAD)
+Pop-Location
+$versionArgs = @("-PversionName=$verName", "-PversionCode=$verCode")
+# Signing: release keystore when D:\android-toolchain\release-sign.properties
+# exists (storePassword/keyAlias/keyPassword, points at <repo>/sakura-release.jks),
+# else the local dev keystore. An unsigned APK is uninstallable.
+$signProps = "$tc\release-sign.properties"
 $ks = "$tc\dev-keystore.jks"
 Push-Location "$root\android"
-if (Test-Path $ks) {
-  Write-Host 'signing with local dev keystore'
+# NOTE: pass -P args literally, NOT via array splat — PS5.1 mangles splatted
+# args containing '=' into one blob and gradle then reads a garbage path.
+if (Test-Path $signProps) {
+  $props = @{}
+  Get-Content $signProps | ForEach-Object { if ($_ -match '^\s*([^=]+?)\s*=\s*(.+)$') { $props[$Matches[1]] = $Matches[2] } }
+  Write-Host "signing with RELEASE keystore; versionName=$verName versionCode=$verCode"
   & "$tc\gradle\bin\gradle.bat" --no-daemon --console=plain assembleRelease `
+    "-PversionName=$verName" "-PversionCode=$verCode" `
+    "-Pandroid.keystore.path=$root\sakura-release.jks" `
+    "-Pandroid.keystore.password=$($props['storePassword'])" `
+    "-Pandroid.keystore.alias=$($props['keyAlias'])" `
+    "-Pandroid.keystore.keypassword=$($props['keyPassword'])"
+} elseif (Test-Path $ks) {
+  Write-Host "signing with local dev keystore; versionName=$verName versionCode=$verCode"
+  & "$tc\gradle\bin\gradle.bat" --no-daemon --console=plain assembleRelease `
+    "-PversionName=$verName" "-PversionCode=$verCode" `
     "-Pandroid.keystore.path=$ks" `
     "-Pandroid.keystore.password=sakura-dev" `
     "-Pandroid.keystore.alias=sakura-dev" `
     "-Pandroid.keystore.keypassword=sakura-dev"
 } else {
-  Write-Host 'WARNING: no dev keystore -> APK will be unsigned and uninstallable'
-  & "$tc\gradle\bin\gradle.bat" --no-daemon --console=plain assembleRelease
+  Write-Host 'WARNING: no keystore -> APK will be unsigned and uninstallable'
+  & "$tc\gradle\bin\gradle.bat" --no-daemon --console=plain assembleRelease "-PversionName=$verName" "-PversionCode=$verCode"
 }
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location

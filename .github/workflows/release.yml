@@ -1,12 +1,11 @@
 name: Release
 
 # Build the single-file Windows binary (embedded UI via rust-embed) and the
-# universal Android APK, and attach both to a GitHub Release.
-# Trigger: push a tag like v0.1.0, or run manually from the Actions tab.
+# universal Android APK as downloadable run artifacts.
+# Trigger: manual (workflow_dispatch) only. Actual releases are built LOCALLY
+# and published with a reviewed changelog (PASS.md release discipline,
+# 2026-10-17) — tags no longer auto-publish.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 permissions:
