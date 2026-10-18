@@ -4,6 +4,17 @@ Required Notice: Copyright sloxphrite73 (https://github.com/sloxphrite73/sakura-
 
 <https://polyformproject.org/licenses/noncommercial/1.0.0>
 
+## Additional Attribution Condition (Licensor's Supplementary Term)
+
+As an additional condition to all licenses granted under these terms,
+effective from 2026-10-17: any project that directly or indirectly
+incorporates, adapts, or derives from any part of this software's source
+code must explicitly and visibly credit the author (**sloxphrite73**) and
+this project (**sakura-llmgateway**) in its public documentation (e.g.
+README, about page, or equivalent), including a link to
+https://github.com/sloxphrite73/sakura-llmgateway. Failure to provide this
+attribution terminates your licenses under the Violations section below.
+
 ## Acceptance
 
 In order to get any license under these terms, you must agree
