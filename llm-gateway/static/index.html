@@ -220,6 +220,8 @@ const EN = {
   '未找到该 Key':'Key not found', '失败: ':'Failed: ',
   /* api-key metric seed editor (spec §2.2 手动 seed) */
   'Seed':'Seed', '预置':'Seed', '指标预置':'Metric seed',
+  '名字':'Name', '编辑':'Edit', '留空 = 显示掩码 Key':'Empty = show masked key',
+  '粘贴 API Key，多个每行一个；可在 Key 前加名字，空格分隔':'Paste API keys, one per line; optionally prefix each with a display name separated by a space',
   '无实测史时的预置初值，有实测后自动覆盖；留空 = 清除':'Preset initial values used before any live measurement; auto-overridden once measured; empty = clear',
   /* upstream-fetch auto-import + model-group editor + readonly hints */
   '请先选择提供商':'Pick a provider first', '拉取中…':'Fetching…', '拉取失败: ':'Fetch failed: ',
@@ -462,7 +464,7 @@ async function commitAdd(){
     const prov = (cfg.providers||[]).find(x=>x.name===d.name.trim());
     if (!prov) throw new Error('provider create failed');
     const pid = prov.id;
-    await api('POST', '/api/providers/'+pid+'/keys', { key:d.key.trim(), label:'' });
+    await api('POST', '/api/providers/'+pid+'/keys', { key:d.key.trim(), display_name:'' });
     for (const mId of d.models){ try { await api('POST', '/api/providers/'+pid+'/models', { id:mId }); } catch(e){ /* ignore duplicate-model conflicts */ } }
     S.addState=null; S.addDraft=null; S.localProv=pid;
     await refresh(); toast(t('添加成功'));
@@ -966,9 +968,14 @@ async function akAdd(){
   if(!sel||!inp) return;
   const prov=sel.value, raw=inp.value.trim(); if(!raw) return;
   // Always split by newlines/commas — single key or batch, same path.
-  const keys=raw.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean);
+  // 每行可带显示名：最后一个空格前的是名字，之后的是 Key（Key 本身不含空格）。
+  const keys=raw.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean).map(line=>{
+    const i=line.lastIndexOf(' ');
+    return i>0 ? { key: line.slice(i+1).trim(), display_name: line.slice(0,i).trim() }
+               : { key: line, display_name: '' };
+  });
   let failed=0;
-  for (const k of keys){ try { await api('POST', '/api/providers/'+prov+'/keys', { key:k, label:'' }); } catch(e){ failed++; console.error('akAdd', e); } }
+  for (const k of keys){ try { await api('POST', '/api/providers/'+prov+'/keys', k); } catch(e){ failed++; console.error('akAdd', e); } }
   inp.value=''; await refresh();
   if (failed) toast(t('失败: ')+failed); else if (keys.length>1) toast(t('已添加 {n} 把').replace('{n}', keys.length-failed));
 }
@@ -991,7 +998,7 @@ function renderApiKeys(m){
       <div class="ak-add">
         <select id="ak-prov" aria-label="${t('提供商')}">${PROVIDERS.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
         <span class="ak-input-wrap">
-          <textarea id="ak-key-input" class="ak-key-input" aria-label="${t('API Key')}" placeholder="${t('粘贴 API Key，多个每行一个')}" rows="2"></textarea>
+          <textarea id="ak-key-input" class="ak-key-input" aria-label="${t('API Key')}" placeholder="${t('粘贴 API Key，多个每行一个；可在 Key 前加名字，空格分隔')}" rows="2"></textarea>
           <button class="ak-paste" type="button" aria-label="${t('从剪贴板粘贴')}" title="${t('从剪贴板粘贴')}" onclick="akPaste(this)">${CLIP}</button>
         </span>
         <button class="primary small" type="button" onclick="akAdd()">${t('添加')}</button>
@@ -1002,9 +1009,10 @@ function renderApiKeys(m){
       ${chips.map(c=>`<span class="chip ${f===c[0]?'active':''}" onclick="S.keyFilter='${c[0]}';renderMain()">${c[1]}</span>`).join('')}
     </div>
     <div class="card ak-table-card"><div class="tbl-scroll"><table class="cards">
-      <tr><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('智能冷却时长')}</th><th>${t('状态')}</th><th>RPM</th><th>TPM</th><th>${t('利用率')}</th><th>${t('avg_TFTT')}</th><th>${t('token 余额')}</th><th>${t('账单')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
+      <tr><th>${t('名字')}</th><th>${t('Key')}</th><th>${t('提供商')}</th><th>${t('智能冷却时长')}</th><th>${t('状态')}</th><th>RPM</th><th>TPM</th><th>${t('利用率')}</th><th>${t('avg_TFTT')}</th><th>${t('token 余额')}</th><th>${t('账单')}</th><th>${t('请求数')}</th><th>${t('最近错误')}</th><th>${t('操作')}</th></tr>
       ${list.map(k=>`
       <tr class="${!k.valid?'ak-off':(k.cool?'ak-cool':'')}">
+        <td data-label="${t('名字')}"><span class="ak-dname" title="${esc(k.dname||k.masked||'••••')}">${esc(k.dname||k.masked||'••••')}</span></td>
         <td data-label="${t('Key')}"><span class="keytag" data-ak="${esc(k.kid)}" data-shown="0">${esc(k.masked||'••••')}</span></td>
         <td data-label="${t('提供商')}">${esc(PNAME(k.prov))}</td>
         <td data-label="${t('智能冷却时长')}" class="num">${k.cdDur}s</td>
@@ -1020,22 +1028,24 @@ function renderApiKeys(m){
         <td data-label="${t('操作')}" class="ak-actions">
           <button class="small" type="button" onclick="akShow('${esc(k.kid)}', this)">${t('显示')}</button>
           <button class="small" type="button" onclick="akCopy('${esc(k.kid)}', this)">${t('复制')}</button>
-          <button class="small" type="button" onclick="akEditSeed('${esc(k.kid)}')">${t('Seed')}</button>
+          <button class="small" type="button" onclick="akEditSeed('${esc(k.kid)}')">${t('编辑')}</button>
           <button class="small" type="button" onclick="akDel('${esc(k.kid)}')" style="border-color:var(--color-feedback-error-text);color:var(--color-feedback-error-text)">${t('删除')}</button>
         </td>
-      </tr>`).join('') || `<tr><td colspan="13" class="faint">${t('无')}</td></tr>`}
+      </tr>`).join('') || `<tr><td colspan="14" class="faint">${t('无')}</td></tr>`}
     </table></div></div>
     </div>`;
 }
 
-/* ---------- api key metric seed editor (spec §2.2 手动 seed) ---------- */
+/* ---------- api key editor modal: 显示名 + 指标预置（spec §2.2 手动 seed） ---------- */
 function renderAkSeedCard(kid){
   const k = KEYS.find(x=>x.kid===kid); if(!k) return '';
   const sv = f => (k[f]==null||k[f]===undefined)?'':k[f];
   return `
-    <div class="card card-pad" style="margin-bottom:1.25rem">
+    <div class="ak-modal-backdrop" onclick="if(event.target===this)cancelAkEdit()">
+      <div class="card card-pad ak-modal">
       <div class="edit-card">
-        <div class="edit-name grp-sans">${t('指标预置')} · <span class="keytag">${esc(k.masked||'••••')}</span></div>
+        <div class="edit-name grp-sans">${t('编辑')} · <span class="keytag">${esc(k.masked||'••••')}</span></div>
+        <div class="pd-field pd-row"><span class="lbl">${t('名字')}</span><input class="val" id="ak-dname" type="text" aria-label="${t('名字')}" placeholder="${t('留空 = 显示掩码 Key')}" value="${esc(k.dname||'')}"></div>
         <div class="board-note" style="margin-bottom:1.5rem">${t('无实测史时的预置初值，有实测后自动覆盖；留空 = 清除')}</div>
         <div class="pd-field pd-row"><span class="lbl">RPM</span><input class="val mono" id="ak-seed-rpm" type="number" min="0" step="1" aria-label="${t('预置')} RPM" value="${sv('seedRpm')}"></div>
         <div class="pd-field pd-row"><span class="lbl">TPM</span><input class="val mono" id="ak-seed-tpm" type="number" min="0" step="1" aria-label="${t('预置')} TPM" value="${sv('seedTpm')}"></div>
@@ -1043,6 +1053,7 @@ function renderAkSeedCard(kid){
         <div class="pd-field pd-row"><span class="lbl">TFTT (ms)</span><input class="val mono" id="ak-seed-tftt" type="number" min="0" step="1" aria-label="${t('预置')} TFTT" value="${sv('seedTftt')}"></div>
         <div class="pd-field pd-row"><span class="lbl">TPS</span><input class="val mono" id="ak-seed-tps" type="number" min="0" step="0.1" aria-label="${t('预置')} TPS" value="${sv('seedTps')}"></div>
         <div class="ak-actions" style="margin-top:1.5rem"><button class="primary small" type="button" onclick="saveAkSeed('${esc(kid)}')">${t('保存')}</button><button class="small" type="button" onclick="cancelAkEdit()">${t('取消')}</button></div>
+      </div>
       </div>
     </div>`;
 }
@@ -1052,6 +1063,7 @@ async function saveAkSeed(kid){
   const k = KEYS.find(x=>x.kid===kid); if(!k) return;
   const num = (id, isFloat) => { const v=$(id).value.trim(); if(v==='')return null; const n=isFloat?parseFloat(v):parseInt(v,10); return Number.isFinite(n)?n:null; };
   const body = {
+    display_name: $('ak-dname') ? $('ak-dname').value.trim() : '',
     seed_rpm: num('ak-seed-rpm', false),
     seed_tpm: num('ak-seed-tpm', false),
     seed_success_rate: num('ak-seed-sr', true),
@@ -1095,17 +1107,19 @@ function updateAkCells(){
     const c = tr.children;
     tr.classList.toggle('ak-off', !k.valid);
     tr.classList.toggle('ak-cool', !!k.valid && !!k.cool);
-    // cols: 0 Key 1 提供商 2 冷却 3 状态 4 RPM 5 TPM 6 利用率 7 TFTT 8 token余额 9 账单 10 请求数 11 错误 12 操作
-    if (c[2]) c[2].innerHTML = k.cdDur + 's';
-    if (c[3]) c[3].innerHTML = keyStatus(k);
-    if (c[4]) c[4].textContent = String(k.rpm||0);
-    if (c[5]) c[5].textContent = String(k.tpm||0);
-    if (c[6]) { c[6].textContent = k.util!=null ? Math.round(k.util*100)+'%' : '-'; }
-    if (c[7]) c[7].textContent = k.tftt ? (k.tftt+'ms') : '-';
-    if (c[8]) c[8].innerHTML = k.tb===Infinity ? '—' : k.tb.toLocaleString();
-    if (c[9]) c[9].innerHTML = k.bb===Infinity ? '—' : '¥'+k.bb;
-    if (c[10]) c[10].textContent = String(k.req||0);
-    if (c[11]) c[11].innerHTML = `<span class="ak-err" title="${esc(k.lastErr||'-')}">${esc(k.lastErr||'-')}</span>`;
+    // cols: 0 名字 1 Key 2 提供商 3 冷却 4 状态 5 RPM 6 TPM 7 利用率 8 TFTT 9 token余额 10 账单 11 请求数 12 错误 13 操作
+    const dn = k.dname || k.masked || '••••';
+    if (c[0]) c[0].innerHTML = `<span class="ak-dname" title="${esc(dn)}">${esc(dn)}</span>`;
+    if (c[3]) c[3].innerHTML = k.cdDur + 's';
+    if (c[4]) c[4].innerHTML = keyStatus(k);
+    if (c[5]) c[5].textContent = String(k.rpm||0);
+    if (c[6]) c[6].textContent = String(k.tpm||0);
+    if (c[7]) { c[7].textContent = k.util!=null ? Math.round(k.util*100)+'%' : '-'; }
+    if (c[8]) c[8].textContent = k.tftt ? (k.tftt+'ms') : '-';
+    if (c[9]) c[9].innerHTML = k.tb===Infinity ? '—' : k.tb.toLocaleString();
+    if (c[10]) c[10].innerHTML = k.bb===Infinity ? '—' : '¥'+k.bb;
+    if (c[11]) c[11].textContent = String(k.req||0);
+    if (c[12]) c[12].innerHTML = `<span class="ak-err" title="${esc(k.lastErr||'-')}">${esc(k.lastErr||'-')}</span>`;
   });
 }
 
@@ -1155,7 +1169,7 @@ function tickAkCountdown(){
     if (cd === k.cd) return;
     k.cd = cd;
     const c = tr.children;
-    if (c[3]) c[3].innerHTML = keyStatus(k);
+    if (c[4]) c[4].innerHTML = keyStatus(k);
     tr.classList.toggle('ak-off', !k.valid);
     tr.classList.toggle('ak-cool', !!k.valid && cd > 0);
     if (cd === 0) anyExpired = true;  });
@@ -1393,6 +1407,8 @@ function adaptAll(){
       const reqCount = statsKey ? ((statsKey.success||0) + (statsKey.fail||0)) : (k.requests || 0);
       KEYS.push({
         kid: k.id, prov: p.id, model: '-',
+        // 显示名：空 = 回落到掩码形式（dnameOrMask）
+        dname: k.display_name || '',
         valid: !k.invalid, cool: !!k.cooling, cd,
         untilMs: k.cooling ? k.cooling.until_ms : 0,
         // 生效冷却时长: 每 Key 覆盖 → 全局默认（learned_cooldown 已随探测器

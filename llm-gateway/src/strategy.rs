@@ -741,7 +741,7 @@ mod tests {
         let key = |id: &str| ApiKey {
             id: id.into(),
             key: format!("sk-{id}"),
-            label: id.into(),
+            display_name: String::new(),
             cooldown_secs: None,
             learned_cooldown: None,
             seed_rpm: None,
@@ -891,7 +891,7 @@ mod tests {
         let seeded = ApiKey {
             id: "s1".into(),
             key: "sk-s1".into(),
-            label: "s1".into(),
+            display_name: String::new(),
             cooldown_secs: None,
             learned_cooldown: None,
             seed_rpm: Some(60),

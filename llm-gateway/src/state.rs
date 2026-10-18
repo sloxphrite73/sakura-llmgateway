@@ -458,7 +458,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut cfg = Config::default();
         let key = |id: &str| crate::config::ApiKey {
-            id: id.into(), key: format!("sk-{id}"), label: id.into(),
+            id: id.into(), key: format!("sk-{id}"), display_name: String::new(),
             cooldown_secs: None, learned_cooldown: None,
             seed_rpm: None, seed_tpm: None, seed_success_rate: None,
             seed_avg_tftt_ms: None, seed_tps: None,
@@ -507,7 +507,7 @@ mod tests {
             keys: vec![crate::config::ApiKey {
                 id: "k".into(),
                 key: "sk-x".into(),
-                label: "k".into(),
+                display_name: String::new(),
                 cooldown_secs: per_key,
                 learned_cooldown: learned,
                 seed_rpm: None,

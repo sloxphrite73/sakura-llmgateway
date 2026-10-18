@@ -178,8 +178,8 @@ pub async fn delete_provider(
 #[derive(serde::Deserialize)]
 pub struct KeyInput {
     pub key: String,
-    #[serde(default)]
-    pub label: String,
+    #[serde(default, alias = "label")]
+    pub display_name: String,
     pub cooldown_secs: Option<u64>,
     // Spec §2.2 "手动 seed": optional initial values for a brand-new key with no
     // live history. All optional; omitted = use built-in defaults.
@@ -209,7 +209,7 @@ pub async fn add_key(
             p.keys.push(ApiKey {
                 id: crate::new_id(),
                 key: input.key.trim().to_string(),
-                label: input.label.trim().to_string(),
+                display_name: input.display_name.trim().to_string(),
                 cooldown_secs: input.cooldown_secs,
                 learned_cooldown: None,
                 seed_rpm: input.seed_rpm,
@@ -254,6 +254,11 @@ pub async fn delete_key(
 /// not touched here.
 #[derive(serde::Deserialize)]
 pub struct KeySeedInput {
+    /// Display name. `None` (field omitted) = keep unchanged; `Some("")` = clear
+    /// (falls back to the masked-key display). Distinct from the seed fields'
+    /// null-means-clear semantics because names need a keep-vs-set distinction.
+    #[serde(default)]
+    pub display_name: Option<String>,
     #[serde(default)]
     pub seed_rpm: Option<u32>,
     #[serde(default)]
@@ -275,6 +280,9 @@ pub async fn update_key_seed(
     let cfg = app.write_config(|c| {
         if let Some(p) = c.providers.iter_mut().find(|p| p.id == id) {
             if let Some(k) = p.keys.iter_mut().find(|k| k.id == key_id) {
+                if let Some(name) = &input.display_name {
+                    k.display_name = name.trim().to_string();
+                }
                 k.seed_rpm = input.seed_rpm;
                 k.seed_tpm = input.seed_tpm;
                 k.seed_success_rate = input.seed_success_rate;
@@ -806,12 +814,12 @@ pub async fn get_stats(State(app): State<std::sync::Arc<App>>) -> Response {
             .iter()
             .find_map(|p| p.keys.iter().find(|k| k.id == id))
             .map(|k| {
-                // Show the masked key so rows are never blank even when the user
-                // never set a label; the label (if any) prefixes it.
-                if k.label.is_empty() {
+                // Display name resolved live from config (renames apply to
+                // historical stats rows too). Empty name → masked key form.
+                if k.display_name.is_empty() {
                     mask(&k.key)
                 } else {
-                    format!("{} ({})", k.label, mask(&k.key))
+                    k.display_name.clone()
                 }
             })
             .unwrap_or_else(|| id.to_string())
@@ -904,7 +912,7 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                     serde_json::json!({
                         "id": k.id,
                         "key": mask(&k.key),
-                        "label": k.label,
+                        "display_name": k.display_name,
                         "cooldown_secs": k.cooldown_secs,
                         "learned_cooldown": k.learned_cooldown,
                         "seed_rpm": k.seed_rpm,

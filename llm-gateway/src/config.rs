@@ -8,8 +8,10 @@ pub struct ApiKey {
     #[serde(default = "crate::new_id")]
     pub id: String,
     pub key: String,
-    #[serde(default)]
-    pub label: String,
+    /// User-facing display name (replaces the old `label`; old configs migrate
+    /// via the alias). Empty = display the masked key form instead.
+    #[serde(default, alias = "label", skip_serializing_if = "String::is_empty")]
+    pub display_name: String,
     /// Per-key cooldown override in seconds. `None` = use global default.
     #[serde(default)]
     pub cooldown_secs: Option<u64>,

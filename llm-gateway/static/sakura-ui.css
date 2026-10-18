@@ -311,6 +311,11 @@ button.ghost:hover { color: var(--color-text-link); border-color: transparent; b
 .ak-actions button + button { margin-left: 0.375rem; }
 .ak-err { display: block; max-width: 13.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.6875rem; }
 .tbl-scroll { overflow: auto; }
+/* 显示名列：超出省略号，完整名在 title 上 */
+.ak-dname { display: block; max-width: 9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Key 编辑弹窗 */
+.ak-modal-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.ak-modal { width: 100%; max-width: 22rem; max-height: 85vh; overflow-y: auto; }
 /* Sticky first (Key) + last (操作) columns — only the middle columns scroll */
 .tbl-scroll table td:first-child,
 .tbl-scroll table th:first-child {
