@@ -322,4 +322,6 @@ Issues and pull requests are welcome!
 
 [PolyForm Noncommercial 1.0.0](LICENSE) — free for personal, research, educational, and other noncommercial use. Commercial use requires a separate license from the author.
 
+**Attribution requirement (effective from this commit onward):** any open-source project that directly or indirectly uses this project's source code must explicitly credit the author (**sloxphrite73**) and this project (**sakura-llmgateway**) in its documentation. This project does not permit commercial use or closed-source use.
+
 Note: releases up to and including v0.8.5-stable were published under GPL-3.0; those copies remain available under GPL-3.0. Later versions are under PolyForm Noncommercial 1.0.0.

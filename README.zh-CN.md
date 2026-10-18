@@ -314,4 +314,6 @@ APK 是同一个 Rust 二进制的原生薄壳：CI 里交叉编译 `arm64-v8a` 
 
 [PolyForm Noncommercial 1.0.0](LICENSE) — 个人、研究、教育及其他非商业用途免费使用；商业用途需另行取得作者授权。
 
+**署名要求（自本次提交起生效）：** 从现在这个时间点起，直接/间接使用到本项目源代码的开源项目必须在其文档中显式标出作者（**sloxphrite73**）和本项目名称（**sakura-llmgateway**）；本项目不接受商用和非开源使用。
+
 注：v0.8.5-stable 及更早版本以 GPL-3.0 发布，已发布的副本仍按 GPL-3.0 授权；之后的版本适用 PolyForm Noncommercial 1.0.0。
