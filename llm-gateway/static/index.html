@@ -1193,6 +1193,9 @@ function renderStats(m){
   const allreq = tot.success + tot.fail;
   const rate = allreq ? (tot.success/allreq*100).toFixed(1)+'%' : '-';
   const totTok = (tot.tokens||0);
+  // Token 总消耗: ≤1000 完整显示；>1000 截断末三位按 K 显示（1,234,567 → "1,234K"），
+  // 完整值放原生 title（桌面悬停可见；触屏长按亦可由系统透出）。
+  const totTokDisp = totTok <= 1000 ? totTok.toLocaleString() : Math.floor(totTok/1000).toLocaleString()+'K';
   const hist = (STATS && STATS.histogram) || [];
   const peakReq = Math.max(1, ...hist.map(h => h.success + h.fail));
   const peakTok = Math.max(1, ...hist.map(h => h.tokens||0));
@@ -1221,7 +1224,7 @@ function renderStats(m){
         <div class="stat-box err"><div class="num">${tot.fail.toLocaleString()}</div><div class="label">${t('失败请求')}</div></div>
         <div class="stat-box warn"><div class="num">${rot}</div><div class="label">${t('换 Key 次数')}</div></div>
         <div class="stat-box"><div class="num">${rate}</div><div class="label">${t('成功率')}</div></div>
-        <div class="stat-box"><div class="num">${totTok.toLocaleString()}</div><div class="label">${t('Token 总消耗')}</div></div>
+        <div class="stat-box"><div class="num" title="${totTok.toLocaleString()}">${totTokDisp}</div><div class="label">${t('Token 总消耗')}</div></div>
       </div>
     </div>
     <div class="section">
