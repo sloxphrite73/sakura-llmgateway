@@ -1127,7 +1127,11 @@ async function refreshStats(){
     adaptAll();
     const m = $('main');
     const top = m ? m.scrollTop : 0;
+    // 柱状图横向滚动位置（[请求图, Token 图]）：innerHTML 重渲染会丢弃 scrollLeft，
+    // 安卓窄屏下图表可横滑，每秒轮询一变数据就把用户滑的位置弹回去（按 DOM 序恢复）。
+    const histL = [...document.querySelectorAll('.hist-scroll')].map(el => el.scrollLeft);
     renderStats(m);
+    document.querySelectorAll('.hist-scroll').forEach((el, i) => { el.scrollLeft = histL[i] || 0; });
     if (m) m.scrollTop = top;
     renderSideFoot(); // sidebar key-pool counts follow the same 1s cadence
   } catch(e){ /* transient; next tick retries */ }
@@ -1504,7 +1508,9 @@ document.addEventListener('click', e => {
   S.histSel = (S.histSel && S.histSel.chart === chart && S.histSel.i === i) ? null : { chart, i };
   if (S.tab === 'stats') {
     const m = $('main'); const top = m ? m.scrollTop : 0;
+    const histL = [...document.querySelectorAll('.hist-scroll')].map(el => el.scrollLeft);
     renderStats(m);
+    document.querySelectorAll('.hist-scroll').forEach((el, i) => { el.scrollLeft = histL[i] || 0; });
     if (m) m.scrollTop = top;
   }
 });
