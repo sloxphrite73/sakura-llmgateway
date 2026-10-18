@@ -15,6 +15,10 @@ Bugs report and communication with dev: [Telegram](https://t.me/+4NfMkc8SJDwzYWZ
 + Speaks Anthropic Messages and OpenAI-compatible protocols, with bidirectional translation.
 + Comprehensive statistics (totals / per-key / per-model / per-provider), including past-24h usage and request histograms.
 
+## Measured in production
+
+In a real development environment (33 Sensenova API keys pooled), Kimi K3 averaged ~4s time-to-first-token on short contexts and ~15s on 700K-token contexts (TTFT is determined by the upstream model itself; the gateway adds only milliseconds of overhead).
+
 ## Quick start
 
 Download the binary for your platform from the [Releases](https://github.com/sloxphrite73/sakura-llmgateway/releases) page.
