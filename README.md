@@ -320,4 +320,6 @@ Issues and pull requests are welcome!
 
 ## License
 
-[GPL-3.0](LICENSE)
+[PolyForm Noncommercial 1.0.0](LICENSE) — free for personal, research, educational, and other noncommercial use. Commercial use requires a separate license from the author.
+
+Note: releases up to and including v0.8.5-stable were published under GPL-3.0; those copies remain available under GPL-3.0. Later versions are under PolyForm Noncommercial 1.0.0.

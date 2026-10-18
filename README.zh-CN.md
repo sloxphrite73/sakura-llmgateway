@@ -312,4 +312,6 @@ APK 是同一个 Rust 二进制的原生薄壳：CI 里交叉编译 `arm64-v8a` 
 
 ## 许可证
 
-[GPL-3.0](LICENSE)
+[PolyForm Noncommercial 1.0.0](LICENSE) — 个人、研究、教育及其他非商业用途免费使用；商业用途需另行取得作者授权。
+
+注：v0.8.5-stable 及更早版本以 GPL-3.0 发布，已发布的副本仍按 GPL-3.0 授权；之后的版本适用 PolyForm Noncommercial 1.0.0。
