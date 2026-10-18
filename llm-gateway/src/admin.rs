@@ -259,6 +259,10 @@ pub struct KeySeedInput {
     /// null-means-clear semantics because names need a keep-vs-set distinction.
     #[serde(default)]
     pub display_name: Option<String>,
+    /// New key secret. `None`/empty = keep unchanged. The key `id` is the
+    /// identity (stats/pool reference it); the secret is mutable.
+    #[serde(default)]
+    pub key: Option<String>,
     #[serde(default)]
     pub seed_rpm: Option<u32>,
     #[serde(default)]
@@ -283,11 +287,25 @@ pub async fn update_key_seed(
                 if let Some(name) = &input.display_name {
                     k.display_name = name.trim().to_string();
                 }
-                k.seed_rpm = input.seed_rpm;
-                k.seed_tpm = input.seed_tpm;
-                k.seed_success_rate = input.seed_success_rate;
-                k.seed_avg_tftt_ms = input.seed_avg_tftt_ms;
-                k.seed_tps = input.seed_tps;
+                if let Some(key) = &input.key {
+                    let key = key.trim();
+                    if !key.is_empty() {
+                        k.key = key.to_string();
+                    }
+                }
+                // Seeds are only touched when the caller actually sends them —
+                // the edit-key modal sends name+key only, and must not wipe
+                // existing seeds by omitting these fields.
+                let any_seed = input.seed_rpm.is_some() || input.seed_tpm.is_some()
+                    || input.seed_success_rate.is_some() || input.seed_avg_tftt_ms.is_some()
+                    || input.seed_tps.is_some();
+                if any_seed {
+                    k.seed_rpm = input.seed_rpm;
+                    k.seed_tpm = input.seed_tpm;
+                    k.seed_success_rate = input.seed_success_rate;
+                    k.seed_avg_tftt_ms = input.seed_avg_tftt_ms;
+                    k.seed_tps = input.seed_tps;
+                }
                 found = true;
             }
         }

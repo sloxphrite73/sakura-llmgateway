@@ -220,7 +220,7 @@ const EN = {
   '未找到该 Key':'Key not found', '失败: ':'Failed: ',
   /* api-key metric seed editor (spec §2.2 手动 seed) */
   'Seed':'Seed', '预置':'Seed', '指标预置':'Metric seed',
-  '名字':'Name', '编辑':'Edit', '留空 = 显示掩码 Key':'Empty = show masked key',
+  '名字':'Name', '编辑':'Edit', '编辑Key信息':'Edit key info', '留空 = 显示掩码 Key':'Empty = show masked key',
   '粘贴 API Key，多个每行一个；可在 Key 前加名字，空格分隔':'Paste API keys, one per line; optionally prefix each with a display name separated by a space',
   '无实测史时的预置初值，有实测后自动覆盖；留空 = 清除':'Preset initial values used before any live measurement; auto-overridden once measured; empty = clear',
   /* upstream-fetch auto-import + model-group editor + readonly hints */
@@ -1036,43 +1036,37 @@ function renderApiKeys(m){
     </div>`;
 }
 
-/* ---------- api key editor modal: 显示名 + 指标预置（spec §2.2 手动 seed） ---------- */
+/* ---------- api key 编辑弹窗：显示名 + Key 本体（一行一个元素，标签在输入框上方） ---------- */
 function renderAkSeedCard(kid){
   const k = KEYS.find(x=>x.kid===kid); if(!k) return '';
-  const sv = f => (k[f]==null||k[f]===undefined)?'':k[f];
   return `
     <div class="ak-modal-backdrop" onclick="if(event.target===this)cancelAkEdit()">
       <div class="card card-pad ak-modal">
       <div class="edit-card">
-        <div class="edit-name grp-sans">${t('编辑')} · <span class="keytag">${esc(k.masked||'••••')}</span></div>
-        <div class="pd-field pd-row"><span class="lbl">${t('名字')}</span><input class="val" id="ak-dname" type="text" aria-label="${t('名字')}" placeholder="${t('留空 = 显示掩码 Key')}" value="${esc(k.dname||'')}"></div>
-        <div class="board-note" style="margin-bottom:1.5rem">${t('无实测史时的预置初值，有实测后自动覆盖；留空 = 清除')}</div>
-        <div class="pd-field pd-row"><span class="lbl">RPM</span><input class="val mono" id="ak-seed-rpm" type="number" min="0" step="1" aria-label="${t('预置')} RPM" value="${sv('seedRpm')}"></div>
-        <div class="pd-field pd-row"><span class="lbl">TPM</span><input class="val mono" id="ak-seed-tpm" type="number" min="0" step="1" aria-label="${t('预置')} TPM" value="${sv('seedTpm')}"></div>
-        <div class="pd-field pd-row"><span class="lbl">${t('成功率')}</span><input class="val mono" id="ak-seed-sr" type="number" min="0" max="1" step="0.01" aria-label="${t('预置')} ${t('成功率')}" value="${sv('seedSr')}"></div>
-        <div class="pd-field pd-row"><span class="lbl">TFTT (ms)</span><input class="val mono" id="ak-seed-tftt" type="number" min="0" step="1" aria-label="${t('预置')} TFTT" value="${sv('seedTftt')}"></div>
-        <div class="pd-field pd-row"><span class="lbl">TPS</span><input class="val mono" id="ak-seed-tps" type="number" min="0" step="0.1" aria-label="${t('预置')} TPS" value="${sv('seedTps')}"></div>
+        <div class="edit-name grp-sans">${t('编辑Key信息')}</div>
+        <label class="field"><span>${t('名字')}</span><input class="val" id="ak-dname" type="text" aria-label="${t('名字')}" placeholder="${t('留空 = 显示掩码 Key')}" value="${esc(k.dname||'')}"></label>
+        <label class="field"><span>Key</span><input class="val mono" id="ak-key-edit" type="text" aria-label="Key" value="${esc(S.akEditKey||'')}"></label>
         <div class="ak-actions" style="margin-top:1.5rem"><button class="primary small" type="button" onclick="saveAkSeed('${esc(kid)}')">${t('保存')}</button><button class="small" type="button" onclick="cancelAkEdit()">${t('取消')}</button></div>
       </div>
       </div>
     </div>`;
 }
-function akEditSeed(kid){ S.akEdit = kid; renderMain(); }
-function cancelAkEdit(){ S.akEdit = null; renderMain(); }
+async function akEditSeed(kid){
+  S.akEdit = kid; S.akEditKey = '';
+  renderMain();
+  // 打开后异步取回 Key 本体填入（导出接口拿全量，幂等只读）
+  try { const real = await findRealKey(kid); if (real && S.akEdit === kid) { S.akEditKey = real; const i = $('ak-key-edit'); if (i) i.value = real; } } catch(_) {}
+}
+function cancelAkEdit(){ S.akEdit = null; S.akEditKey = null; renderMain(); }
 async function saveAkSeed(kid){
   const k = KEYS.find(x=>x.kid===kid); if(!k) return;
-  const num = (id, isFloat) => { const v=$(id).value.trim(); if(v==='')return null; const n=isFloat?parseFloat(v):parseInt(v,10); return Number.isFinite(n)?n:null; };
   const body = {
     display_name: $('ak-dname') ? $('ak-dname').value.trim() : '',
-    seed_rpm: num('ak-seed-rpm', false),
-    seed_tpm: num('ak-seed-tpm', false),
-    seed_success_rate: num('ak-seed-sr', true),
-    seed_avg_tftt_ms: num('ak-seed-tftt', false),
-    seed_tps: num('ak-seed-tps', true)
+    key: $('ak-key-edit') ? $('ak-key-edit').value.trim() : ''
   };
   try {
     await api('PUT', '/api/providers/'+k.prov+'/keys/'+encodeURIComponent(kid), body);
-    S.akEdit = null; await refresh(); toast(t('已保存'));
+    S.akEdit = null; S.akEditKey = null; await refresh(); toast(t('已保存'));
   } catch(e){ console.error('saveAkSeed', e); toast(t('失败: ')+e.message); }
 }
 
