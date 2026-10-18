@@ -17,7 +17,7 @@ Bugs report and communication with dev: [Telegram](https://t.me/+4NfMkc8SJDwzYWZ
 
 ## Measured in production
 
-In a real development environment (33 Sensenova API keys pooled), Kimi K3 averaged ~4s time-to-first-token on short contexts and ~15s on 700K-token contexts (TTFT is determined by the upstream model itself; the gateway adds only milliseconds of overhead).
+In a real development environment (33 Sensenova API keys pooled), Kimi K3 averaged ~4s time-to-first-token on short contexts and ~15s on 700K-token contexts, with a 100% request success rate (TTFT is determined by the upstream model itself; the gateway adds only milliseconds of overhead).
 
 ## Quick start
 
