@@ -43,7 +43,14 @@
 
 ## 开发
 
-有意加入共同开发者请联系作者 QQ:2183298801。
+有意加入共同开发者请联系作者。
+
+联系方式：
+
++ QQ：2183298801
++ 邮箱：sloxphrite73@gmail.com
++ 微信：altourant_
++ B站：Altourant
 
 本项目不接受在与作者沟通交流之前的 Pull Request。
 
