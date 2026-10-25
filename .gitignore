@@ -2,6 +2,10 @@
 llm-gateway/target/
 target/
 
+# Console UI (React) build chain
+llm-gateway/ui/node_modules/
+llm-gateway/ui/dist/
+
 # Local config with API keys — never commit
 llm-gateway/gateway.json
 gateway.json
