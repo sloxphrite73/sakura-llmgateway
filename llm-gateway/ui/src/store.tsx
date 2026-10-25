@@ -247,7 +247,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (!u.reqModel && d2.models.length) patch.reqModel = d2.models[0].id;
       if (!u.reqProv && d2.providers.length) patch.reqProv = d2.providers[0].id;
       dispatch({ type: 'ui', patch });
-      await runDryRunRef.current();
+      // stateRef only updates after render — pass the freshly chosen values
+      // explicitly so the very first dry-run isn't skipped (empty reqModel).
+      await runDryRunRef.current({
+        model: patch.reqModel !== undefined ? patch.reqModel : u.reqModel,
+        prov: patch.reqProv !== undefined ? patch.reqProv : u.reqProv,
+        sorts: patch.sorts,
+      });
     } catch (e) { /* transient; next tick retries */ }
   }, []);
 
