@@ -360,10 +360,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   /* ---------- boot + intervals ---------- */
   useEffect(() => {
     refresh();
+    // If the first load races the gateway (or a proxy hiccup), keep retrying —
+    // otherwise the console would sit as an empty shell forever.
+    const retry = setInterval(() => {
+      if (!stateRef.current.data.status) refresh();
+    }, 3000);
     const i1 = setInterval(refreshAkStatus, 1000);
     const i2 = setInterval(refreshStats, 1000);
     const i3 = setInterval(tick, 1000);
-    return () => { clearInterval(i1); clearInterval(i2); clearInterval(i3); };
+    return () => { clearInterval(retry); clearInterval(i1); clearInterval(i2); clearInterval(i3); };
   }, [refresh, refreshAkStatus, refreshStats, tick]);
 
   /* ---------- persist UI state + Android orientation ---------- */
