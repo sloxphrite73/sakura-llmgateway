@@ -145,7 +145,7 @@ function ProviderDetail({ p }: { p: UiProvider }) {
               ref={rpmRef}
               aria-label={t('RPM')}
               type="number" min={0}
-              key={'rpm' + (autoR ? '-a' : '-m')}
+              key={'rpm' + (autoR ? '-a-' + liveR : '-m')}
               defaultValue={autoR ? liveR : (p.rpmLimit || 0)}
               readOnly={autoR}
             />
@@ -165,7 +165,7 @@ function ProviderDetail({ p }: { p: UiProvider }) {
               ref={tpmRef}
               aria-label={t('TPM')}
               type="number" min={0}
-              key={'tpm' + (autoT ? '-a' : '-m')}
+              key={'tpm' + (autoT ? '-a-' + liveT : '-m')}
               defaultValue={autoT ? liveT : (p.tpmLimit || 0)}
               readOnly={autoT}
             />
