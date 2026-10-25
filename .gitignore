@@ -5,6 +5,7 @@ target/
 # Console UI (React) build chain
 llm-gateway/ui/node_modules/
 llm-gateway/ui/dist/
+llm-gateway/ui/.vite/
 
 # Local config with API keys — never commit
 llm-gateway/gateway.json
