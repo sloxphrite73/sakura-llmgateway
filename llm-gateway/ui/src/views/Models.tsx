@@ -20,9 +20,14 @@ export function ModelsView() {
         <button className={state.ui.modelTab === 'info' ? 'active' : ''} onClick={() => setModelTab('info')}>{t('模型信息')}</button>
         <button className={state.ui.modelTab === 'groups' ? 'active' : ''} onClick={() => setModelTab('groups')}>{t('模型组管理')}</button>
       </div>
-      {state.ui.editingModel != null
-        ? <ModelEdit />
-        : state.ui.modelTab === 'info' ? <ModelList /> : <ModelGroups />}
+      {/* #model-pane wrapper is load-bearing: .mf-row's own margin shorthand
+          overrides `.main > *` centering, so list/grid must live one level down
+          (same DOM shape as the original renderModels → renderModelList). */}
+      <div id="model-pane">
+        {state.ui.editingModel != null
+          ? <ModelEdit />
+          : state.ui.modelTab === 'info' ? <ModelList /> : <ModelGroups />}
+      </div>
     </>
   );
 }
