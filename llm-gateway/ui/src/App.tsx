@@ -41,9 +41,9 @@ function initialTheme(): Theme {
 }
 
 export function App() {
-  const { state, ui, setTab, setLang } = useApp();
+  const { state, derived, ui, setTab, setLang } = useApp();
   const { status } = state.data;
-  const { keys } = useApp().derived;
+  const { keys } = derived;
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [msg, setMsg] = useState<{ text: string; show: boolean }>({ text: '', show: false });
   const msgTimer = useRef<number | undefined>(undefined);
