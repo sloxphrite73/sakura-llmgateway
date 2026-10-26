@@ -155,11 +155,19 @@ async fn chat(
             .into_response();
     }
 
-    let chunks = vec![
+    let include_usage = body
+        .pointer("/stream_options/include_usage")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let mut chunks = vec![
         format!("data: {{\"id\":\"chatcmpl-mock\",\"model\":\"{model}\",\"choices\":[{{\"delta\":{{\"content\":\"hello \"}}}}]}}\n\n"),
         format!("data: {{\"id\":\"chatcmpl-mock\",\"model\":\"{model}\",\"choices\":[{{\"delta\":{{\"content\":\"from {model}\"}}}}]}}\n\n"),
-        "data: [DONE]\n\n".to_string(),
     ];
+    if include_usage {
+        // OpenAI final usage chunk (prompt 7 + completion 5 = 12 total).
+        chunks.push(format!("data: {{\"id\":\"chatcmpl-mock\",\"model\":\"{model}\",\"choices\":[],\"usage\":{{\"prompt_tokens\":7,\"completion_tokens\":5,\"total_tokens\":12}}}}\n\n"));
+    }
+    chunks.push("data: [DONE]\n\n".to_string());
     let stream = futures_util::stream::iter(chunks.into_iter().map(Ok::<String, std::io::Error>))
         .chain(futures_util::stream::once(async {
             tokio::time::sleep(Duration::from_millis(200)).await;

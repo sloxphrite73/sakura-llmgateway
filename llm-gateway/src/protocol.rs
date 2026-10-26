@@ -943,6 +943,38 @@ pub fn extract_usage_tokens(body: &serde_json::Value, proto: Protocol) -> Option
     }
 }
 
+/// Streaming variant: partial (input, output) extraction from a single SSE
+/// event, either side optional. Anthropic spreads usage across events —
+/// `message_start` carries `message.usage.input_tokens` (+ output 0) while
+/// `message_delta` carries top-level `usage.output_tokens` only — so the
+/// streaming scanner merges partial reads across chunks instead of requiring
+/// both in one object (which used to drop ALL Anthropic stream usage).
+pub fn extract_usage_partial(
+    event: &serde_json::Value,
+    proto: Protocol,
+) -> (Option<u64>, Option<u64>) {
+    match proto {
+        Protocol::OpenAi => {
+            let u = event.get("usage");
+            (
+                u.and_then(|u| u.get("prompt_tokens")).and_then(|v| v.as_u64()),
+                u.and_then(|u| u.get("completion_tokens")).and_then(|v| v.as_u64()),
+            )
+        }
+        Protocol::Anthropic => {
+            // message_start: usage nested under "message"; message_delta: top level.
+            let nested = event.pointer("/message/usage");
+            let top = event.get("usage");
+            let pick = |key: &str| {
+                top.and_then(|u| u.get(key))
+                    .or_else(|| nested.and_then(|u| u.get(key)))
+                    .and_then(|v| v.as_u64())
+            };
+            (pick("input_tokens"), pick("output_tokens"))
+        }
+    }
+}
+
 /// Rough token estimate for an upstream *response* body when `usage` is absent
 /// (spec §2.2 fallback, decision ①A): ~4 chars per token over all string leaves.
 /// A conservative lower bound (output-dominated; prompt-side unknown without the
@@ -965,6 +997,37 @@ pub fn estimate_response_tokens(body: &serde_json::Value) -> u64 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // --- extract_usage_partial: streaming usage regression ( Anthropic splits
+    // usage across message_start / message_delta; OpenAI needs include_usage ) ---
+
+    #[test]
+    fn partial_openai_usage_chunk() {
+        let v = json!({"choices": [], "usage": {"prompt_tokens": 7, "completion_tokens": 5}});
+        assert_eq!(extract_usage_partial(&v, Protocol::OpenAi), (Some(7), Some(5)));
+    }
+
+    #[test]
+    fn partial_anthropic_message_start_nested_usage() {
+        // message_start nests usage under "message" — the old top-level-only
+        // extractor missed this entirely (streamed Anthropic requests recorded 0).
+        let v = json!({"type": "message_start", "message": {"usage": {"input_tokens": 3, "output_tokens": 0}}});
+        assert_eq!(extract_usage_partial(&v, Protocol::Anthropic), (Some(3), Some(0)));
+    }
+
+    #[test]
+    fn partial_anthropic_message_delta_output_only() {
+        // message_delta carries ONLY output_tokens at top level — no input.
+        let v = json!({"type": "message_delta", "usage": {"output_tokens": 5}});
+        assert_eq!(extract_usage_partial(&v, Protocol::Anthropic), (None, Some(5)));
+    }
+
+    #[test]
+    fn partial_no_usage_is_none() {
+        let v = json!({"type": "content_block_delta", "delta": {"text": "hi"}});
+        assert_eq!(extract_usage_partial(&v, Protocol::Anthropic), (None, None));
+        assert_eq!(extract_usage_partial(&v, Protocol::OpenAi), (None, None));
+    }
 
     #[test]
     fn anthropic_request_system_string_becomes_system_message() {

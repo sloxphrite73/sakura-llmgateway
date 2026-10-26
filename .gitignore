@@ -11,6 +11,8 @@ llm-gateway/ui/.vite/
 llm-gateway/gateway.json
 gateway.json
 *.local.json
+# local test/demo configs may hold real keys — never commit
+llm-gateway/*-gateway.json
 
 # Freebuff agent state / handoff notes
 .freebuff/

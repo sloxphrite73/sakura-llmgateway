@@ -283,7 +283,7 @@ fn build_upstream_payload(
     provider: &crate::config::Provider,
     upstream_model: &str,
 ) -> serde_json::Value {
-    match (inbound, provider.protocol()) {
+    let mut b = match (inbound, provider.protocol()) {
         (Protocol::OpenAi, Protocol::OpenAi) | (Protocol::Anthropic, Protocol::Anthropic) => {
             let mut b = inbound_body.clone();
             b["model"] = serde_json::Value::String(upstream_model.to_string());
@@ -299,7 +299,17 @@ fn build_upstream_payload(
             b["model"] = serde_json::Value::String(upstream_model.to_string());
             b
         }
+    };
+    // Stats completeness: OpenAI upstreams only emit a final `usage` chunk when
+    // `stream_options.include_usage` is set. Force it on streaming requests so
+    // MetricsStream can record real token counts; the extra SSE event is
+    // standard and harmless to clients (they either use it or ignore it).
+    if provider.protocol() == Protocol::OpenAi
+        && b.get("stream").and_then(|s| s.as_bool()).unwrap_or(false)
+    {
+        b["stream_options"]["include_usage"] = serde_json::json!(true);
     }
+    b
 }
 
 /// Translate + dispatch + retry-loop shared by both inbound endpoints. Drives
@@ -794,10 +804,14 @@ fn finish_generic(
 // `stream_options.include_usage`, or Anthropic `message_delta`). An event split
 /// across chunk boundaries may be missed (then tpm/tps undercount for that one
 /// request; non-stream is always exact). Cheap `contains` pre-filter on every chunk.
-fn scan_usage(chunk: &axum::body::Bytes, proto: Protocol) -> Option<(u64, u64)> {
-    let text = std::str::from_utf8(chunk).ok()?;
+fn scan_usage(chunk: &axum::body::Bytes, proto: Protocol) -> (Option<u64>, Option<u64>) {
+    // Partial per event by design — the caller merges across chunks (Anthropic
+    // splits input/output across message_start / message_delta).
+    let Ok(text) = std::str::from_utf8(chunk) else {
+        return (None, None);
+    };
     if !text.contains("\"usage\"") {
-        return None; // pre-filter: most chunks carry no usage
+        return (None, None); // pre-filter: most chunks carry no usage
     }
     for line in text.split_inclusive('\n') {
         let payload = match line.trim().strip_prefix("data:") {
@@ -808,12 +822,13 @@ fn scan_usage(chunk: &axum::body::Bytes, proto: Protocol) -> Option<(u64, u64)> 
             continue;
         }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
-            if let Some(u) = protocol::extract_usage_tokens(&v, proto) {
-                return Some(u);
+            let u = protocol::extract_usage_partial(&v, proto);
+            if u.0.is_some() || u.1.is_some() {
+                return u;
             }
         }
     }
-    None
+    (None, None)
 }
 
 /// Best-effort SSE first-token scanner: true when a `data:` line in this chunk
@@ -868,7 +883,10 @@ struct MetricsStream<S> {
     model: String,
     start: std::time::Instant,
     first: bool,
-    usage: Option<(u64, u64)>,
+    /// Merged partial usage: Anthropic splits input (message_start) and output
+    /// (message_delta) across events; OpenAI's include_usage chunk has both.
+    usage_in: Option<u64>,
+    usage_out: Option<u64>,
     proto: Protocol,
 }
 
@@ -885,7 +903,8 @@ where
             model,
             start: std::time::Instant::now(),
             first: true,
-            usage: None,
+            usage_in: None,
+            usage_out: None,
             proto,
         }
     }
@@ -916,15 +935,21 @@ where
                     this.app.record_tftt(&this.key_id, ms);
                     this.app.record_model_tftt(&this.model, ms);
                 }
-                if let Some(u) = scan_usage(&chunk, this.proto) {
-                    this.usage = Some(u);
+                let (ui, uo) = scan_usage(&chunk, this.proto);
+                if ui.is_some() {
+                    this.usage_in = ui;
+                }
+                if uo.is_some() {
+                    this.usage_out = uo;
                 }
                 Poll::Ready(Some(Ok(chunk)))
             }
             Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
             Poll::Ready(None) => {
                 // Stream ended: record token count (tpm) + generation rate (tps).
-                if let Some((i, o)) = this.usage.take() {
+                if this.usage_in.is_some() || this.usage_out.is_some() {
+                    let i = this.usage_in.take().unwrap_or(0);
+                    let o = this.usage_out.take().unwrap_or(0);
                     let total = i + o;
                     this.app.record_token_count(&this.key_id, total);
                     this.app.record_tokens(total, Some(&this.key_id), &this.provider_id, &this.model);
