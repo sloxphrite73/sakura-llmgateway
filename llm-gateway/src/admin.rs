@@ -586,6 +586,9 @@ pub struct SettingsInput {
     pub auth: AuthSettings,
     pub api_port: u16,
     pub ui_port: u16,
+    /// Console theme id. None = keep current (lets old clients PUT without it).
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 pub async fn update_settings(
@@ -601,6 +604,9 @@ pub async fn update_settings(
         c.auth = input.auth;
         c.api_port = input.api_port;
         c.ui_port = input.ui_port;
+        if let Some(t) = input.theme {
+            c.theme = if t.trim().is_empty() { None } else { Some(t) };
+        }
     });
     ok(cfg)
 }
@@ -994,6 +1000,7 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
         "auth": cfg.auth,
         "api_port": api_port,
         "ui_port": ui_port,
+        "theme": cfg.theme,
         "providers": providers,
     }))
 }

@@ -25,7 +25,8 @@ export default defineConfig(({ command }) => ({
     // Dev workflow: `pnpm dev` here + the gateway binary running on :8001.
     proxy: {
       '/api': 'http://127.0.0.1:8001',
-      // self-hosted fonts css + woff2 come from the gateway's static dir
+      // theme files + self-hosted fonts come from the gateway
+      '/themes': 'http://127.0.0.1:8001',
       '/static': 'http://127.0.0.1:8001',
     },
   },

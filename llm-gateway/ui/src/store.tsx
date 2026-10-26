@@ -9,6 +9,7 @@ import React, {
 import { api, apiText } from './api';
 import { adaptAll, type Adapted } from './adapt';
 import { setLang as setI18nLang, initLang, type Lang } from './i18n';
+import { applyTheme, DEFAULT_THEME_ID, type ThemeMeta } from './theme';
 import { toast } from './toast';
 import { t } from './i18n';
 import type {
@@ -57,6 +58,9 @@ export interface DataState {
   strategy: Strategy | null;
   modelGroups: ModelGroup[];
   res: RouteResult | null;
+  /** available themes from /api/themes + the selected theme id */
+  themes: ThemeMeta[];
+  themeId: string;
   /** effective server now (ms), ticked 1/s locally off the /api/status clock */
   now: number;
 }
@@ -128,7 +132,7 @@ function initialState(): AppState {
     },
     data: {
       status: null, stats: null, catalog: [], strategy: null,
-      modelGroups: [], res: null, now: Date.now(),
+      modelGroups: [], res: null, themes: [], themeId: DEFAULT_THEME_ID, now: Date.now(),
     },
   };
 }
@@ -150,6 +154,8 @@ export interface Controller {
   putStrategy: (override?: { groupLock?: boolean; provLock?: boolean; sorts?: string[] }) => Promise<void>;
   findRealKey: (keyId: string) => Promise<string | null>;
   refreshModelGroups: () => Promise<void>;
+  /** Switch console theme: persist to gateway settings + apply immediately. */
+  setTheme: (id: string) => Promise<void>;
 }
 
 const Ctx = createContext<Controller | null>(null);
@@ -230,11 +236,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const cat = await api<{ providers?: CatalogEntry[] }>('GET', '/api/free-catalog');
       const strategy = await api<Strategy>('GET', '/api/strategy');
       const modelGroups = (await api<ModelGroup[]>('GET', '/api/model-groups')) || [];
+      let themes: ThemeMeta[] = [];
+      let themeId = stateRef.current.data.themeId;
+      try {
+        const th = await api<{ current?: string; themes?: ThemeMeta[] }>('GET', '/api/themes');
+        themes = th.themes || [];
+        if (th.current) themeId = th.current;
+      } catch (e) { /* older gateway without theme support */ }
       offsetRef.current = (status.now_ms != null ? status.now_ms : Date.now()) - Date.now();
       try { lastStatsJsonRef.current = JSON.stringify(stats); } catch (_) { /* ignore */ }
       dispatch({
         type: 'data',
-        patch: { status, stats, catalog: (cat && cat.providers) || [], strategy, modelGroups },
+        patch: { status, stats, catalog: (cat && cat.providers) || [], strategy, modelGroups, themes, themeId },
       });
       // mirror the saved strategy into the UI state (edits PUT immediately)
       const u = stateRef.current.ui;
@@ -357,6 +370,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     dispatch({ type: 'data', patch: { modelGroups } });
   }, []);
 
+  const setTheme = useCallback(async (id: string) => {
+    const d = stateRef.current.data;
+    const s = d.status;
+    if (!s) return;
+    try {
+      // SettingsInput is a full-settings write — resend current values + theme.
+      await api('PUT', '/api/settings', {
+        default_cooldown_secs: s.default_cooldown_secs ?? 60,
+        max_attempts: s.max_attempts ?? 3,
+        max_hold_secs: s.max_hold_secs ?? 120,
+        auth: s.auth || { enabled: false, keys: [] },
+        api_port: s.api_port || 8000,
+        ui_port: s.ui_port || 8001,
+        theme: id,
+      });
+      dispatch({ type: 'data', patch: { themeId: id } });
+    } catch (e) {
+      console.error('setTheme', e);
+      toast(t('失败: ') + (e as Error).message);
+    }
+  }, []);
+
+  // Apply whenever the selected theme id or the manifests arrive/change.
+  useEffect(() => {
+    const { themes, themeId } = state.data;
+    const meta = themes.find(th => th.id === themeId)
+      || themes.find(th => th.id === DEFAULT_THEME_ID);
+    if (meta) applyTheme(meta);
+  }, [state.data.themes, state.data.themeId]);
+
   /* ---------- boot + intervals ---------- */
   useEffect(() => {
     refresh();
@@ -387,6 +430,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const controller: Controller = {
     state, derived, dispatch, ui, setData, setTab, setLocalProv, setModelTab, setLang,
     pname, refresh, refreshAkStatus, runDryRun, putStrategy, findRealKey, refreshModelGroups,
+    setTheme,
   };
   return <Ctx.Provider value={controller}>{children}</Ctx.Provider>;
 }

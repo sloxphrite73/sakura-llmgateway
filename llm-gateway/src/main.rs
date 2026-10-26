@@ -64,6 +64,8 @@ async fn main() {
     let admin = Router::new()
         .route("/", get(ui::index))
         .route("/static/{*name}", get(ui::asset))
+        .route("/api/themes", get(ui::list_themes))
+        .route("/themes/{id}/{*path}", get(ui::theme_asset))
         .route("/api/providers", get(admin::list_providers).post(admin::create_provider))
         .route(
             "/api/providers/{id}",

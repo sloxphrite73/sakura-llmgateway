@@ -19,8 +19,9 @@ declare global {
 }
 
 export function SettingsView() {
-  const { state, refresh } = useApp();
+  const { state, refresh, setTheme } = useApp();
   const s = state.data.status || ({} as Record<string, any>);
+  const { themes, themeId } = state.data;
   const cooldownRef = useRef<HTMLInputElement>(null);
   const attemptsRef = useRef<HTMLInputElement>(null);
   const holdRef = useRef<HTMLInputElement>(null);
@@ -103,6 +104,29 @@ export function SettingsView() {
             <input ref={authKeysRef} placeholder={t('鉴权 Key，逗号分隔')} defaultValue={(s.auth && s.auth.keys || []).join(',')} style={{ flex: 1, minWidth: '15rem' }} />
             <button className="primary" onClick={save}>{t('保存设置')}</button>
           </div>
+        </div>
+      </div>
+      <div className="section">
+        <div className="section-title">{t('主题')} <span className="note">{t('点击卡片即时切换 · 保存在网关配置')}</span></div>
+        <div className="mc-grid">
+          {themes.map(th => (
+            <div
+              key={th.id}
+              className={'mc theme-card' + (th.id === themeId ? ' active' : '')}
+              onClick={() => setTheme(th.id)}
+            >
+              {th.preview ? <img className="theme-preview" src={'/themes/' + encodeURIComponent(th.id) + '/' + th.preview} alt="" /> : null}
+              <div className="mc-top">
+                <div>
+                  <div className="mc-name theme-name">{th.name}</div>
+                  <div className="mc-prov">{th.author}{th.version ? ' · v' + th.version : ''}</div>
+                </div>
+                <span className="pill">{th.mode === 'light' ? t('浅色') : t('深色')}</span>
+              </div>
+              {th.description ? <div className="mc-prov">{th.description}</div> : null}
+            </div>
+          ))}
+          {themes.length === 0 && <div className="empty">{t('暂无数据')}</div>}
         </div>
       </div>
       <div className="section">

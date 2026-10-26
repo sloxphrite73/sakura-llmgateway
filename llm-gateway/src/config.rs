@@ -282,6 +282,10 @@ pub struct Config {
     /// Empty = every model is a single-member group; behavior unchanged.
     #[serde(default)]
     pub model_groups: Vec<ModelGroup>,
+    /// Selected console theme id (= directory name under themes/, built-in or
+    /// external). None = built-in default ("sakura-dark").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
 }
 
 impl Default for Config {
@@ -297,6 +301,7 @@ impl Default for Config {
             currency_rates: std::collections::BTreeMap::new(),
             strategy: Strategy::default(),
             model_groups: Vec::new(),
+            theme: None,
         }
     }
 }

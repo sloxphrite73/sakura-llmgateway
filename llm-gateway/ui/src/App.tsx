@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
 import { t } from './i18n';
 import { onToast } from './toast';
+import { lastThemeOfMode } from './theme';
 import { useApp, type TabId } from './store';
 import { StatsView } from './views/Stats';
 import { ProvidersView } from './views/Providers';
@@ -21,30 +22,10 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'settings', label: '设置' },
 ];
 
-type Theme = 'dark' | 'light';
-
-function applyTheme(theme: Theme): void {
-  document.documentElement.dataset.theme = theme;
-  try { localStorage.setItem('theme', theme); } catch (_) { /* ignore */ }
-  // Android shell: theme the system status/navigation bars to match.
-  try {
-    const w = window as unknown as { SakuraAndroid?: { setBarsTheme(t: string): void } };
-    if (w.SakuraAndroid) w.SakuraAndroid.setBarsTheme(theme);
-  } catch (_) { /* ignore */ }
-}
-
-function initialTheme(): Theme {
-  let theme: Theme = 'dark';
-  try { theme = localStorage.getItem('theme') === 'light' ? 'light' : 'dark'; } catch (_) { /* ignore */ }
-  applyTheme(theme);
-  return theme;
-}
-
 export function App() {
-  const { state, derived, ui, setTab, setLang } = useApp();
-  const { status } = state.data;
+  const { state, derived, ui, setTab, setLang, setTheme } = useApp();
+  const { status, themes, themeId } = state.data;
   const { keys } = derived;
-  const [theme, setTheme] = useState<Theme>(initialTheme);
   const [msg, setMsg] = useState<{ text: string; show: boolean }>({ text: '', show: false });
   const msgTimer = useRef<number | undefined>(undefined);
 
@@ -56,13 +37,14 @@ export function App() {
     });
   }, []);
 
+  // Topbar sun/moon: quick-toggle between the last-used light and dark themes
+  // (mode comes from each theme's manifest; defaults are the two Sakura themes).
+  const curMode: 'light' | 'dark' =
+    (themes.find(th => th.id === themeId) || {}).mode || 'dark';
   const toggleTheme = useCallback(() => {
-    setTheme(cur => {
-      const next = cur === 'light' ? 'dark' : 'light';
-      applyTheme(next);
-      return next;
-    });
-  }, []);
+    const target = lastThemeOfMode(curMode === 'light' ? 'dark' : 'light');
+    if (target !== themeId) setTheme(target);
+  }, [curMode, themeId, setTheme]);
 
   const toggleLang = useCallback(() => {
     setLang(state.ui.lang === 'zh' ? 'en' : 'zh');
@@ -99,7 +81,7 @@ export function App() {
           aria-label="切换浅色/深色主题"
           onClick={toggleTheme}
         >
-          <Icon name={theme === 'light' ? 'sun' : 'moon'} />
+          <Icon name={curMode === 'light' ? 'sun' : 'moon'} />
         </button>
         <button
           className="iconbtn lang-toggle"

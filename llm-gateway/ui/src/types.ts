@@ -61,6 +61,7 @@ export interface Status {
   api_port: number;
   ui_port: number;
   auth?: { enabled: boolean; keys: string[] };
+  theme?: string | null;
   now_ms?: number;
   version?: string;
 }

@@ -108,6 +108,9 @@ const EN: Record<string, string> = {
   '无后端':'No backend',
   '添加成员':'Add member', 'provider':'provider', 'upstream model':'upstream model',
   '删除该模型组？':'Delete this model group?', 'K':'K',
+  /* theme picker */
+  '主题':'Themes', '点击卡片即时切换 · 保存在网关配置':'Click a card to apply instantly · saved in gateway config',
+  '浅色':'Light', '深色':'Dark',
 };
 
 export function t(k: string): string {

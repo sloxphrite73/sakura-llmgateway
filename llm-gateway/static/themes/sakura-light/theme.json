@@ -1,0 +1,8 @@
+{
+  "name": "Sakura Light",
+  "author": "sloxphrite73",
+  "version": "1.0.0",
+  "description": "默认浅色主题",
+  "mode": "light",
+  "css": ["theme.css"]
+}

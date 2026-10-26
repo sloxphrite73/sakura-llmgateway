@@ -7,10 +7,34 @@
 <!-- Self-hosted fonts stay as static files (referenced by the sakura-fonts.css
      in llm-gateway/static/, relative url("fonts/...") → /static/fonts/...). -->
 <link rel="stylesheet" href="/static/sakura-fonts.css">
-  <script type="module" crossorigin src="/static/assets/index-BwP69zPL.js"></script>
-  <link rel="stylesheet" crossorigin href="/static/assets/index-ChBTRhfY.css">
+<script>
+/* Theme boot injector: re-apply the cached theme manifest before first paint
+   so there's no flash of the wrong theme. The React app re-applies from the
+   server's /api/themes once loaded (this is only a fast path). */
+(function () {
+  var meta = null;
+  try { meta = JSON.parse(localStorage.getItem('sakura-theme-manifest') || 'null'); } catch (e) {}
+  if (!meta || !meta.id) {
+    // migrate the pre-theme-system light/dark preference
+    var old = null;
+    try { old = localStorage.getItem('theme'); } catch (e) {}
+    meta = { id: old === 'light' ? 'sakura-light' : 'sakura-dark', mode: old === 'light' ? 'light' : 'dark', css: ['theme.css'] };
+  }
+  document.documentElement.dataset.theme = meta.mode || 'dark';
+  var base = '/themes/' + encodeURIComponent(meta.id) + '/';
+  (meta.css || ['theme.css']).forEach(function (f) {
+    var l = document.createElement('link');
+    l.rel = 'stylesheet';
+    l.href = base + f;
+    l.setAttribute('data-theme-css', '');
+    document.head.appendChild(l);
+  });
+})();
+</script>
+  <script type="module" crossorigin src="/static/assets/index-DJ1difYd.js"></script>
+  <link rel="stylesheet" crossorigin href="/static/assets/index-CxRUd_wn.css">
 </head>
 <body>
-<div id="root"></div>
+<div id="root"></div>
 </body>
 </html>
