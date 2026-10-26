@@ -37,16 +37,32 @@ export function lastThemeOfMode(mode: 'light' | 'dark'): string {
 let appliedId: string | null = null;
 export function appliedThemeId(): string | null { return appliedId; }
 
+/** Base theme per mode, always injected UNDER the selected theme so partial
+   themes (only overriding a few tokens) still render correctly. Full themes
+   simply override every token. */
+export function baseThemeId(mode: 'light' | 'dark'): string {
+  return mode === 'light' ? 'sakura-light' : DEFAULT_THEME_ID;
+}
+
+export function themeCssLinks(meta: ThemeMeta): string[] {
+  const baseId = baseThemeId(meta.mode || 'dark');
+  const links: string[] = [];
+  if (meta.id !== baseId) links.push('/themes/' + encodeURIComponent(baseId) + '/theme.css');
+  const base = '/themes/' + encodeURIComponent(meta.id) + '/';
+  for (const f of meta.css || []) links.push(base + f);
+  return links;
+}
+
 export function applyTheme(meta: ThemeMeta): void {
   if (appliedId === meta.id) return;
   appliedId = meta.id;
   document.querySelectorAll('link[data-theme-css]').forEach(e => e.remove());
   document.querySelectorAll('script[data-theme-js]').forEach(e => e.remove());
   const base = '/themes/' + encodeURIComponent(meta.id) + '/';
-  for (const f of meta.css || []) {
+  for (const href of themeCssLinks(meta)) {
     const l = document.createElement('link');
     l.rel = 'stylesheet';
-    l.href = base + f;
+    l.href = href;
     l.setAttribute('data-theme-css', '');
     document.head.appendChild(l);
   }

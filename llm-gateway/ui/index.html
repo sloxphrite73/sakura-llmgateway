@@ -21,11 +21,17 @@
     meta = { id: old === 'light' ? 'sakura-light' : 'sakura-dark', mode: old === 'light' ? 'light' : 'dark', css: ['theme.css'] };
   }
   document.documentElement.dataset.theme = meta.mode || 'dark';
+  // Layering: the mode's base theme (sakura-light/dark) goes UNDER the theme's
+  // own css, so partial themes overriding only a few tokens still render fine.
+  var baseId = (meta.mode === 'light') ? 'sakura-light' : 'sakura-dark';
+  var hrefs = [];
+  if (meta.id !== baseId) hrefs.push('/themes/' + encodeURIComponent(baseId) + '/theme.css');
   var base = '/themes/' + encodeURIComponent(meta.id) + '/';
-  (meta.css || ['theme.css']).forEach(function (f) {
+  (meta.css || ['theme.css']).forEach(function (f) { hrefs.push(base + f); });
+  hrefs.forEach(function (href) {
     var l = document.createElement('link');
     l.rel = 'stylesheet';
-    l.href = base + f;
+    l.href = href;
     l.setAttribute('data-theme-css', '');
     document.head.appendChild(l);
   });
