@@ -512,15 +512,17 @@ where
             app.record_key_stat(false, &row.api_key_id);
             app.record_rotation(&row.provider_id);
             if code == 429 {
-                // Quota-exhausted (not a rate window): the key is dead until the
-                // user tops up / the plan resets — quarantine it like an auth
-                // failure instead of cooling it for a minute and retrying forever.
+                // Quota-exhausted (not a rate window): the key's plan/tokens are
+                // used up until the plan resets — cool it for 5h (recovers on its
+                // own after reset). NOT invalid: quota is a capacity state, not an
+                // anomaly, and quarantining as 异常 used to cascade into
+                // "all keys invalid" while the keys were actually fine.
                 let lower = snippet.to_lowercase();
                 let quota_dead = ["entitlement exhausted", "quota exhausted", "insufficient_quota",
                     "exceeded your current quota", "insufficient balance", "余额不足"]
                     .iter().any(|m| lower.contains(m));
                 if quota_dead {
-                    app.mark_invalid(&row.provider_id, &row.api_key_id, 30 * 60, &reason);
+                    app.mark_cooldown(&row.provider_id, &row.api_key_id, Some(5 * 3600), &reason);
                     continue;
                 }
                 // Rate limited: cooldown = Retry-After → per-key override →
