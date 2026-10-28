@@ -83,6 +83,7 @@ const EN: Record<string, string> = {
   'token余额 ↓':'Token balance ↓', 'token余额 ↑':'Token balance ↑',
   '账单余额 ↓':'Bill balance ↓', '账单余额 ↑':'Bill balance ↑', '单价 ↑':'Price ↑', '生成速度TPS ↓':'Gen speed TPS ↓',
   '可用性 ↓':'Availability ↓', '利用率':'Utilization', '实测容量':'Measured capacity',
+  'TPM余量 ↓':'TPM headroom ↓',
   /* feedback strings for the wired (real-API) mutations — no new UI elements */
   '删除该提供商及其所有 Key？':'Delete this provider and all its keys?',
   '删除该 Key？':'Delete this key?',

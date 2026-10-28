@@ -400,6 +400,22 @@ impl SortKey {
             // (smoothed success_rate × capacity headroom) first: the key most
             // likely to serve this request on the first attempt.
             SortKey::K => cmp_f64(b.availability, a.availability),
+            // L tpm headroom desc — most remaining TPM window capacity first.
+            // Long-context friend: a 100K-token prompt instantly saturates a
+            // free-tier key's TPM window (429 → rotation churn), so send big
+            // requests to the key with the most room left. Capacity comes from
+            // config only (seed_tpm > provider tpm_limit split; invariant §3.1
+            // — never 429 back-sampling). None (unknown capacity) sorts LAST:
+            // unmeasurable headroom must not win over a known-good one.
+            SortKey::L => {
+                let rem = |r: &Row| -> u64 {
+                    match r.capacity_tpm {
+                        Some(c) => (c as u64).saturating_sub(r.tpm as u64),
+                        None => 0,
+                    }
+                };
+                rem(b).cmp(&rem(a))
+            }
         }
     }
 }
@@ -726,6 +742,33 @@ mod tests {
         let (res, _c) = select_pure(&mut rows, &[SortKey::K], 0);
         let routed = match res { SelectResult::Routed(r) => r, other => panic!("{other:?}") };
         assert_eq!(routed.api_key_id, "b", "valid leading key outranks availability");
+    }
+
+    // --- sort key L (tpm headroom desc) ---
+    #[test]
+    fn sort_l_prefers_more_tpm_headroom() {
+        // Same capacity, b's window emptier → L picks b.
+        let mut rows = vec![
+            { let mut r = row("a", true, true, 0, 0); r.capacity_tpm = Some(1000); r.tpm = 800; r },
+            { let mut r = row("b", true, true, 0, 1); r.capacity_tpm = Some(1000); r.tpm = 100; r },
+        ];
+        let (res, _c) = select_pure(&mut rows, &[SortKey::L], 0);
+        let routed = match res { SelectResult::Routed(r) => r, other => panic!("{other:?}") };
+        assert_eq!(routed.api_key_id, "b", "L desc → most remaining tpm capacity first");
+    }
+
+    #[test]
+    fn sort_l_unknown_capacity_sorts_last() {
+        // a has known-but-mostly-used capacity, b has no capacity data → a wins:
+        // unmeasurable headroom must not beat a known one (else unconfigured
+        // providers would soak every long-context request).
+        let mut rows = vec![
+            { let mut r = row("a", true, true, 0, 0); r.capacity_tpm = Some(1000); r.tpm = 900; r },
+            { let mut r = row("b", true, true, 0, 1); r.capacity_tpm = None; r },
+        ];
+        let (res, _c) = select_pure(&mut rows, &[SortKey::L], 0);
+        let routed = match res { SelectResult::Routed(r) => r, other => panic!("{other:?}") };
+        assert_eq!(routed.api_key_id, "a", "None capacity = 0 headroom = last");
     }
 
     // --- build_candidates: the four filter modes (spec §4) ---

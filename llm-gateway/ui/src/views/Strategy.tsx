@@ -6,7 +6,7 @@ import { t, tp } from '../i18n';
 import { useApp } from '../store';
 import type { RouteResult } from '../types';
 
-/* sort comparators (A-K) — display names only; the server applies them. */
+/* sort comparators (A-L) — display names only; the server applies them. */
 const SORTS: Record<string, string> = {
   A: '成功率 ↓',
   B: 'RPM ↓',
@@ -19,6 +19,7 @@ const SORTS: Record<string, string> = {
   I: '单价 ↑',
   J: '生成速度TPS ↓',
   K: '可用性 ↓',
+  L: 'TPM余量 ↓',
 };
 const SORT_KEYS = Object.keys(SORTS);
 

@@ -163,8 +163,8 @@ The **策略 / Strategy** tab configures the routing strategy (see §4.2):
 - **Two filter toggles** — `lock_model_group` and `lock_provider` (both ON by
   default = exact provider+model, only rotate keys). The combination picks one of
   four candidate modes (exact / model-first / provider-first / available-first).
-- **Sort stack** — three slots for the A–K sort keys (success_rate, rpm, tpm,
-  avg_tftt, token/bill balance ×2, price, tps, availability); the fixed
+- **Sort stack** — three slots for the A–L sort keys (success_rate, rpm, tpm,
+  avg_tftt, token/bill balance ×2, price, tps, availability, tpm headroom); the fixed
   `valid ↓` + `non-cooled ↓` leads are always on and not shown.
 - **Dry-run preview** — pick a model (+ optional provider) and run a simulated
   route: it shows the routed key and the full candidate list with each key's
@@ -468,7 +468,7 @@ through byte-for-byte.
 | `keys[].seed_*` | Preset initial metrics (`seed_rpm`/`seed_tpm`/`seed_success_rate`/`seed_avg_tftt_ms`/`seed_tps`); auto-overridden once the key serves traffic. All optional, see §4.3 |
 | `providers[].rpm_limit` / `tpm_limit` | Manual RPM/TPM cap; `null` = no cap (console shows the live auto-detected aggregate) |
 | `strategy.filter` | `lock_model_group` + `lock_provider` (both ON = exact provider+model); see §4.2 |
-| `strategy.sort` | 0–3 of A–K (ordered, no dups) — the user sort stack |
+| `strategy.sort` | 0–3 of A–L (ordered, no dups) — the user sort stack |
 | `model_groups` | Same logical model across providers (entries `[provider_id, upstream_model]`); see §4.2 |
 | `models` | Managed catalog; empty = unmanaged |
 | `model_allowlist_only` | Reject models not in the (non-empty) list |
