@@ -23,6 +23,46 @@ fn should_rotate(status: u16) -> bool {
         || status == 504
 }
 
+/// How long a key rejected with 401/403 is benched as 异常 (invalid). Longer than
+/// the old 30min: an auth-rejected key is either genuinely revoked (rare) or hit a
+/// transient upstream auth wave (sensenova does this in bursts) — either way a
+/// full hour keeps it out of round-robin without the old thrash.
+const AUTH_INVALID_SECS: u64 = 3600;
+
+/// Quota exhausted (the plan's tokens are used up, not a rate window) → bench
+/// for 5 hours. The plan usually resets on its own, so this is a COOLDOWN (not
+/// 异常): quota is a capacity state, not an anomaly.
+const QUOTA_COOLDOWN_SECS: u64 = 5 * 3600;
+
+/// True when a 429 body says the key's PLAN is exhausted (as opposed to a
+/// per-minute rate window).
+///
+/// A rate-window signal ALWAYS wins. Real sensenova bodies tag plain tpm/rpm
+/// limit hits with `"code":"insufficient_quota"` —
+///   {"message":"inference exceeds tpm/rpm limit","type":"rate_limit_error",
+///    "code":"insufficient_quota"}
+/// — so trusting the code/marker alone benched every healthy key for 5 hours
+/// (observed in production testing). The message is authoritative: "exceeds
+/// tpm/rpm" = rate window = normal cooldown (user rule: 出现 rpm 就还是冷却).
+fn is_quota_exhausted(snippet: &str) -> bool {
+    let lower = snippet.to_lowercase();
+    const RATE_WINDOW: [&str; 4] = ["tpm/rpm", "inference exceeds", "ratelimitexceeded", "rate_limit_error"];
+    if RATE_WINDOW.iter().any(|m| lower.contains(m)) {
+        return false;
+    }
+    [
+        "entitlement exhausted",
+        "token plan exhausted",
+        "quota exhausted",
+        "insufficient_quota",
+        "exceeded your current quota",
+        "insufficient balance",
+        "余额不足",
+    ]
+    .iter()
+    .any(|m| lower.contains(m))
+}
+
 fn parse_retry_after(v: &str) -> Option<u64> {
     v.trim().parse::<u64>().ok()
 }
@@ -512,17 +552,12 @@ where
             app.record_key_stat(false, &row.api_key_id);
             app.record_rotation(&row.provider_id);
             if code == 429 {
-                // Quota-exhausted (not a rate window): the key's plan/tokens are
-                // used up until the plan resets — cool it for 5h (recovers on its
-                // own after reset). NOT invalid: quota is a capacity state, not an
-                // anomaly, and quarantining as 异常 used to cascade into
-                // "all keys invalid" while the keys were actually fine.
-                let lower = snippet.to_lowercase();
-                let quota_dead = ["entitlement exhausted", "quota exhausted", "insufficient_quota",
-                    "exceeded your current quota", "insufficient balance", "余额不足"]
-                    .iter().any(|m| lower.contains(m));
-                if quota_dead {
-                    app.mark_cooldown(&row.provider_id, &row.api_key_id, Some(5 * 3600), &reason);
+                // Quota exhausted (the plan's tokens are used up, not a rate
+                // window) → 5h cooldown, recovers on its own when the plan
+                // resets. A rate-window 429 (rpm/tpm) falls through to the
+                // normal cooldown chain below.
+                if is_quota_exhausted(&snippet) {
+                    app.mark_cooldown(&row.provider_id, &row.api_key_id, Some(QUOTA_COOLDOWN_SECS), &reason);
                     continue;
                 }
                 // Rate limited: cooldown = Retry-After → per-key override →
@@ -537,10 +572,10 @@ where
                 // pure client-visible latency (~2s per rotation).
                 tokio::time::sleep(Duration::from_millis(250)).await;
             } else if code == 401 || code == 403 {
-                // Auth failure = the key itself is dead (invalid/revoked/out of quota
-                // tier). A 5s cooldown just lets round-robin feed it again forever;
-                // quarantine it for 30 minutes and surface it as 无效 in the UI.
-                app.mark_invalid(&row.provider_id, &row.api_key_id, 30 * 60, &reason);
+                // Auth failure: the key is rejected — bench it as 异常 for an
+                // hour. (Only 401/403 get the 异常 treatment; quota exhaustion
+                // above is a capacity state and stays a plain cooldown.)
+                app.mark_invalid(&row.provider_id, &row.api_key_id, AUTH_INVALID_SECS, &reason);
             } else {
                 // Other key-scoped errors (408/5xx): short rotate-out cooldown, long
                 // enough to not retry this round, short enough to recover quickly.
@@ -656,7 +691,8 @@ fn finish_generic(
                             || err_text.contains("\"401\"") || err_text.contains("api key not")
                             || err_text.contains("permission_denied")
                         {
-                            app.mark_invalid(&provider_id, &key_id, 30 * 60,
+                            // Same policy as a real 401: bench as 异常 for an hour.
+                            app.mark_invalid(&provider_id, &key_id, AUTH_INVALID_SECS,
                                 &format!("upstream 200 with auth error: {}", err_text.chars().take(200).collect::<String>()));
                         }
                         return error_response_for(
@@ -1111,5 +1147,57 @@ pub async fn list_models(
         axum::Json(serde_json::json!({ "object": "list", "data": out, "created": now_ms() / 1000 })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_quota_exhausted, AUTH_INVALID_SECS, QUOTA_COOLDOWN_SECS};
+
+    // --- bench policy: only 401/403 are 异常; quota is a 5h cooldown ---
+
+    #[test]
+    fn quota_marker_matches_plan_exhaustion() {
+        // The real sensenova bodies seen in production.
+        assert!(is_quota_exhausted(
+            r#"{"error":{"message":"token plan entitlement exhausted","type":"quota_exceeded_error","code":"8"}}"#
+        ));
+        assert!(is_quota_exhausted(r#"{"error":{"message":"token plan exhausted"}}"#));
+        assert!(is_quota_exhausted(r#"{"error":{"message":"insufficient_quota"}}"#));
+        assert!(is_quota_exhausted(r#"{"error":{"message":"余额不足"}}"#));
+    }
+
+    #[test]
+    fn rate_window_429_is_not_quota() {
+        // MUST fall through to the normal cooldown chain — the user's rule:
+        // "其他的 429 只要出现 rpm 就还是冷却".
+        assert!(!is_quota_exhausted(
+            r#"{"error":{"message":"inference exceeds tpm/rpm limit","type":"rate_limit_error","code":"RateLimitExceeded.EndpointTPMExceeded"}}"#
+        ));
+        assert!(!is_quota_exhausted(r#"{"error":{"message":"rate limited"}}"#));
+        assert!(!is_quota_exhausted(""));
+    }
+
+    #[test]
+    fn real_sensenova_rate_limit_with_insufficient_quota_code_is_not_quota() {
+        // The exact production body captured from a real request: sensenova tags
+        // a PLAIN tpm/rpm limit hit with code:"insufficient_quota". Trusting that
+        // code benched all 15 healthy keys for 5h — the rate-window signal must win.
+        let body = r#"HTTP 429: {"error":{"message":"inference exceeds tpm/rpm limit","type":"rate_limit_error","code":"insufficient_quota"}}"#;
+        assert!(!is_quota_exhausted(body), "tpm/rpm hit stays a normal cooldown");
+    }
+
+    #[test]
+    fn real_sensenova_entitlement_body_is_quota() {
+        // The genuine plan-exhausted body (distinct type, no rate-window wording).
+        let body = r#"HTTP 429: {"error":{"message":"token plan entitlement exhausted","type":"quota_exceeded_error","code":"8"}}"#;
+        assert!(is_quota_exhausted(body), "plan exhausted → 5h cooldown");
+    }
+
+    #[test]
+    fn bench_durations_match_policy() {
+        assert_eq!(AUTH_INVALID_SECS, 3600, "401/403 → 异常 1h (longer than the old 30min)");
+        assert_eq!(QUOTA_COOLDOWN_SECS, 18_000, "plan exhausted → 5h");
+        assert!(QUOTA_COOLDOWN_SECS > AUTH_INVALID_SECS);
+    }
 }
 

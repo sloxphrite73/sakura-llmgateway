@@ -78,9 +78,10 @@ struct KeyMetrics {
 pub(crate) struct PoolRuntime {
     /// key id -> cooldown expiry
     cooling: HashMap<String, Instant>,
-    /// key id -> "invalid" (auth-failed) cooldown expiry. Auth failures (401/403) mean
-    /// the key itself is dead — retrying in seconds never succeeds, so these get a long
-    /// quarantine that round-robin skips, instead of the 5s rotate-out cooldown.
+    /// key id -> "invalid" (auth-failed) cooldown expiry. Reached only after
+    /// THREE consecutive 401/403 strikes with no success between (proxy.rs) —
+    /// a single transient auth wave no longer quarantines a healthy key (that
+    /// used to cascade into a pool-wide "all keys invalid").
     invalid: HashMap<String, Instant>,
     /// key id -> last error string (for the UI)
     last_error: HashMap<String, String>,
@@ -157,8 +158,7 @@ fn fill_rows(
     pool: &mut PoolRuntime,
     rows: &mut [crate::strategy::Row],
     now: Instant,
-) {
-    pool.cooling.retain(|_, until| *until > now);
+) {    pool.cooling.retain(|_, until| *until > now);
     pool.invalid.retain(|_, until| *until > now);
     for r in rows {
         r.valid = !pool.invalid.contains_key(&r.api_key_id);
@@ -453,8 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn first_usable_key_skips_cooling_and_invalid() {
-        let dir = std::env::temp_dir().join(format!("fuk-test-{}", std::process::id()));
+    fn first_usable_key_skips_cooling_and_invalid() {        let dir = std::env::temp_dir().join(format!("fuk-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut cfg = Config::default();
         let key = |id: &str| crate::config::ApiKey {
@@ -997,8 +996,9 @@ impl App {
         pool.last_error.insert(key_id.to_string(), reason.to_string());
     }
 
-    /// Quarantine a key whose credentials were rejected (401/403): round-robin skips it
-    /// until `secs` elapse. Manual "解除冷却" in the UI clears it immediately.
+    /// Quarantine a key whose credentials were rejected (401/403): round-robin
+    /// skips it until `secs` elapse (proxy.rs: AUTH_INVALID_SECS = 1h). Manual
+    /// "解除冷却" in the UI clears it immediately.
     pub fn mark_invalid(&self, _provider_id: &str, key_id: &str, secs: u64, reason: &str) {
         let mut pool = self.pool.lock().unwrap();
         pool.invalid.insert(key_id.to_string(), Instant::now() + Duration::from_secs(secs));

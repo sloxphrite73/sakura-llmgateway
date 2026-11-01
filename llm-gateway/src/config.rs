@@ -170,7 +170,6 @@ pub enum SortKey {
     I, // price             asc
     J, // tps               desc
     K, // availability      desc (smoothed success_rate × capacity headroom)
-    L, // tpm headroom      desc (capacity_tpm − live window tpm; long-context first)
 }
 
 impl SortKey {
@@ -191,7 +190,6 @@ impl SortKey {
             "I" => Some(Self::I),
             "J" => Some(Self::J),
             "K" => Some(Self::K),
-            "L" => Some(Self::L),
             _ => None,
         }
     }
