@@ -165,7 +165,19 @@ async fn chat(
     ];
     if include_usage {
         // OpenAI final usage chunk (prompt 7 + completion 5 = 12 total).
-        chunks.push(format!("data: {{\"id\":\"chatcmpl-mock\",\"model\":\"{model}\",\"choices\":[],\"usage\":{{\"prompt_tokens\":7,\"completion_tokens\":5,\"total_tokens\":12}}}}\n\n"));
+        let usage_event = format!("data: {{\"id\":\"chatcmpl-mock\",\"model\":\"{model}\",\"choices\":[],\"usage\":{{\"prompt_tokens\":7,\"completion_tokens\":5,\"total_tokens\":12}}}}\n\n");
+        if auth.contains("sk-split") {
+            // Reproduce the production failure mode: the usage event is split
+            // across two TCP writes. A per-chunk scanner loses it entirely and
+            // records success with 0 tokens; the cross-chunk line buffer must
+            // reassemble it.
+            let mid = usage_event.len() / 2;
+            let (a, b) = usage_event.split_at(mid);
+            chunks.push(a.to_string());
+            chunks.push(b.to_string());
+        } else {
+            chunks.push(usage_event);
+        }
     }
     chunks.push("data: [DONE]\n\n".to_string());
     let stream = futures_util::stream::iter(chunks.into_iter().map(Ok::<String, std::io::Error>))

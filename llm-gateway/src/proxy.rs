@@ -837,19 +837,31 @@ fn finish_generic(
 // state machines need no changes.
 // ---------------------------------------------------------------------------
 
-/// Best-effort SSE usage scanner: returns (input, output) when a `data:` line in
-/// this chunk carries a JSON object with `usage` (OpenAI final chunk with
-// `stream_options.include_usage`, or Anthropic `message_delta`). An event split
-/// across chunk boundaries may be missed (then tpm/tps undercount for that one
-/// request; non-stream is always exact). Cheap `contains` pre-filter on every chunk.
-fn scan_usage(chunk: &axum::body::Bytes, proto: Protocol) -> (Option<u64>, Option<u64>) {
-    // Partial per event by design — the caller merges across chunks (Anthropic
-    // splits input/output across message_start / message_delta).
-    let Ok(text) = std::str::from_utf8(chunk) else {
-        return (None, None);
-    };
+/// Cap for the cross-chunk line buffer. SSE lines are tiny; a runaway buffer
+/// would mean the upstream never emits newlines (broken stream) — drop old bytes.
+const LINE_CARRY_CAP: usize = 64 * 1024;
+
+/// Take the complete-line prefix out of a cross-chunk byte buffer, leaving the
+/// trailing partial line in place. Returns `None` when the buffer holds no
+/// newline yet (the caller keeps waiting).
+///
+/// This is what makes usage capture robust: an SSE `data:` line split across two
+/// TCP reads used to be parsed twice and never succeed, so the request recorded
+/// `success` with 0 tokens (observed in production: ~40% of streams).
+fn take_complete_lines(buf: &mut Vec<u8>) -> Option<String> {
+    let nl = buf.iter().rposition(|b| *b == b'\n')?;
+    let tail = buf.split_off(nl + 1);
+    let complete = std::mem::replace(buf, tail);
+    // Non-UTF8 bytes only ever come from a multi-byte char split by the *next*
+    // read, which cannot happen inside a complete line.
+    Some(String::from_utf8_lossy(&complete).into_owned())
+}
+
+/// Scan complete SSE lines for usage counts (partial per event: Anthropic splits
+/// input across `message_start` and output across `message_delta`).
+fn scan_usage_lines(text: &str, proto: Protocol) -> (Option<u64>, Option<u64>) {
     if !text.contains("\"usage\"") {
-        return (None, None); // pre-filter: most chunks carry no usage
+        return (None, None); // pre-filter: most lines carry no usage
     }
     for line in text.split_inclusive('\n') {
         let payload = match line.trim().strip_prefix("data:") {
@@ -869,16 +881,10 @@ fn scan_usage(chunk: &axum::body::Bytes, proto: Protocol) -> (Option<u64>, Optio
     (None, None)
 }
 
-/// Best-effort SSE first-token scanner: true when a `data:` line in this chunk
-/// carries the first piece of *generated content* — OpenAI `choices[0].delta.content`
-/// (non-empty) or Anthropic `delta.text` (content_block_delta). Distinguishes the
-/// "棣栧瓧寤惰繜"/TFTT metric from the role/usage/stop chunks (which arrive immediately
-/// or at the end and carry no text). Same split-across-chunks caveat as `scan_usage`.
-fn scan_has_content(chunk: &axum::body::Bytes, proto: Protocol) -> bool {
-    let text = match std::str::from_utf8(chunk) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
+/// True when complete SSE lines carry the first piece of *generated content* —
+/// OpenAI `choices[0].delta.content` (non-empty) or Anthropic `delta.text`.
+/// Role/usage/stop chunks carry no text, so they don't start the TFTT clock.
+fn lines_have_content(text: &str, proto: Protocol) -> bool {
     if !text.contains("content") && !text.contains("\"text\"") {
         return false; // pre-filter: role/usage/stop chunks carry neither
     }
@@ -925,6 +931,10 @@ struct MetricsStream<S> {
     /// (message_delta) across events; OpenAI's include_usage chunk has both.
     usage_in: Option<u64>,
     usage_out: Option<u64>,
+    /// Cross-chunk line buffer: an SSE event that straddles two TCP reads is
+    /// assembled here before parsing (without it, ~40% of real streams lost the
+    /// usage event and recorded 0 tokens).
+    carry: Vec<u8>,
     proto: Protocol,
 }
 
@@ -943,6 +953,7 @@ where
             first: true,
             usage_in: None,
             usage_out: None,
+            carry: Vec::new(),
             proto,
         }
     }
@@ -963,27 +974,50 @@ where
         let this = self.get_mut(); // safe: Self: Unpin
         match this.inner.poll_next_unpin(cx) {
             Poll::Ready(Some(Ok(chunk))) => {
-                // TFTT = time to the first *generated content* token (棣栧瓧寤惰繜),
-                // not the first chunk — OpenAI's role chunk and Anthropic's
-                // message_start arrive immediately and would read ~0. So wait for
-                // the first chunk whose data: line carries actual text.
-                if this.first && scan_has_content(&chunk, this.proto) {
-                    this.first = false;
-                    let ms = this.start.elapsed().as_millis() as u32;
-                    this.app.record_tftt(&this.key_id, ms);
-                    this.app.record_model_tftt(&this.model, ms);
+                // Assemble complete SSE lines across chunk boundaries before
+                // parsing: the upstream's final usage event is frequently split
+                // by TCP, and a per-chunk parser silently drops it (the request
+                // then counted as success with 0 tokens — ~40% in production).
+                this.carry.extend_from_slice(&chunk);
+                if this.carry.len() > LINE_CARRY_CAP {
+                    // No newline in 64KB: broken stream. Keep the tail only.
+                    let cut = this.carry.len() - LINE_CARRY_CAP / 2;
+                    this.carry.drain(..cut);
                 }
-                let (ui, uo) = scan_usage(&chunk, this.proto);
-                if ui.is_some() {
-                    this.usage_in = ui;
-                }
-                if uo.is_some() {
-                    this.usage_out = uo;
+                if let Some(lines) = take_complete_lines(&mut this.carry) {
+                    // TFTT = time to the first *generated content* token, not the
+                    // first chunk — role/usage/stop chunks carry no text and would
+                    // read ~0. Wait for the first line with actual text.
+                    if this.first && lines_have_content(&lines, this.proto) {
+                        this.first = false;
+                        let ms = this.start.elapsed().as_millis() as u32;
+                        this.app.record_tftt(&this.key_id, ms);
+                        this.app.record_model_tftt(&this.model, ms);
+                    }
+                    let (ui, uo) = scan_usage_lines(&lines, this.proto);
+                    if ui.is_some() {
+                        this.usage_in = ui;
+                    }
+                    if uo.is_some() {
+                        this.usage_out = uo;
+                    }
                 }
                 Poll::Ready(Some(Ok(chunk)))
             }
             Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
             Poll::Ready(None) => {
+                // Flush any final event that arrived without a trailing newline.
+                if !this.carry.is_empty() {
+                    let tail = String::from_utf8_lossy(&this.carry).into_owned();
+                    this.carry.clear();
+                    let (ui, uo) = scan_usage_lines(&tail, this.proto);
+                    if ui.is_some() {
+                        this.usage_in = ui;
+                    }
+                    if uo.is_some() {
+                        this.usage_out = uo;
+                    }
+                }
                 // Stream ended: record token count (tpm) + generation rate (tps).
                 if this.usage_in.is_some() || this.usage_out.is_some() {
                     let i = this.usage_in.take().unwrap_or(0);
@@ -1151,7 +1185,71 @@ pub async fn list_models(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_quota_exhausted, AUTH_INVALID_SECS, QUOTA_COOLDOWN_SECS};
+    use super::{
+        is_quota_exhausted, lines_have_content, scan_usage_lines, take_complete_lines,
+        AUTH_INVALID_SECS, QUOTA_COOLDOWN_SECS,
+    };
+    use crate::protocol::Protocol;
+
+    // --- cross-chunk SSE assembly: the "success with 0 tokens" bug ---
+
+    #[test]
+    fn complete_lines_buffer_holds_partial_line() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"data: {\"a\":1}\ndata: {\"usage\":{\"prompt_to");
+        let lines = take_complete_lines(&mut buf).expect("one complete line");
+        assert_eq!(lines, "data: {\"a\":1}\n");
+        assert_eq!(
+            buf, b"data: {\"usage\":{\"prompt_to".to_vec(),
+            "the partial line stays buffered"
+        );
+    }
+
+    #[test]
+    fn usage_split_across_two_chunks_is_still_captured() {
+        // The exact production failure: the final usage event is split by TCP.
+        // Per-chunk parsing missed it entirely (request recorded 0 tokens).
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n");
+        buf.extend_from_slice(b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":76");
+        // First read: no usage yet (the event is incomplete).
+        let first = take_complete_lines(&mut buf).unwrap();
+        assert_eq!(scan_usage_lines(&first, Protocol::OpenAi), (None, None));
+        // Second read completes the event.
+        buf.extend_from_slice(b"33,\"completion_tokens\":12}}\n\ndata: [DONE]\n\n");
+        let second = take_complete_lines(&mut buf).unwrap();
+        assert_eq!(
+            scan_usage_lines(&second, Protocol::OpenAi),
+            (Some(7633), Some(12)),
+            "split usage event must be reassembled, not lost"
+        );
+    }
+
+    #[test]
+    fn anthropic_usage_split_across_events_still_merges() {
+        // message_start (nested input) and message_delta (output only) arrive in
+        // separate chunks — the caller merges the partial reads.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(
+            b"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3}}}\n\n",
+        );
+        let a = take_complete_lines(&mut buf).unwrap();
+        assert_eq!(scan_usage_lines(&a, Protocol::Anthropic), (Some(3), None));
+        buf.extend_from_slice(b"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":5}}\n\n");
+        let b = take_complete_lines(&mut buf).unwrap();
+        assert_eq!(scan_usage_lines(&b, Protocol::Anthropic), (None, Some(5)));
+    }
+
+    #[test]
+    fn content_detection_works_on_complete_lines_only() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n");
+        let a = take_complete_lines(&mut buf).unwrap();
+        assert!(!lines_have_content(&a, Protocol::OpenAi), "role chunk is not content");
+        buf.extend_from_slice(b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n");
+        let b = take_complete_lines(&mut buf).unwrap();
+        assert!(lines_have_content(&b, Protocol::OpenAi));
+    }
 
     // --- bench policy: only 401/403 are 异常; quota is a 5h cooldown ---
 
