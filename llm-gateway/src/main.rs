@@ -19,53 +19,104 @@ pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// Default config path when `--config` is absent.
-///
-/// 1. `./gateway.json` when it exists, or the CWD is writable — this keeps the
-///    dev workflow (`cd llm-gateway && cargo run`), the Android shell and every
-///    existing deployment byte-identical in behavior.
-/// 2. `<exe dir>/gateway.json` when the CWD is NOT writable. That is the
-///    double-click case: the shell's CWD can be anywhere (e.g. System32 from the
-///    Run dialog), where creating the config fails and the process used to exit
-///    before the window could be read ("闪退").
-fn default_config_path() -> PathBuf {
-    let cwd_cfg = PathBuf::from("gateway.json");
-    if cwd_cfg.exists() || dir_is_writable(std::path::Path::new(".")) {
-        return cwd_cfg;
-    }
+/// Candidate config paths, in preference order, for the implicit (`--config`
+/// absent) case. The gateway writes `gateway.json` next to itself on first run,
+/// so a directory that denies that write kills startup — and on locked-down
+/// machines the exe's own folder can be exactly such a directory (observed:
+/// "os error 5" with no log file, i.e. even the fallback log write was denied).
+/// Trying several locations makes startup work regardless of which one is
+/// writable, while keeping the established layout first:
+///   1. `./gateway.json`          — dev workflow, existing deployments, Android
+///   2. `<exe dir>/gateway.json`  — the normal double-click layout
+///   3. `%LOCALAPPDATA%/sakura-llmgateway/gateway.json` — per-user persistent
+///      fallback (never %TEMP%: that gets cleaned). Only used when the two
+///      natural locations are not writable.
+fn config_candidates() -> Vec<PathBuf> {
+    let mut out = vec![PathBuf::from("gateway.json")];
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            return dir.join("gateway.json");
+            let p = dir.join("gateway.json");
+            if !out.contains(&p) {
+                out.push(p);
+            }
         }
     }
-    cwd_cfg
-}
-
-/// Cheap writability probe: can we create a file in `dir`?
-fn dir_is_writable(dir: &std::path::Path) -> bool {
-    let probe = dir.join(".sakura-write-probe");
-    match std::fs::write(&probe, b"1") {
-        Ok(_) => {
-            let _ = std::fs::remove_file(&probe);
-            true
-        }
-        Err(_) => false,
+    let data_dir = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("sakura-llmgateway");
+    let _ = std::fs::create_dir_all(&data_dir);
+    let p = data_dir.join("gateway.json");
+    if !out.contains(&p) {
+        out.push(p);
     }
+    out
 }
 
-/// Startup failure that a user may need to read: log it next to the exe and,
+/// Load the config, trying each candidate until one can be created/read. An
+/// existing file always wins (never silently relocate an established config).
+fn load_config_with_fallback() -> Result<(config::Config, PathBuf), String> {
+    let candidates = config_candidates();
+    // A file that already exists must be used as-is (even if it fails to parse:
+    // moving away from it would be worse than reporting the parse error).
+    for p in &candidates {
+        if p.exists() {
+            return config::Config::load(p)
+                .map(|c| (c, p.clone()))
+                .map_err(|e| format!("failed to load config {}: {e}", p.display()));
+        }
+    }
+    // Nothing exists yet: use the first location we can actually write.
+    let mut errors = Vec::new();
+    for p in &candidates {
+        match config::Config::load(p) {
+            Ok(c) => return Ok((c, p.clone())),
+            Err(e) => errors.push(format!("{}: {e}", p.display())),
+        }
+    }
+    Err(format!(
+        "no writable config location (tried {}), cwd={}: {}",
+        candidates.len(),
+        std::env::current_dir()
+            .map(|d| d.display().to_string())
+            .unwrap_or_else(|_| "?".into()),
+        errors.join(" | ")
+    ))
+}
+
+/// Startup failure a user may need to read: log it (exe dir, else %TEMP%) and,
 /// when attached to a terminal (double-click), wait for Enter so the window
 /// doesn't vanish before the message can be seen. Never waits when stdio is
 /// redirected (service/CI/`start.bat` piping).
 fn fatal(msg: &str) -> ! {
     eprintln!("[gateway] {msg}");
+    let mut written: Option<PathBuf> = None;
+    let mut targets: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let log = dir.join("startup-error.log");
-            let _ = std::fs::write(&log, format!("{msg}\n"));
-            eprintln!("[gateway] details written to {}", log.display());
+            targets.push(dir.join("startup-error.log"));
         }
     }
+    let data_dir = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("sakura-llmgateway");
+    let _ = std::fs::create_dir_all(&data_dir);
+    targets.push(data_dir.join("startup-error.log"));
+    for t in targets {
+        if std::fs::write(&t, format!("{msg}\n")).is_ok() {
+            written = Some(t);
+            break;
+        }
+    }
+    match written {
+        Some(p) => eprintln!("[gateway] details written to {}", p.display()),
+        None => eprintln!("[gateway] could not write a startup log anywhere"),
+    }
+    eprintln!(
+        "[gateway] hint: run from a writable folder (e.g. Desktop/Documents), or pass \
+         --config <writable path>\\gateway.json"
+    );
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() {
         eprintln!("[gateway] press Enter to close this window…");
@@ -78,19 +129,34 @@ fn fatal(msg: &str) -> ! {
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let config_path = args
+    let explicit = args
         .iter()
         .position(|a| a == "--config")
         .and_then(|i| args.get(i + 1))
-        .map(PathBuf::from)
-        .unwrap_or_else(default_config_path);
+        .map(PathBuf::from);
 
-    let cfg = match config::Config::load(&config_path) {
-        Ok(c) => c,
-        Err(e) => fatal(&format!(
-            "failed to load config {}: {e}",
-            config_path.display()
-        )),
+    // Print where we are running from: with three candidate config locations the
+    // diagnostics must show which one was actually used (and the CWD/exe path
+    // make a permission problem obvious at a glance).
+    eprintln!(
+        "[gateway] cwd:  {}",
+        std::env::current_dir()
+            .map(|d| d.display().to_string())
+            .unwrap_or_else(|_| "?".into())
+    );
+    if let Ok(exe) = std::env::current_exe() {
+        eprintln!("[gateway] exe:  {}", exe.display());
+    }
+
+    let (cfg, config_path) = match &explicit {
+        Some(p) => match config::Config::load(p) {
+            Ok(c) => (c, p.clone()),
+            Err(e) => fatal(&format!("failed to load config {}: {e}", p.display())),
+        },
+        None => match load_config_with_fallback() {
+            Ok(v) => v,
+            Err(e) => fatal(&e),
+        },
     };
 
     println!("[gateway] config file: {}", config_path.display());
