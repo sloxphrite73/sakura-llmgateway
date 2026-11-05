@@ -58,6 +58,8 @@ export interface Status {
   default_cooldown_secs?: number;
   max_attempts?: number;
   max_hold_secs?: number;
+  auth_invalid_secs?: number;
+  quota_cooldown_secs?: number;
   api_port: number;
   ui_port: number;
   auth?: { enabled: boolean; keys: string[] };

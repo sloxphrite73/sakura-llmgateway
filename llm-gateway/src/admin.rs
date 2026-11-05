@@ -589,6 +589,12 @@ pub struct SettingsInput {
     /// Console theme id. None = keep current (lets old clients PUT without it).
     #[serde(default)]
     pub theme: Option<String>,
+    /// Bench duration for 401/403-rejected keys. None = keep current.
+    #[serde(default)]
+    pub auth_invalid_secs: Option<u64>,
+    /// Bench duration for quota-exhausted keys. None = keep current.
+    #[serde(default)]
+    pub quota_cooldown_secs: Option<u64>,
 }
 
 pub async fn update_settings(
@@ -606,6 +612,12 @@ pub async fn update_settings(
         c.ui_port = input.ui_port;
         if let Some(t) = input.theme {
             c.theme = if t.trim().is_empty() { None } else { Some(t) };
+        }
+        if let Some(v) = input.auth_invalid_secs {
+            c.auth_invalid_secs = v.max(1);
+        }
+        if let Some(v) = input.quota_cooldown_secs {
+            c.quota_cooldown_secs = v.max(1);
         }
     });
     ok(cfg)
@@ -997,6 +1009,8 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
         "default_cooldown_secs": cfg.default_cooldown_secs,
         "max_attempts": cfg.max_attempts,
         "max_hold_secs": cfg.max_hold_secs,
+        "auth_invalid_secs": cfg.auth_invalid_secs,
+        "quota_cooldown_secs": cfg.quota_cooldown_secs,
         "auth": cfg.auth,
         "api_port": api_port,
         "ui_port": ui_port,

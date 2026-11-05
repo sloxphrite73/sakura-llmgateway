@@ -63,6 +63,16 @@ fn default_max_hold_secs() -> u64 {
     120
 }
 
+/// Default bench time for a 401/403-rejected key (1h).
+fn default_auth_invalid_secs() -> u64 {
+    3600
+}
+
+/// Default bench time for a quota-exhausted key (5h).
+fn default_quota_cooldown_secs() -> u64 {
+    5 * 3600
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
     #[serde(default = "crate::new_id")]
@@ -266,6 +276,16 @@ pub struct Config {
     /// behavior: immediate 429).
     #[serde(default = "default_max_hold_secs")]
     pub max_hold_secs: u64,
+    /// How long a key rejected with 401/403 is benched as 异常 (invalid), in
+    /// seconds. Configurable because "revoked" vs "transient auth wave" can't be
+    /// told apart — the user tunes how fast a rejected key comes back.
+    #[serde(default = "default_auth_invalid_secs")]
+    pub auth_invalid_secs: u64,
+    /// How long a key whose PLAN is exhausted (429 quota) is benched, in seconds.
+    /// A quota reset can't be estimated from the 60s usage window, so this is the
+    /// fallback; an upstream `Retry-After` always wins when present.
+    #[serde(default = "default_quota_cooldown_secs")]
+    pub quota_cooldown_secs: u64,
     pub auth: AuthSettings,
     pub providers: Vec<Provider>,
     /// Currency -> USD rate (e.g. `{"CNY": 0.14}`), for normalizing `bill_balance`
@@ -296,6 +316,8 @@ impl Default for Config {
             default_cooldown_secs: 60,
             max_attempts: 3,
             max_hold_secs: default_max_hold_secs(),
+            auth_invalid_secs: default_auth_invalid_secs(),
+            quota_cooldown_secs: default_quota_cooldown_secs(),
             auth: AuthSettings::default(),
             providers: Vec::new(),
             currency_rates: std::collections::BTreeMap::new(),

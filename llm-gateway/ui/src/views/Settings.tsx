@@ -25,6 +25,8 @@ export function SettingsView() {
   const cooldownRef = useRef<HTMLInputElement>(null);
   const attemptsRef = useRef<HTMLInputElement>(null);
   const holdRef = useRef<HTMLInputElement>(null);
+  const invalidRef = useRef<HTMLInputElement>(null);
+  const quotaRef = useRef<HTMLInputElement>(null);
   const apiPortRef = useRef<HTMLInputElement>(null);
   const uiPortRef = useRef<HTMLInputElement>(null);
   const authRef = useRef<HTMLInputElement>(null);
@@ -44,6 +46,8 @@ export function SettingsView() {
           enabled: !!(authRef.current && authRef.current.checked),
           keys: (authKeysRef.current ? authKeysRef.current.value : '').split(',').map(x => x.trim()).filter(Boolean),
         },
+        auth_invalid_secs: +(invalidRef.current ? invalidRef.current.value : 0) || 3600,
+        quota_cooldown_secs: +(quotaRef.current ? quotaRef.current.value : 0) || 18000,
       });
       await refresh();
       toast(t('已保存'));
@@ -93,6 +97,8 @@ export function SettingsView() {
             <label className="field"><span>{t('默认冷却时间（秒）')}</span><input ref={cooldownRef} type="number" defaultValue={s.default_cooldown_secs != null ? s.default_cooldown_secs : 60} /></label>
             <label className="field"><span>{t('每请求最大尝试次数')}</span><input ref={attemptsRef} type="number" defaultValue={s.max_attempts != null ? s.max_attempts : 3} /></label>
             <label className="field"><span>{t('全冷却最长等待（秒）')}</span><input ref={holdRef} type="number" defaultValue={s.max_hold_secs != null ? s.max_hold_secs : 120} /></label>
+            <label className="field"><span>{t('401/403 异常时长（秒）')}</span><input ref={invalidRef} type="number" defaultValue={s.auth_invalid_secs != null ? s.auth_invalid_secs : 3600} /></label>
+            <label className="field"><span>{t('配额耗尽冷却（秒）')}</span><input ref={quotaRef} type="number" defaultValue={s.quota_cooldown_secs != null ? s.quota_cooldown_secs : 18000} /></label>
             <label className="field"><span>{t('API 端口')}</span><input ref={apiPortRef} type="number" defaultValue={s.api_port || 8000} /></label>
             <label className="field"><span>{t('UI 端口')}</span><input ref={uiPortRef} type="number" defaultValue={s.ui_port || 8001} /></label>
           </div>

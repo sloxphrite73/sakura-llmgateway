@@ -23,16 +23,8 @@ fn should_rotate(status: u16) -> bool {
         || status == 504
 }
 
-/// How long a key rejected with 401/403 is benched as 异常 (invalid). Longer than
-/// the old 30min: an auth-rejected key is either genuinely revoked (rare) or hit a
-/// transient upstream auth wave (sensenova does this in bursts) — either way a
-/// full hour keeps it out of round-robin without the old thrash.
-const AUTH_INVALID_SECS: u64 = 3600;
-
-/// Quota exhausted (the plan's tokens are used up, not a rate window) → bench
-/// for 5 hours. The plan usually resets on its own, so this is a COOLDOWN (not
-/// 异常): quota is a capacity state, not an anomaly.
-const QUOTA_COOLDOWN_SECS: u64 = 5 * 3600;
+/// Bench durations live in `config.rs` (`auth_invalid_secs` / `quota_cooldown_secs`,
+/// defaults 1h / 5h) so they can be tuned without a rebuild.
 
 /// True when a 429 body says the key's PLAN is exhausted (as opposed to a
 /// per-minute rate window).
@@ -553,11 +545,13 @@ where
             app.record_rotation(&row.provider_id);
             if code == 429 {
                 // Quota exhausted (the plan's tokens are used up, not a rate
-                // window) → 5h cooldown, recovers on its own when the plan
-                // resets. A rate-window 429 (rpm/tpm) falls through to the
-                // normal cooldown chain below.
+                // window) → bench it for the configured quota_cooldown_secs
+                // (default 5h). An upstream `Retry-After` on the quota error is
+                // authoritative and wins (it usually encodes the plan reset).
                 if is_quota_exhausted(&snippet) {
-                    app.mark_cooldown(&row.provider_id, &row.api_key_id, Some(QUOTA_COOLDOWN_SECS), &reason);
+                    let cfg = app.read_config();
+                    let secs = retry_after.unwrap_or(cfg.quota_cooldown_secs).max(1);
+                    app.mark_cooldown(&row.provider_id, &row.api_key_id, Some(secs), &reason);
                     continue;
                 }
                 // Rate limited: cooldown = Retry-After → per-key override →
@@ -572,10 +566,12 @@ where
                 // pure client-visible latency (~2s per rotation).
                 tokio::time::sleep(Duration::from_millis(250)).await;
             } else if code == 401 || code == 403 {
-                // Auth failure: the key is rejected — bench it as 异常 for an
-                // hour. (Only 401/403 get the 异常 treatment; quota exhaustion
-                // above is a capacity state and stays a plain cooldown.)
-                app.mark_invalid(&row.provider_id, &row.api_key_id, AUTH_INVALID_SECS, &reason);
+                // Auth failure: the key is rejected — bench it as 异常 for the
+                // configured auth_invalid_secs (default 1h). Only 401/403 get the
+                // 异常 treatment; quota exhaustion above is a capacity state and
+                // stays a plain cooldown.
+                let secs = app.read_config().auth_invalid_secs.max(1);
+                app.mark_invalid(&row.provider_id, &row.api_key_id, secs, &reason);
             } else {
                 // Other key-scoped errors (408/5xx): short rotate-out cooldown, long
                 // enough to not retry this round, short enough to recover quickly.
@@ -691,8 +687,10 @@ fn finish_generic(
                             || err_text.contains("\"401\"") || err_text.contains("api key not")
                             || err_text.contains("permission_denied")
                         {
-                            // Same policy as a real 401: bench as 异常 for an hour.
-                            app.mark_invalid(&provider_id, &key_id, AUTH_INVALID_SECS,
+                            // Same policy as a real 401: bench as 异常 for the
+                            // configured auth_invalid_secs.
+                            let secs = app.read_config().auth_invalid_secs.max(1);
+                            app.mark_invalid(&provider_id, &key_id, secs,
                                 &format!("upstream 200 with auth error: {}", err_text.chars().take(200).collect::<String>()));
                         }
                         return error_response_for(
@@ -1185,10 +1183,7 @@ pub async fn list_models(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        is_quota_exhausted, lines_have_content, scan_usage_lines, take_complete_lines,
-        AUTH_INVALID_SECS, QUOTA_COOLDOWN_SECS,
-    };
+    use super::{is_quota_exhausted, lines_have_content, scan_usage_lines, take_complete_lines};
     use crate::protocol::Protocol;
 
     // --- cross-chunk SSE assembly: the "success with 0 tokens" bug ---
@@ -1292,10 +1287,22 @@ mod tests {
     }
 
     #[test]
-    fn bench_durations_match_policy() {
-        assert_eq!(AUTH_INVALID_SECS, 3600, "401/403 → 异常 1h (longer than the old 30min)");
-        assert_eq!(QUOTA_COOLDOWN_SECS, 18_000, "plan exhausted → 5h");
-        assert!(QUOTA_COOLDOWN_SECS > AUTH_INVALID_SECS);
+    fn bench_durations_are_configurable_with_sane_defaults() {
+        // Fixes used to be hardcoded consts; they are now config fields so the
+        // user can tune them without a rebuild. Defaults must stay 1h / 5h.
+        let cfg = crate::config::Config::default();
+        assert_eq!(cfg.auth_invalid_secs, 3600, "401/403 → 异常 1h by default");
+        assert_eq!(cfg.quota_cooldown_secs, 18_000, "plan exhausted → 5h by default");
+        assert!(cfg.quota_cooldown_secs > cfg.auth_invalid_secs);
+    }
+
+    #[test]
+    fn older_configs_without_the_new_fields_still_load() {
+        // Back-compat: gateway.json written before these fields existed must
+        // deserialize to the defaults (serde `default` attributes).
+        let cfg = crate::config::Config::parse_str(r#"{"api_port":8000,"ui_port":8001}"#).unwrap();
+        assert_eq!(cfg.auth_invalid_secs, 3600);
+        assert_eq!(cfg.quota_cooldown_secs, 18_000);
     }
 }
 
