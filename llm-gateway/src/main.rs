@@ -19,6 +19,62 @@ pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// Default config path when `--config` is absent.
+///
+/// 1. `./gateway.json` when it exists, or the CWD is writable — this keeps the
+///    dev workflow (`cd llm-gateway && cargo run`), the Android shell and every
+///    existing deployment byte-identical in behavior.
+/// 2. `<exe dir>/gateway.json` when the CWD is NOT writable. That is the
+///    double-click case: the shell's CWD can be anywhere (e.g. System32 from the
+///    Run dialog), where creating the config fails and the process used to exit
+///    before the window could be read ("闪退").
+fn default_config_path() -> PathBuf {
+    let cwd_cfg = PathBuf::from("gateway.json");
+    if cwd_cfg.exists() || dir_is_writable(std::path::Path::new(".")) {
+        return cwd_cfg;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            return dir.join("gateway.json");
+        }
+    }
+    cwd_cfg
+}
+
+/// Cheap writability probe: can we create a file in `dir`?
+fn dir_is_writable(dir: &std::path::Path) -> bool {
+    let probe = dir.join(".sakura-write-probe");
+    match std::fs::write(&probe, b"1") {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Startup failure that a user may need to read: log it next to the exe and,
+/// when attached to a terminal (double-click), wait for Enter so the window
+/// doesn't vanish before the message can be seen. Never waits when stdio is
+/// redirected (service/CI/`start.bat` piping).
+fn fatal(msg: &str) -> ! {
+    eprintln!("[gateway] {msg}");
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let log = dir.join("startup-error.log");
+            let _ = std::fs::write(&log, format!("{msg}\n"));
+            eprintln!("[gateway] details written to {}", log.display());
+        }
+    }
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        eprintln!("[gateway] press Enter to close this window…");
+        let mut buf = String::new();
+        let _ = std::io::stdin().read_line(&mut buf);
+    }
+    std::process::exit(1);
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -27,14 +83,14 @@ async fn main() {
         .position(|a| a == "--config")
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("gateway.json"));
+        .unwrap_or_else(default_config_path);
 
     let cfg = match config::Config::load(&config_path) {
         Ok(c) => c,
-        Err(e) => {
-            eprintln!("[gateway] failed to load config: {e}");
-            std::process::exit(1);
-        }
+        Err(e) => fatal(&format!(
+            "failed to load config {}: {e}",
+            config_path.display()
+        )),
     };
 
     println!("[gateway] config file: {}", config_path.display());
@@ -153,8 +209,13 @@ async fn main() {
     // bind the first free port — never crash on AddrInUse. Returns the listener
     // and the port it actually bound.
     async fn bind_with_fallback(preferred: u16) -> std::io::Result<(tokio::net::TcpListener, u16)> {
-        let mut delay = std::time::Duration::from_millis(500);
-        for _ in 0..10 {
+        // Retry window ~4s total: long enough for a stale twin to release the
+        // port (Android service racing a restart), short enough that a genuinely
+        // occupied port falls back fast — the old 17.5s budget made a
+        // double-click next to a running instance look like a hang (17s × 2
+        // ports before the UI port even started binding).
+        let mut delay = std::time::Duration::from_millis(300);
+        for _ in 0..5 {
             match tokio::net::TcpListener::bind(("127.0.0.1", preferred)).await {
                 Ok(l) => return Ok((l, preferred)),
                 Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
@@ -188,12 +249,15 @@ async fn main() {
 
     let cfg_api = app.read_config().api_port;
     let cfg_ui = app.read_config().ui_port;
-    let (api_listener, api_port) = bind_with_fallback(cfg_api)
-        .await
-        .expect("failed to bind api port");
-    let (ui_listener, ui_port) = bind_with_fallback(cfg_ui)
-        .await
-        .expect("failed to bind ui port");
+    // Ports exhausted is a user-readable failure too (panic would flash-close).
+    let (api_listener, api_port) = match bind_with_fallback(cfg_api).await {
+        Ok(v) => v,
+        Err(e) => fatal(&format!("failed to bind api port ({cfg_api}): {e}")),
+    };
+    let (ui_listener, ui_port) = match bind_with_fallback(cfg_ui).await {
+        Ok(v) => v,
+        Err(e) => fatal(&format!("failed to bind ui port ({cfg_ui}): {e}")),
+    };
     app.bound_api_port
         .store(api_port, std::sync::atomic::Ordering::Relaxed);
     app.bound_ui_port
