@@ -148,18 +148,41 @@ async fn main() {
         eprintln!("[gateway] exe:  {}", exe.display());
     }
 
-    let (cfg, config_path) = match &explicit {
+    // Never refuse to start because the config file cannot be written: a local
+    // gateway that runs with an in-memory config is far more useful than a
+    // window that flashes an "access denied" and quits (seen on machines where
+    // the exe's folder denies file creation). Persistence is the only loss, and
+    // the warning says so.
+    let (cfg, config_path, persist) = match &explicit {
         Some(p) => match config::Config::load(p) {
-            Ok(c) => (c, p.clone()),
+            Ok(c) => (c, p.clone(), true),
             Err(e) => fatal(&format!("failed to load config {}: {e}", p.display())),
         },
         None => match load_config_with_fallback() {
-            Ok(v) => v,
-            Err(e) => fatal(&e),
+            Ok((c, p)) => (c, p, true),
+            Err(e) => {
+                let path = config_candidates()
+                    .pop()
+                    .unwrap_or_else(|| PathBuf::from("gateway.json"));
+                eprintln!("[gateway] WARNING: {e}");
+                eprintln!(
+                    "[gateway] WARNING: cannot write a config file — running with the built-in \
+                     defaults in memory. Providers/keys/settings added now will be LOST on exit."
+                );
+                eprintln!(
+                    "[gateway] WARNING: to persist, put a writable gateway.json next to the exe, \
+                     move the exe to a writable folder, or pass --config <path>."
+                );
+                (config::Config::default(), path, false)
+            }
         },
     };
 
-    println!("[gateway] config file: {}", config_path.display());
+    println!(
+        "[gateway] config file: {}{}",
+        config_path.display(),
+        if persist { "" } else { " (NOT WRITABLE — in-memory only)" }
+    );
     // Bound ports are printed after binding (they may differ from config if the
     // configured port was occupied and the fallback walked to a free one).
     if cfg.auth.enabled {
