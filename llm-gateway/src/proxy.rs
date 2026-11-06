@@ -198,8 +198,8 @@ pub async fn chat_completions(
         app,
         body,
         Protocol::OpenAi,
-        |app, payload, provider_id, key_id, client_model, is_stream, est_in| {
-            finish_openai(app, payload, provider_id, key_id, client_model, is_stream, est_in)
+        |app, payload, provider_id, key_id, client_model, is_stream, est_in, ttfb_ms| {
+            finish_openai(app, payload, provider_id, key_id, client_model, is_stream, est_in, ttfb_ms)
         },
     )
     .await
@@ -222,8 +222,8 @@ pub async fn anthropic_messages(
         app,
         body,
         Protocol::Anthropic,
-        |app, payload, provider_id, key_id, client_model, is_stream, est_in| {
-            finish_anthropic(app, payload, provider_id, key_id, client_model, is_stream, est_in)
+        |app, payload, provider_id, key_id, client_model, is_stream, est_in, ttfb_ms| {
+            finish_anthropic(app, payload, provider_id, key_id, client_model, is_stream, est_in, ttfb_ms)
         },
     )
     .await
@@ -356,7 +356,7 @@ async fn forward<F, Fut>(
     finish: F,
 ) -> Response
 where
-    F: FnOnce(Arc<App>, reqwest::Response, String, String, String, bool, u64) -> Fut,
+    F: FnOnce(Arc<App>, reqwest::Response, String, String, String, bool, u64, u64) -> Fut,
     Fut: std::future::Future<Output = Response>,
 {
     use crate::strategy::{build_candidates, SelectResult};
@@ -511,7 +511,13 @@ where
             crate::tokenizer::count(&crate::tokenizer::payload_text(&upstream_payload))
         });
 
+        // Timing split: ttfb is "upstream accepted the request and returned
+        // response headers". A huge ttfb means the provider queued us; a small
+        // ttfb with a huge total means it was slow streaming. Logged per request
+        // so "who made us wait" is answerable from the log file.
+        let t_upstream = std::time::Instant::now();
         let resp = call_upstream(&app, &provider, &row.key_secret, &url, &upstream_payload).await;
+        let ttfb_ms = t_upstream.elapsed().as_millis() as u64;
 
         let resp = match resp {
             Ok(r) => r,
@@ -533,7 +539,7 @@ where
             // pass the upstream model id (= the managed model id the UI's model card
             // shows) so per-model request/token/tftt buckets key on mo.id, not the
             // raw client string (which may be "provider/model" or an alias).
-            return finish(app, resp, row.provider_id, row.api_key_id, row.upstream_model.clone(), is_stream, est_in_tokens).await;
+            return finish(app, resp, row.provider_id, row.api_key_id, row.upstream_model.clone(), is_stream, est_in_tokens, ttfb_ms).await;
         }
 
         // Error before first byte. Rotate to the next key for key-scoped failures
@@ -633,6 +639,7 @@ fn finish_openai(
     client_model: String,
     is_stream: bool,
     est_in: u64,
+    ttfb_ms: u64,
 ) -> impl std::future::Future<Output = Response> {
     finish_generic(
         app,
@@ -643,6 +650,7 @@ fn finish_openai(
         is_stream,
         /*client_is_anthropic*/ false,
         est_in,
+        ttfb_ms,
     )
 }
 
@@ -658,6 +666,7 @@ fn finish_anthropic(
     client_model: String,
     is_stream: bool,
     est_in: u64,
+    ttfb_ms: u64,
 ) -> impl std::future::Future<Output = Response> {
     finish_generic(
         app,
@@ -668,6 +677,7 @@ fn finish_anthropic(
         is_stream,
         /*client_is_anthropic*/ true,
         est_in,
+        ttfb_ms,
     )
 }
 
@@ -683,6 +693,7 @@ fn finish_generic(
     client_wants_stream: bool,
     client_is_anthropic: bool,
     est_in: u64,
+    ttfb_ms: u64,
 ) -> impl std::future::Future<Output = Response> {
     async move {
         // Headers first — the client must receive them regardless of how the body ends.
@@ -812,7 +823,7 @@ fn finish_generic(
         if !needs_translation {
             // Same protocol both sides: raw byte passthrough (the old fast path),
             // wrapped in MetricsStream so tftt / usage / tps are still measured.
-            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in);
+            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in, ttfb_ms);
             let stream = upstream.map(move |r| match r {
                 Ok(chunk) => Ok::<_, std::io::Error>(chunk),
                 Err(e) => Ok(openai_stream_error_chunk(&e).into_bytes().into()),
@@ -830,7 +841,7 @@ fn finish_generic(
                 .map(|_| "gateway".to_string())
                 .unwrap_or_else(|| "gateway".to_string());
             let mut state = OpenAiToAnthropicStream::new(model);
-            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in);
+            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in, ttfb_ms);
             let stream = upstream
                 .map(move |r| -> Result<axum::body::Bytes, std::io::Error> {
                     match r {
@@ -851,7 +862,7 @@ fn finish_generic(
         // Anthropic upstream -> OpenAI client: parse Anthropic SSE events, emit chunks.
         let mut state = AnthropicToOpenAiStream::new();
         let mut buffer: Vec<u8> = Vec::new();
-        let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in);
+        let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in, ttfb_ms);
         let stream = upstream.map(move |r| -> Result<axum::body::Bytes, std::io::Error> {
             match r {
                 Ok(chunk) => Ok(translate_anthropic_chunk(&mut state, &mut buffer, &chunk).into_bytes().into()),
@@ -943,7 +954,8 @@ fn accumulate_delta_text(lines: &str, proto: Protocol, out: &mut String) {
         }
     }
 }
-fn lines_have_content(text: &str, proto: Protocol) -> bool {    if !text.contains("content") && !text.contains("\"text\"") {
+fn lines_have_content(text: &str, proto: Protocol) -> bool {
+    if !text.contains("content") && !text.contains("\"text\"") {
         return false; // pre-filter: role/usage/stop chunks carry neither
     }
     for line in text.split_inclusive('\n') {
@@ -996,6 +1008,19 @@ struct MetricsStream<S> {
     /// Estimated prompt tokens (real BPE tokenizer over the request payload).
     /// Used only when the upstream never reports `usage`.
     est_in: u64,
+    /// Time from sending the upstream request to receiving its response headers.
+    /// A huge value means the provider queued us (their side is the bottleneck).
+    ttfb_ms: u64,
+    /// Bytes streamed so far, for the per-request summary line.
+    bytes: u64,
+    /// True once tokens were recorded; a stream dropped earlier means the client
+    /// disconnected (or the gateway was shut down) before the request finished —
+    /// logged in Drop so it isn't silently invisible.
+    recorded: bool,
+    /// Time to the first *content* delta (0 = never arrived). Split from ttfb so
+    /// the log can tell "upstream queued before headers" from "upstream accepted
+    /// then stalled the body".
+    tftt_ms: u64,
     /// Assistant text seen so far (content + reasoning + tool args), for the
     /// same fallback: counted with the BPE tokenizer at stream end.
     text: String,
@@ -1006,7 +1031,7 @@ impl<S> MetricsStream<S>
 where
     S: futures_util::Stream<Item = Result<axum::body::Bytes, reqwest::Error>> + Unpin,
 {
-    fn new(inner: S, app: std::sync::Arc<App>, key_id: String, provider_id: String, model: String, proto: Protocol, est_in: u64) -> Self {
+    fn new(inner: S, app: std::sync::Arc<App>, key_id: String, provider_id: String, model: String, proto: Protocol, est_in: u64, ttfb_ms: u64) -> Self {
         Self {
             inner,
             app,
@@ -1019,6 +1044,10 @@ where
             usage_out: None,
             carry: Vec::new(),
             est_in,
+            ttfb_ms,
+            bytes: 0,
+            recorded: false,
+            tftt_ms: 0,
             text: String::new(),
             proto,
         }
@@ -1045,6 +1074,7 @@ where
                 // by TCP, and a per-chunk parser silently drops it (the request
                 // then counted as success with 0 tokens — ~40% in production).
                 this.carry.extend_from_slice(&chunk);
+                this.bytes += chunk.len() as u64;
                 if this.carry.len() > LINE_CARRY_CAP {
                     // No newline in 64KB: broken stream. Keep the tail only.
                     let cut = this.carry.len() - LINE_CARRY_CAP / 2;
@@ -1057,6 +1087,7 @@ where
                     if this.first && lines_have_content(&lines, this.proto) {
                         this.first = false;
                         let ms = this.start.elapsed().as_millis() as u32;
+                        this.tftt_ms = ms as u64;
                         this.app.record_tftt(&this.key_id, ms);
                         this.app.record_model_tftt(&this.model, ms);
                     }
@@ -1088,6 +1119,7 @@ where
                     accumulate_delta_text(&tail, this.proto, &mut this.text);
                 }
                 // Stream ended: record token count (tpm) + generation rate (tps).
+                let total_ms = this.start.elapsed().as_millis() as u64;
                 if this.usage_in.is_some() || this.usage_out.is_some() {
                     let i = this.usage_in.take().unwrap_or(0);
                     let o = this.usage_out.take().unwrap_or(0);
@@ -1100,6 +1132,17 @@ where
                         this.app.record_tps(&this.key_id, tps);
                         this.app.record_model_tps(&this.model, tps);
                     }
+                    this.recorded = true;
+                    crate::rlog!(
+                        "[req] model={} key={} ttfb={}ms tftt={}ms total={}ms bytes={} tokens={} (upstream usage)",
+                        this.model,
+                        crate::state::mask_key(&this.key_id),
+                        this.ttfb_ms,
+                        this.tftt_ms,
+                        total_ms,
+                        this.bytes,
+                        total
+                    );
                 } else {
                     // No usage from the upstream: count both sides ourselves with
                     // the real BPE tokenizer instead of recording 0 (which made
@@ -1111,11 +1154,20 @@ where
                         this.app.record_tokens(total, Some(&this.key_id), &this.provider_id, &this.model);
                         this.app.record_tps(&this.key_id, (out_est as f32)
                             / this.start.elapsed().as_secs_f32().max(0.001));
-                        crate::rlog!(
-                            "[stats] no upstream usage - counted locally: in~{} + out~{} = {} (model {})",
-                            this.est_in, out_est, total, this.model
-                        );
                     }
+                    crate::rlog!(
+                        "[req] model={} key={} ttfb={}ms tftt={}ms total={}ms bytes={} tokens={} (counted locally: in~{} out~{})",
+                        this.model,
+                        crate::state::mask_key(&this.key_id),
+                        this.ttfb_ms,
+                        this.tftt_ms,
+                        total_ms,
+                        this.bytes,
+                        total,
+                        this.est_in,
+                        out_est
+                    );
+                    this.recorded = true;
                 }
                 Poll::Ready(None)
             }
@@ -1124,10 +1176,27 @@ where
     }
 }
 
+impl<S> Drop for MetricsStream<S> {
+    fn drop(&mut self) {
+        // A stream dropped before it finished never reached the recording branch:
+        // the client disconnected (or we shut down) mid-request. Log it, otherwise
+        // "the console shows a request but no tokens" has no explanation.
+        if !self.recorded {
+            crate::rlog!(
+                "[req] model={} key={} ttfb={}ms DROPPED after {}ms ({} bytes) - client disconnected before completion",
+                self.model,
+                crate::state::mask_key(&self.key_id),
+                self.ttfb_ms,
+                self.start.elapsed().as_millis(),
+                self.bytes
+            );
+        }
+    }
+}
+
 /// The upstream protocol as recorded in the current config (read live because the
 /// user may have edited the provider while a request is in flight).
-fn upstream_proto_of(app: &App, provider_id: &str) -> Protocol {
-    app.read_config()
+fn upstream_proto_of(app: &App, provider_id: &str) -> Protocol {    app.read_config()
         .provider_by_id(provider_id)
         .map(|p| p.protocol())
         .unwrap_or(Protocol::OpenAi)
