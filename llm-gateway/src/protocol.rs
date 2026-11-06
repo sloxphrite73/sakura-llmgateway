@@ -975,23 +975,8 @@ pub fn extract_usage_partial(
     }
 }
 
-/// Rough token estimate for an upstream *response* body when `usage` is absent
-/// (spec §2.2 fallback, decision ①A): ~4 chars per token over all string leaves.
-/// A conservative lower bound (output-dominated; prompt-side unknown without the
-/// request) — keeps the `tpm` window non-zero until real usage arrives.
-pub fn estimate_response_tokens(body: &serde_json::Value) -> u64 {
-    fn walk(v: &serde_json::Value, chars: &mut u64) {
-        match v {
-            serde_json::Value::String(s) => *chars += s.len() as u64,
-            serde_json::Value::Array(a) => a.iter().for_each(|e| walk(e, chars)),
-            serde_json::Value::Object(o) => o.values().for_each(|e| walk(e, chars)),
-            _ => {}
-        }
-    }
-    let mut chars: u64 = 0;
-    walk(body, &mut chars);
-    chars / 4
-}
+// NOTE: the chars/4 response estimator that used to live here was replaced by
+// `tokenizer::count` (a real BPE tokenizer) — see src/tokenizer.rs.
 
 #[cfg(test)]
 mod tests {

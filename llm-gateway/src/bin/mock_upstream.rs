@@ -159,6 +159,9 @@ async fn chat(
         .pointer("/stream_options/include_usage")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    // `sk-nousage` ignores include_usage: reproduces providers that never report
+    // usage, exercising the gateway's own BPE fallback counter.
+    let include_usage = include_usage && !auth.contains("sk-nousage");
     let mut chunks = vec![
         format!("data: {{\"id\":\"chatcmpl-mock\",\"model\":\"{model}\",\"choices\":[{{\"delta\":{{\"content\":\"hello \"}}}}]}}\n\n"),
         format!("data: {{\"id\":\"chatcmpl-mock\",\"model\":\"{model}\",\"choices\":[{{\"delta\":{{\"content\":\"from {model}\"}}}}]}}\n\n"),

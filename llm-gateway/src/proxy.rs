@@ -198,8 +198,8 @@ pub async fn chat_completions(
         app,
         body,
         Protocol::OpenAi,
-        |app, payload, provider_id, key_id, client_model, is_stream| {
-            finish_openai(app, payload, provider_id, key_id, client_model, is_stream)
+        |app, payload, provider_id, key_id, client_model, is_stream, est_in| {
+            finish_openai(app, payload, provider_id, key_id, client_model, is_stream, est_in)
         },
     )
     .await
@@ -222,8 +222,8 @@ pub async fn anthropic_messages(
         app,
         body,
         Protocol::Anthropic,
-        |app, payload, provider_id, key_id, client_model, is_stream| {
-            finish_anthropic(app, payload, provider_id, key_id, client_model, is_stream)
+        |app, payload, provider_id, key_id, client_model, is_stream, est_in| {
+            finish_anthropic(app, payload, provider_id, key_id, client_model, is_stream, est_in)
         },
     )
     .await
@@ -356,7 +356,7 @@ async fn forward<F, Fut>(
     finish: F,
 ) -> Response
 where
-    F: FnOnce(Arc<App>, reqwest::Response, String, String, String, bool) -> Fut,
+    F: FnOnce(Arc<App>, reqwest::Response, String, String, String, bool, u64) -> Fut,
     Fut: std::future::Future<Output = Response>,
 {
     use crate::strategy::{build_candidates, SelectResult};
@@ -411,6 +411,9 @@ where
     // the client sees latency, not failure. Total hold bounded by
     // max_hold_secs; beyond it we finally 429 with Retry-After.
     let max_hold_ms = cfg.max_hold_secs.saturating_mul(1000);
+    // Estimated prompt tokens (real BPE tokenizer), computed at most once per
+    // request — lazily, and only used when the upstream omits `usage`.
+    let est_in: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     // Sort stack snapshot once (editing strategy mid-request is an edge case).
     let sorts = cfg.strategy.sort.clone();
     drop(cfg); // re-read per attempt for the live provider (protocol may change)
@@ -500,6 +503,13 @@ where
         let upstream_payload =
             build_upstream_payload(&inbound_body, inbound, &provider, &row.upstream_model);
         let url = upstream_chat_url(&provider.base_url, upstream_proto);
+        // Estimated prompt size with the real BPE tokenizer — used ONLY when the
+        // upstream omits `usage`. Counted once per request (attempt 0) because the
+        // messages are identical across attempts and BPE on a large prompt is not
+        // free. The model name differs per attempt but contributes ~2 tokens.
+        let est_in_tokens: u64 = *est_in.get_or_init(|| {
+            crate::tokenizer::count(&crate::tokenizer::payload_text(&upstream_payload))
+        });
 
         let resp = call_upstream(&app, &provider, &row.key_secret, &url, &upstream_payload).await;
 
@@ -523,7 +533,7 @@ where
             // pass the upstream model id (= the managed model id the UI's model card
             // shows) so per-model request/token/tftt buckets key on mo.id, not the
             // raw client string (which may be "provider/model" or an alias).
-            return finish(app, resp, row.provider_id, row.api_key_id, row.upstream_model.clone(), is_stream).await;
+            return finish(app, resp, row.provider_id, row.api_key_id, row.upstream_model.clone(), is_stream, est_in_tokens).await;
         }
 
         // Error before first byte. Rotate to the next key for key-scoped failures
@@ -543,6 +553,23 @@ where
             // request is counted separately by whichever key ultimately serves it.
             app.record_key_stat(false, &row.api_key_id);
             app.record_rotation(&row.provider_id);
+            // Terminal visibility: every key-scoped failure prints one line so an
+            // operator can watch rotation/benching live.
+            eprintln!(
+                "[proxy] rotate: provider={} key={} http={} => {}",
+                row.provider_id,
+                crate::state::mask_key(&row.key_secret),
+                code,
+                if code == 429 && is_quota_exhausted(&snippet) {
+                    "quota cooldown"
+                } else if code == 429 {
+                    "rate-limit cooldown"
+                } else if code == 401 || code == 403 {
+                    "invalid (401/403)"
+                } else {
+                    "short cooldown"
+                }
+            );
             if code == 429 {
                 // Quota exhausted (the plan's tokens are used up, not a rate
                 // window) → bench it for the configured quota_cooldown_secs
@@ -605,6 +632,7 @@ fn finish_openai(
     key_id: String,
     client_model: String,
     is_stream: bool,
+    est_in: u64,
 ) -> impl std::future::Future<Output = Response> {
     finish_generic(
         app,
@@ -614,6 +642,7 @@ fn finish_openai(
         client_model,
         is_stream,
         /*client_is_anthropic*/ false,
+        est_in,
     )
 }
 
@@ -628,6 +657,7 @@ fn finish_anthropic(
     key_id: String,
     client_model: String,
     is_stream: bool,
+    est_in: u64,
 ) -> impl std::future::Future<Output = Response> {
     finish_generic(
         app,
@@ -637,6 +667,7 @@ fn finish_anthropic(
         client_model,
         is_stream,
         /*client_is_anthropic*/ true,
+        est_in,
     )
 }
 
@@ -651,6 +682,7 @@ fn finish_generic(
     client_model: String,
     client_wants_stream: bool,
     client_is_anthropic: bool,
+    est_in: u64,
 ) -> impl std::future::Future<Output = Response> {
     async move {
         // Headers first — the client must receive them regardless of how the body ends.
@@ -716,7 +748,17 @@ fn finish_generic(
                         let up = upstream_proto_of(&app, &provider_id);
                         let total = match protocol::extract_usage_tokens(&body, up) {
                             Some((i, o)) => i + o,
-                            None => protocol::estimate_response_tokens(&body),
+                            // No usage body: count both sides with the real BPE
+                            // tokenizer (never record 0 for a served request).
+                            None => {
+                                let out = crate::tokenizer::count(&crate::tokenizer::response_text(&body));
+                                let total = est_in + out;
+                                eprintln!(
+                                    "[stats] no upstream usage - counted locally: in~{} + out~{} = {} (model {})",
+                                    est_in, out, total, client_model
+                                );
+                                total
+                            }
                         };
                         app.record_token_count(&key_id, total);
                         app.record_tokens(total, Some(&key_id), &provider_id, &client_model);
@@ -770,7 +812,7 @@ fn finish_generic(
         if !needs_translation {
             // Same protocol both sides: raw byte passthrough (the old fast path),
             // wrapped in MetricsStream so tftt / usage / tps are still measured.
-            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto);
+            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in);
             let stream = upstream.map(move |r| match r {
                 Ok(chunk) => Ok::<_, std::io::Error>(chunk),
                 Err(e) => Ok(openai_stream_error_chunk(&e).into_bytes().into()),
@@ -788,7 +830,7 @@ fn finish_generic(
                 .map(|_| "gateway".to_string())
                 .unwrap_or_else(|| "gateway".to_string());
             let mut state = OpenAiToAnthropicStream::new(model);
-            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto);
+            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in);
             let stream = upstream
                 .map(move |r| -> Result<axum::body::Bytes, std::io::Error> {
                     match r {
@@ -809,7 +851,7 @@ fn finish_generic(
         // Anthropic upstream -> OpenAI client: parse Anthropic SSE events, emit chunks.
         let mut state = AnthropicToOpenAiStream::new();
         let mut buffer: Vec<u8> = Vec::new();
-        let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto);
+        let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in);
         let stream = upstream.map(move |r| -> Result<axum::body::Bytes, std::io::Error> {
             match r {
                 Ok(chunk) => Ok(translate_anthropic_chunk(&mut state, &mut buffer, &chunk).into_bytes().into()),
@@ -882,8 +924,26 @@ fn scan_usage_lines(text: &str, proto: Protocol) -> (Option<u64>, Option<u64>) {
 /// True when complete SSE lines carry the first piece of *generated content* —
 /// OpenAI `choices[0].delta.content` (non-empty) or Anthropic `delta.text`.
 /// Role/usage/stop chunks carry no text, so they don't start the TFTT clock.
-fn lines_have_content(text: &str, proto: Protocol) -> bool {
-    if !text.contains("content") && !text.contains("\"text\"") {
+/// Append the assistant text carried by complete SSE lines (content, reasoning,
+/// tool-call arguments) — the material the no-usage fallback counter counts.
+fn accumulate_delta_text(lines: &str, proto: Protocol, out: &mut String) {
+    if !lines.contains("content") && !lines.contains("\"text\"") && !lines.contains("\"arguments\"") {
+        return; // pre-filter: most lines carry no assistant text
+    }
+    for line in lines.split_inclusive('\n') {
+        let payload = match line.trim().strip_prefix("data:") {
+            Some(p) => p.trim(),
+            None => continue,
+        };
+        if payload == "[DONE]" || payload.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
+            crate::tokenizer::append_delta_text(&v, proto, out);
+        }
+    }
+}
+fn lines_have_content(text: &str, proto: Protocol) -> bool {    if !text.contains("content") && !text.contains("\"text\"") {
         return false; // pre-filter: role/usage/stop chunks carry neither
     }
     for line in text.split_inclusive('\n') {
@@ -933,6 +993,12 @@ struct MetricsStream<S> {
     /// assembled here before parsing (without it, ~40% of real streams lost the
     /// usage event and recorded 0 tokens).
     carry: Vec<u8>,
+    /// Estimated prompt tokens (real BPE tokenizer over the request payload).
+    /// Used only when the upstream never reports `usage`.
+    est_in: u64,
+    /// Assistant text seen so far (content + reasoning + tool args), for the
+    /// same fallback: counted with the BPE tokenizer at stream end.
+    text: String,
     proto: Protocol,
 }
 
@@ -940,7 +1006,7 @@ impl<S> MetricsStream<S>
 where
     S: futures_util::Stream<Item = Result<axum::body::Bytes, reqwest::Error>> + Unpin,
 {
-    fn new(inner: S, app: std::sync::Arc<App>, key_id: String, provider_id: String, model: String, proto: Protocol) -> Self {
+    fn new(inner: S, app: std::sync::Arc<App>, key_id: String, provider_id: String, model: String, proto: Protocol, est_in: u64) -> Self {
         Self {
             inner,
             app,
@@ -952,6 +1018,8 @@ where
             usage_in: None,
             usage_out: None,
             carry: Vec::new(),
+            est_in,
+            text: String::new(),
             proto,
         }
     }
@@ -999,6 +1067,8 @@ where
                     if uo.is_some() {
                         this.usage_out = uo;
                     }
+                    // Collect assistant text for the no-usage fallback count.
+                    accumulate_delta_text(&lines, this.proto, &mut this.text);
                 }
                 Poll::Ready(Some(Ok(chunk)))
             }
@@ -1015,6 +1085,7 @@ where
                     if uo.is_some() {
                         this.usage_out = uo;
                     }
+                    accumulate_delta_text(&tail, this.proto, &mut this.text);
                 }
                 // Stream ended: record token count (tpm) + generation rate (tps).
                 if this.usage_in.is_some() || this.usage_out.is_some() {
@@ -1028,6 +1099,22 @@ where
                         let tps = o as f32 / dur;
                         this.app.record_tps(&this.key_id, tps);
                         this.app.record_model_tps(&this.model, tps);
+                    }
+                } else {
+                    // No usage from the upstream: count both sides ourselves with
+                    // the real BPE tokenizer instead of recording 0 (which made
+                    // the console look frozen while requests were succeeding).
+                    let out_est = crate::tokenizer::count(&this.text);
+                    let total = this.est_in + out_est;
+                    if total > 0 {
+                        this.app.record_token_count(&this.key_id, total);
+                        this.app.record_tokens(total, Some(&this.key_id), &this.provider_id, &this.model);
+                        this.app.record_tps(&this.key_id, (out_est as f32)
+                            / this.start.elapsed().as_secs_f32().max(0.001));
+                        eprintln!(
+                            "[stats] no upstream usage - counted locally: in~{} + out~{} = {} (model {})",
+                            this.est_in, out_est, total, this.model
+                        );
                     }
                 }
                 Poll::Ready(None)

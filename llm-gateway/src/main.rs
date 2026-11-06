@@ -7,6 +7,7 @@ mod proxy;
 mod state;
 mod stats;
 mod strategy;
+mod tokenizer;
 mod ui;
 
 use axum::routing::{delete, get, post, put};

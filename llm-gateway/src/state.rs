@@ -691,6 +691,17 @@ mod tests {
     }
 }
 
+/// Mask a key for logs/UI: first 4 + last 4 characters, never the secret.
+pub(crate) fn mask_key(k: &str) -> String {
+    let chars: Vec<char> = k.chars().collect();
+    if chars.len() <= 8 {
+        "••••".to_string()
+    } else {
+        let head: String = chars[..4].iter().collect();
+        let tail: String = chars[chars.len() - 4..].iter().collect();
+        format!("{head}••••{tail}")
+    }
+}
 impl App {
     pub fn new(config: Config, config_path: std::path::PathBuf) -> Self {
         let http = reqwest::Client::builder()
@@ -994,6 +1005,13 @@ impl App {
         let mut pool = self.pool.lock().unwrap();
         pool.cooling.insert(key_id.to_string(), Instant::now() + Duration::from_secs(secs));
         pool.last_error.insert(key_id.to_string(), reason.to_string());
+        eprintln!(
+            "[key] cooldown {}s: provider={} key={} ({})",
+            secs,
+            provider_id,
+            mask_key(key_id),
+            reason.chars().take(90).collect::<String>()
+        );
     }
 
     /// Quarantine a key whose credentials were rejected (401/403): round-robin
@@ -1003,6 +1021,13 @@ impl App {
         let mut pool = self.pool.lock().unwrap();
         pool.invalid.insert(key_id.to_string(), Instant::now() + Duration::from_secs(secs));
         pool.last_error.insert(key_id.to_string(), reason.to_string());
+        eprintln!(
+            "[key] INVALID {}s: provider={} key={} ({})",
+            secs,
+            _provider_id,
+            mask_key(key_id),
+            reason.chars().take(90).collect::<String>()
+        );
     }
 
     /// 429 cooldown for a REAL request. Chain: `Retry-After` (upstream is
@@ -1056,6 +1081,13 @@ impl App {
         };
         pool.cooling.insert(key_id.to_string(), Instant::now() + Duration::from_secs(secs));
         pool.last_error.insert(key_id.to_string(), reason.to_string());
+        eprintln!(
+            "[key] rate-limit cooldown {}s: provider={} key={} ({})",
+            secs,
+            provider_id,
+            mask_key(key_id),
+            reason.chars().take(90).collect::<String>()
+        );
     }
 
     /// Extend a key's cooling to at least `secs` from now — never shortens an
