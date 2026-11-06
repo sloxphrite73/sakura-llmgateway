@@ -2,6 +2,7 @@ mod admin;
 mod balance;
 mod config;
 mod free_catalog;
+mod logger;
 mod protocol;
 mod proxy;
 mod state;
@@ -191,6 +192,20 @@ async fn main() {
     } else {
         println!("[gateway] auth:       disabled");
     }
+
+    // Runtime log: next to the config when writable, else under %LOCALAPPDATA%.
+    // Everything the gateway reports (rotation, cooldowns, fallback counting) is
+    // appended here so a closed console doesn't lose the evidence.
+    let mut log_path = config_path.with_file_name("sakura-gateway.log");
+    if std::fs::OpenOptions::new().create(true).append(true).open(&log_path).is_err() {
+        let dir = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("sakura-llmgateway");
+        let _ = std::fs::create_dir_all(&dir);
+        log_path = dir.join("sakura-gateway.log");
+    }
+    logger::init(log_path);
 
     let app = Arc::new(App::new(cfg, config_path));
 

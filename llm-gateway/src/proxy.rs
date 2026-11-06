@@ -555,7 +555,7 @@ where
             app.record_rotation(&row.provider_id);
             // Terminal visibility: every key-scoped failure prints one line so an
             // operator can watch rotation/benching live.
-            eprintln!(
+            crate::rlog!(
                 "[proxy] rotate: provider={} key={} http={} => {}",
                 row.provider_id,
                 crate::state::mask_key(&row.key_secret),
@@ -753,7 +753,7 @@ fn finish_generic(
                             None => {
                                 let out = crate::tokenizer::count(&crate::tokenizer::response_text(&body));
                                 let total = est_in + out;
-                                eprintln!(
+                                crate::rlog!(
                                     "[stats] no upstream usage - counted locally: in~{} + out~{} = {} (model {})",
                                     est_in, out, total, client_model
                                 );
@@ -1111,7 +1111,7 @@ where
                         this.app.record_tokens(total, Some(&this.key_id), &this.provider_id, &this.model);
                         this.app.record_tps(&this.key_id, (out_est as f32)
                             / this.start.elapsed().as_secs_f32().max(0.001));
-                        eprintln!(
+                        crate::rlog!(
                             "[stats] no upstream usage - counted locally: in~{} + out~{} = {} (model {})",
                             this.est_in, out_est, total, this.model
                         );

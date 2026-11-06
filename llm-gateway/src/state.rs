@@ -706,6 +706,12 @@ impl App {
     pub fn new(config: Config, config_path: std::path::PathBuf) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
+            // Per-read inactivity timeout: a stalled upstream (accepted the
+            // connection, never sends a byte) used to block for the whole 600s
+            // request timeout — the user saw a 25-minute "no reaction". 120s of
+            // silence now fails the attempt and rotates to the next key. Long
+            // streams are unaffected: the clock resets on every received byte.
+            .read_timeout(Duration::from_secs(120))
             .build()
             .expect("failed to build http client");
         let stats_path = config_path.with_file_name("stats.json");
@@ -1005,7 +1011,7 @@ impl App {
         let mut pool = self.pool.lock().unwrap();
         pool.cooling.insert(key_id.to_string(), Instant::now() + Duration::from_secs(secs));
         pool.last_error.insert(key_id.to_string(), reason.to_string());
-        eprintln!(
+            crate::rlog!(
             "[key] cooldown {}s: provider={} key={} ({})",
             secs,
             provider_id,
@@ -1021,7 +1027,7 @@ impl App {
         let mut pool = self.pool.lock().unwrap();
         pool.invalid.insert(key_id.to_string(), Instant::now() + Duration::from_secs(secs));
         pool.last_error.insert(key_id.to_string(), reason.to_string());
-        eprintln!(
+            crate::rlog!(
             "[key] INVALID {}s: provider={} key={} ({})",
             secs,
             _provider_id,
@@ -1081,7 +1087,7 @@ impl App {
         };
         pool.cooling.insert(key_id.to_string(), Instant::now() + Duration::from_secs(secs));
         pool.last_error.insert(key_id.to_string(), reason.to_string());
-        eprintln!(
+            crate::rlog!(
             "[key] rate-limit cooldown {}s: provider={} key={} ({})",
             secs,
             provider_id,
