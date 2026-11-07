@@ -1021,6 +1021,8 @@ struct MetricsStream<S> {
     /// the log can tell "upstream queued before headers" from "upstream accepted
     /// then stalled the body".
     tftt_ms: u64,
+    /// Last ~600 bytes we forwarded, for diagnosing client disconnects.
+    tail: String,
     /// Assistant text seen so far (content + reasoning + tool args), for the
     /// same fallback: counted with the BPE tokenizer at stream end.
     text: String,
@@ -1048,6 +1050,7 @@ where
             bytes: 0,
             recorded: false,
             tftt_ms: 0,
+            tail: String::new(),
             text: String::new(),
             proto,
         }
@@ -1075,6 +1078,13 @@ where
                 // then counted as success with 0 tokens — ~40% in production).
                 this.carry.extend_from_slice(&chunk);
                 this.bytes += chunk.len() as u64;
+                // Bounded tail of what we forwarded — the disconnect diagnosis
+                // needs the last bytes the client actually received.
+                this.tail.push_str(&String::from_utf8_lossy(&chunk));
+                if this.tail.len() > 600 {
+                    let cut = this.tail.len() - 600;
+                    this.tail.drain(..cut);
+                }
                 if this.carry.len() > LINE_CARRY_CAP {
                     // No newline in 64KB: broken stream. Keep the tail only.
                     let cut = this.carry.len() - LINE_CARRY_CAP / 2;
@@ -1179,18 +1189,47 @@ where
 impl<S> Drop for MetricsStream<S> {
     fn drop(&mut self) {
         // A stream dropped before it finished never reached the recording branch:
-        // the client disconnected (or we shut down) mid-request. Log it, otherwise
-        // "the console shows a request but no tokens" has no explanation.
-        if !self.recorded {
-            crate::rlog!(
-                "[req] model={} key={} ttfb={}ms DROPPED after {}ms ({} bytes) - client disconnected before completion",
-                self.model,
-                crate::state::mask_key(&self.key_id),
-                self.ttfb_ms,
-                self.start.elapsed().as_millis(),
-                self.bytes
-            );
+        // the client disconnected (or we shut down) mid-request.
+        //
+        // TWO things happen here:
+        //  1. Record what we DID deliver, counted with the BPE tokenizer. A client
+        //     abort (retry/steer/timeout) otherwise contributes 0 tokens while the
+        //     console still counts the request — the exact "only requests grow"
+        //     symptom.
+        //  2. Log the tail we last forwarded, so the reason for the abort (an error
+        //     chunk, a truncated event, garbage) is visible.
+        if self.recorded {
+            return;
         }
+        let out_est = crate::tokenizer::count(&self.text);
+        let total = self.est_in + out_est;
+        if total > 0 {
+            self.app.record_token_count(&self.key_id, total);
+            self.app.record_tokens(total, Some(&self.key_id), &self.provider_id, &self.model);
+            self.recorded = true;
+        }
+        let tail: String = self
+            .tail
+            .replace(['\r', '\n'], " ")
+            .chars()
+            .rev()
+            .take(280)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        crate::rlog!(
+            "[req] model={} key={} ttfb={}ms DROPPED after {}ms ({} bytes) tokens={} (in~{} out~{}) tail={:?}",
+            self.model,
+            crate::state::mask_key(&self.key_id),
+            self.ttfb_ms,
+            self.start.elapsed().as_millis(),
+            self.bytes,
+            total,
+            self.est_in,
+            out_est,
+            tail
+        );
     }
 }
 
