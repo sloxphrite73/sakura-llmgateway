@@ -1188,21 +1188,30 @@ where
 
 impl<S> Drop for MetricsStream<S> {
     fn drop(&mut self) {
-        // A stream dropped before it finished never reached the recording branch:
-        // the client disconnected (or we shut down) mid-request.
-        //
-        // TWO things happen here:
-        //  1. Record what we DID deliver, counted with the BPE tokenizer. A client
-        //     abort (retry/steer/timeout) otherwise contributes 0 tokens while the
-        //     console still counts the request — the exact "only requests grow"
-        //     symptom.
-        //  2. Log the tail we last forwarded, so the reason for the abort (an error
-        //     chunk, a truncated event, garbage) is visible.
+        // A stream dropped before its final poll never reaches the recording
+        // branch — and that is the NORMAL end for a well-behaved client: it reads
+        // `data: [DONE]` and closes at once, so hyper drops the body before we can
+        // poll `None`. Two things must happen here:
+        //  1. Record the count. If the upstream's usage event was already seen —
+        //     it normally is, it precedes [DONE] — USE IT, it is exact. Only fall
+        //     back to the BPE tokenizer when no usage ever arrived.
+        //  2. Log the tail so a real client abort can be told apart from this race.
         if self.recorded {
             return;
         }
-        let out_est = crate::tokenizer::count(&self.text);
-        let total = self.est_in + out_est;
+        let (total, how) = match (self.usage_in, self.usage_out) {
+            (None, None) => {
+                let out_est = crate::tokenizer::count(&self.text);
+                (
+                    self.est_in + out_est,
+                    format!("counted locally: in~{} out~{}", self.est_in, out_est),
+                )
+            }
+            (i, o) => (
+                i.unwrap_or(0) + o.unwrap_or(0),
+                "upstream usage".to_string(),
+            ),
+        };
         if total > 0 {
             self.app.record_token_count(&self.key_id, total);
             self.app.record_tokens(total, Some(&self.key_id), &self.provider_id, &self.model);
@@ -1213,21 +1222,20 @@ impl<S> Drop for MetricsStream<S> {
             .replace(['\r', '\n'], " ")
             .chars()
             .rev()
-            .take(280)
+            .take(160)
             .collect::<String>()
             .chars()
             .rev()
             .collect();
         crate::rlog!(
-            "[req] model={} key={} ttfb={}ms DROPPED after {}ms ({} bytes) tokens={} (in~{} out~{}) tail={:?}",
+            "[req] model={} key={} ttfb={}ms closed after {}ms ({} bytes) tokens={} ({}) tail={:?}",
             self.model,
             crate::state::mask_key(&self.key_id),
             self.ttfb_ms,
             self.start.elapsed().as_millis(),
             self.bytes,
             total,
-            self.est_in,
-            out_est,
+            how,
             tail
         );
     }
@@ -1380,6 +1388,52 @@ pub async fn list_models(
 mod tests {
     use super::{is_quota_exhausted, lines_have_content, scan_usage_lines, take_complete_lines};
     use crate::protocol::Protocol;
+
+    // --- a client closing the stream right after [DONE] must still be counted ---
+    //
+    // Real production shape: the upstream sends its usage chunk and then
+    // `data: [DONE]`; the client reads [DONE] and closes at once, so hyper drops
+    // the body before we can poll `None`. The Drop path then has to record the
+    // ALREADY-SEEN upstream usage — using the local estimator instead made the
+    // console report ~7.5K for a 10K request.
+    #[test]
+    fn stream_closed_after_done_records_upstream_usage_not_estimate() {
+        let dir = std::env::temp_dir().join(format!("drop-usage-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = std::sync::Arc::new(crate::state::App::new(
+            crate::config::Config::default(),
+            dir.join("gateway.json"),
+        ));
+        let stream = super::MetricsStream {
+            inner: futures_util::stream::empty::<
+                Result<axum::body::Bytes, reqwest::Error>,
+            >(),
+            app: app.clone(),
+            key_id: "k1".into(),
+            provider_id: "p1".into(),
+            model: "glm-5.2".into(),
+            start: std::time::Instant::now(),
+            first: false,
+            usage_in: Some(9971),
+            usage_out: Some(125),
+            carry: Vec::new(),
+            est_in: 7345,
+            ttfb_ms: 800,
+            bytes: 17329,
+            recorded: false,
+            tftt_ms: 0,
+            tail: String::new(),
+            text: "some streamed text".into(),
+            proto: Protocol::OpenAi,
+        };
+        drop(stream); // client closed before the final poll
+        let stats = app.stats.lock().unwrap();
+        assert_eq!(
+            stats.total.tokens, 10096,
+            "must record the upstream usage (9971+125), not the local estimate (7345+...)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // --- cross-chunk SSE assembly: the "success with 0 tokens" bug ---
 
