@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{self, Config};
 use crate::stats::Stats;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -978,9 +978,10 @@ impl App {
     /// follows a migration (stats.json is removed only once its data is in gateway.json).
     pub fn save_all(&self) -> bool {
         let pretty = self.config_plus_stats_json();
-        let tmp = self.config_path.with_extension("json.tmp");
-        let renamed =
-            std::fs::write(&tmp, pretty).is_ok() && std::fs::rename(&tmp, &self.config_path).is_ok();
+        // Temp file + fsync + rename (config::write_atomic): a kill during this
+        // write must leave the previous gateway.json intact and complete, never a
+        // file of the right length full of NUL bytes.
+        let renamed = config::write_atomic(&self.config_path, &pretty).is_ok();
         if !renamed {
             eprintln!("[gateway] WARNING: failed to persist gateway.json");
             return false;

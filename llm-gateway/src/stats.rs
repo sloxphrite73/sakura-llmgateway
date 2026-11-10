@@ -176,16 +176,13 @@ impl Stats {
             .unwrap_or_default()
     }
 
-    /// Atomic-ish save: temp file then rename over the target (same pattern as config).
+    /// Atomic save (temp file, fsync, rename) — see `config::write_atomic`.
     /// Unused after the gateway.json+stats merge (state.rs `save_all` writes the merged
     /// file), but kept for the legacy migration path + tests.
     #[allow(dead_code)]
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        let tmp = path.with_extension("json.tmp");
         let pretty = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
-        std::fs::write(&tmp, pretty)?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        crate::config::write_atomic(path, &pretty)
     }
 }

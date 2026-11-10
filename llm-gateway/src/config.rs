@@ -3,6 +3,57 @@ use std::path::{Path, PathBuf};
 
 type ConfigResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// `path` plus an extra suffix: `gateway.json` → `gateway.json.tmp` / `.bak`.
+/// (`with_extension` would replace the existing extension instead of appending.)
+pub fn sibling(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+/// Write temp file → `sync_all` → rename over the target.
+///
+/// Two failure modes this removes, both seen in the field:
+///  * a hard kill (task manager, power cut) landing mid-write must leave the
+///    previous file intact, so the temp file is completed and flushed *before*
+///    it replaces anything;
+///  * without the fsync, NTFS may commit the rename (size + directory entry)
+///    while the data blocks are still dirty in the page cache. A power cut then
+///    leaves a file of exactly the right length filled with NUL bytes — which is
+///    how two `gateway.json` files ended up 23 KB of zeros.
+pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = sibling(path, ".tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(contents.as_bytes())?;
+        f.sync_all()?;
+    }
+    refresh_backup(path);
+    std::fs::rename(&tmp, path)
+}
+
+/// Keep `<file>.bak` as the last good copy, refreshed at most once a minute (the
+/// hot save path runs every few seconds on a ~23 KB file). A damaged target is
+/// never copied over the backup: only files that still parse get promoted.
+fn refresh_backup(path: &Path) {
+    let bak = sibling(path, ".bak");
+    let recent = std::fs::metadata(&bak)
+        .and_then(|m| m.modified())
+        .map(|t| t.elapsed().map(|age| age.as_secs() < 60).unwrap_or(false))
+        .unwrap_or(false);
+    if recent || !path.exists() {
+        return;
+    }
+    let parses = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .is_some();
+    if parses {
+        let _ = std::fs::copy(path, &bak);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
     #[serde(default = "crate::new_id")]
@@ -344,8 +395,55 @@ impl Config {
             cfg.save(path)?;
             return Ok(cfg);
         }
+        match Self::load_strict(path) {
+            Ok(cfg) => Ok(cfg),
+            Err(err) => {
+                // A truncated / zero-filled file (hard kill, power loss) must not
+                // cost the user their providers and keys: fall back to the last
+                // copy that still parsed, and heal the damaged file with it.
+                let bak = sibling(path, ".bak");
+                if bak.exists() {
+                    if let Ok(cfg) = Self::load_strict(&bak) {
+                        eprintln!(
+                            "[gateway] WARNING: {} is unreadable ({err}); recovered from {}",
+                            path.display(),
+                            bak.display()
+                        );
+                        // Restore the backup verbatim rather than re-serializing
+                        // `cfg`: the file also carries the `stats` block, which this
+                        // struct does not model, and re-serializing would zero the
+                        // historical token counters.
+                        if let Ok(raw) = std::fs::read_to_string(&bak) {
+                            let _ = write_atomic(path, &raw);
+                        }
+                        return Ok(cfg);
+                    }
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// Parse a config file, rejecting the shapes a damaged file takes in practice
+    /// (zero length, or the right length full of NUL bytes) with a message that
+    /// says *what* is wrong — "cannot be written" is a different failure entirely
+    /// and used to be reported for these, sending readers after file permissions.
+    fn load_strict(path: &Path) -> ConfigResult<Self> {
         let raw = std::fs::read_to_string(path)?;
-        let mut cfg: Config = serde_json::from_str(&raw)
+        if raw.as_bytes().iter().all(|b| *b == 0) {
+            return Err(format!(
+                "{} holds {} bytes of NUL (truncated by a hard kill or an interrupted copy)",
+                path.display(),
+                raw.len()
+            )
+            .into());
+        }
+        // Notepad and friends prepend a UTF-8 BOM; serde_json rejects it.
+        let raw = raw.trim_start_matches('\u{feff}');
+        if raw.trim().is_empty() {
+            return Err(format!("{} is empty", path.display()).into());
+        }
+        let mut cfg: Config = serde_json::from_str(raw)
             .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
         cfg.normalize_strategy();
         Ok(cfg)
@@ -376,12 +474,11 @@ impl Config {
         self.strategy.sort = deduped;
     }
 
-    /// Atomic-ish save: write temp file then rename over the target.
+    /// Atomic save: write temp file, fsync it, then rename over the target.
+    /// See [`write_atomic`] for why the fsync is not optional here.
     pub fn save(&self, path: &Path) -> ConfigResult<()> {
-        let tmp: PathBuf = path.with_extension("json.tmp");
         let pretty = serde_json::to_string_pretty(self)?;
-        std::fs::write(&tmp, pretty)?;
-        std::fs::rename(&tmp, path)?;
+        write_atomic(path, &pretty)?;
         Ok(())
     }
 
@@ -424,5 +521,102 @@ impl Config {
         Err(format!(
             "unknown model `{model}`. Use `provider/model` or a configured alias."
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("cfg-{tag}-{}", crate::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn cfg_with_provider(name: &str) -> Config {
+        let mut cfg = Config::default();
+        cfg.theme = Some(name.to_string());
+        cfg
+    }
+
+    /// `gateway.json` is rewritten every few seconds; a kill during that write
+    /// used to leave a file of the right length full of NUL bytes. The atomic
+    /// writer must leave either the old or the new content, never a gap.
+    #[test]
+    fn write_atomic_replaces_whole_file_and_keeps_backup() {
+        let dir = scratch("atomic");
+        let path = dir.join("gateway.json");
+
+        cfg_with_provider("first").save(&path).unwrap();
+        let first = std::fs::read_to_string(&path).unwrap();
+        assert!(serde_json::from_str::<Config>(&first).is_ok());
+        // No temp file may survive a completed save.
+        assert!(!sibling(&path, ".tmp").exists());
+
+        cfg_with_provider("second").save(&path).unwrap();
+        let second = std::fs::read_to_string(&path).unwrap();
+        assert!(second.contains("second"));
+        // The previous generation is preserved for recovery.
+        let bak = std::fs::read_to_string(sibling(&path, ".bak")).unwrap();
+        assert!(bak.contains("first"), "backup should hold the earlier config");
+        assert_eq!(first, bak);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A zero-filled config (hard kill / interrupted copy) must be recovered from
+    /// the backup rather than costing the user every provider and key.
+    #[test]
+    fn zero_filled_config_is_recovered_from_backup() {
+        let dir = scratch("recover");
+        let path = dir.join("gateway.json");
+        // A real file also carries the `stats` block; recovery must not drop it.
+        let themed = |tag: &str| {
+            let body = serde_json::to_string_pretty(&cfg_with_provider(tag)).unwrap();
+            let mut val: serde_json::Value = serde_json::from_str(&body).unwrap();
+            val["stats"] = serde_json::json!({"total": {"tokens": 4242}});
+            serde_json::to_string_pretty(&val).unwrap()
+        };
+        std::fs::write(&path, themed("good")).unwrap();
+        std::fs::write(sibling(&path, ".bak"), themed("good")).unwrap();
+        cfg_with_provider("newer").save(&path).unwrap(); // current > backup
+
+        let size = std::fs::metadata(&path).unwrap().len() as usize;
+        std::fs::write(&path, vec![0u8; size]).unwrap();
+        assert!(Config::load_strict(&path).is_err());
+
+        let cfg = Config::load(&path).expect("backup should be used");
+        assert_eq!(cfg.theme.as_deref(), Some("good"));
+        // The damaged file is healed in place, counters included.
+        let healed = std::fs::read_to_string(&path).unwrap();
+        assert!(serde_json::from_str::<Config>(&healed).is_ok());
+        assert!(healed.contains("good"));
+        assert!(healed.contains("4242"), "stats must survive recovery: {healed}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Without a backup the error must name the real problem: a dead config is
+    /// not a permission problem, and the old message sent readers after ACLs.
+    #[test]
+    fn zero_filled_config_without_backup_explains_itself() {
+        let dir = scratch("nobak");
+        let path = dir.join("gateway.json");
+        std::fs::write(&path, vec![0u8; 4096]).unwrap();
+        let err = Config::load(&path).unwrap_err().to_string();
+        assert!(err.contains("NUL"), "error should mention NUL bytes: {err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Notepad saves UTF-8 with a BOM; serde_json rejects the BOM itself.
+    #[test]
+    fn bom_prefixed_config_still_loads() {
+        let dir = scratch("bom");
+        let path = dir.join("gateway.json");
+        let body = serde_json::to_string_pretty(&Config::default()).unwrap();
+        std::fs::write(&path, format!("\u{feff}{body}")).unwrap();
+        assert!(Config::load(&path).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

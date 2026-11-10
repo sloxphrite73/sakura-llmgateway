@@ -55,9 +55,19 @@ fn config_candidates() -> Vec<PathBuf> {
     out
 }
 
+/// Why the implicit config search produced no usable config: the file a reader
+/// should look at, plus a label and detail for the startup banner. "Unreadable"
+/// (a damaged file) and "not writable" (a denied directory) send the operator to
+/// completely different fixes, so they must never be reported as each other.
+struct ConfigFailure {
+    path: PathBuf,
+    label: &'static str,
+    detail: String,
+}
+
 /// Load the config, trying each candidate until one can be created/read. An
 /// existing file always wins (never silently relocate an established config).
-fn load_config_with_fallback() -> Result<(config::Config, PathBuf), String> {
+fn load_config_with_fallback() -> Result<(config::Config, PathBuf), ConfigFailure> {
     let candidates = config_candidates();
     // A file that already exists must be used as-is (even if it fails to parse:
     // moving away from it would be worse than reporting the parse error).
@@ -65,7 +75,11 @@ fn load_config_with_fallback() -> Result<(config::Config, PathBuf), String> {
         if p.exists() {
             return config::Config::load(p)
                 .map(|c| (c, p.clone()))
-                .map_err(|e| format!("failed to load config {}: {e}", p.display()));
+                .map_err(|e| ConfigFailure {
+                    path: p.clone(),
+                    label: "UNREADABLE",
+                    detail: format!("failed to load config {}: {e}", p.display()),
+                });
         }
     }
     // Nothing exists yet: use the first location we can actually write.
@@ -76,14 +90,21 @@ fn load_config_with_fallback() -> Result<(config::Config, PathBuf), String> {
             Err(e) => errors.push(format!("{}: {e}", p.display())),
         }
     }
-    Err(format!(
-        "no writable config location (tried {}), cwd={}: {}",
-        candidates.len(),
-        std::env::current_dir()
-            .map(|d| d.display().to_string())
-            .unwrap_or_else(|_| "?".into()),
-        errors.join(" | ")
-    ))
+    Err(ConfigFailure {
+        path: candidates
+            .last()
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from("gateway.json")),
+        label: "NOT WRITABLE",
+        detail: format!(
+            "no writable config location (tried {}), cwd={}: {}",
+            candidates.len(),
+            std::env::current_dir()
+                .map(|d| d.display().to_string())
+                .unwrap_or_else(|_| "?".into()),
+            errors.join(" | ")
+        ),
+    })
 }
 
 /// Startup failure a user may need to read: log it (exe dir, else %TEMP%) and,
@@ -155,27 +176,34 @@ async fn main() {
     // window that flashes an "access denied" and quits (seen on machines where
     // the exe's folder denies file creation). Persistence is the only loss, and
     // the warning says so.
-    let (cfg, config_path, persist) = match &explicit {
+    let mut failure: Option<ConfigFailure> = None;
+    let (cfg, config_path) = match &explicit {
         Some(p) => match config::Config::load(p) {
-            Ok(c) => (c, p.clone(), true),
+            Ok(c) => (c, p.clone()),
             Err(e) => fatal(&format!("failed to load config {}: {e}", p.display())),
         },
         None => match load_config_with_fallback() {
-            Ok((c, p)) => (c, p, true),
-            Err(e) => {
-                let path = config_candidates()
-                    .pop()
-                    .unwrap_or_else(|| PathBuf::from("gateway.json"));
-                eprintln!("[gateway] WARNING: {e}");
+            Ok((c, p)) => (c, p),
+            Err(f) => {
+                eprintln!("[gateway] WARNING: {}", f.detail);
                 eprintln!(
-                    "[gateway] WARNING: cannot write a config file — running with the built-in \
-                     defaults in memory. Providers/keys/settings added now will be LOST on exit."
+                    "[gateway] WARNING: running on the built-in defaults in memory — providers, \
+                     keys and settings added now will be LOST on exit."
                 );
-                eprintln!(
-                    "[gateway] WARNING: to persist, put a writable gateway.json next to the exe, \
-                     move the exe to a writable folder, or pass --config <path>."
-                );
-                (config::Config::default(), path, false)
+                match f.label {
+                    "UNREADABLE" => eprintln!(
+                        "[gateway] WARNING: the config file exists but cannot be read; fix or \
+                         delete it (a gateway.json.bak beside it is picked up automatically), or \
+                         pass --config <path>."
+                    ),
+                    _ => eprintln!(
+                        "[gateway] WARNING: to persist, put a writable gateway.json next to the \
+                         exe, move the exe to a writable folder, or pass --config <path>."
+                    ),
+                }
+                let path = f.path.clone();
+                failure = Some(f);
+                (config::Config::default(), path)
             }
         },
     };
@@ -183,7 +211,13 @@ async fn main() {
     println!(
         "[gateway] config file: {}{}",
         config_path.display(),
-        if persist { "" } else { " (NOT WRITABLE — in-memory only)" }
+        match &failure {
+            None => "",
+            Some(f) => match f.label {
+                "UNREADABLE" => " (UNREADABLE — built-in defaults in memory)",
+                _ => " (NOT WRITABLE — built-in defaults in memory)",
+            },
+        }
     );
     // Bound ports are printed after binding (they may differ from config if the
     // configured port was occupied and the fallback walked to a free one).
