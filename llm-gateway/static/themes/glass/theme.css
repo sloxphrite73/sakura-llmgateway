@@ -1,0 +1,305 @@
+/* Frosted Glass — 毛玻璃（dark）。
+   ============================================================================
+   约定 / 约束：
+   - 本文件只定义 token + 背景/模糊等“皮肤”，不改任何布局属性
+     （position / display / 宽高 / overflow 一律不动）。
+   - 运行时会先注入 sakura-dark 作为基底，本主题在其后加载；尽管如此仍全量
+     覆盖 48 个 --color-* / 2 个 --font-* / 3 个 --shadow-*，保证独立可用。
+   - ui.css 在构建后可能晚于本文件注入，故所有面板规则统一加
+     html[data-theme="dark"] 前缀提升一级特异性；这样无需声明级强制覆盖也能
+     稳定压过 ui.css 的 widget 规则，并且不会误伤 ui.css 的 hover/active。
+   - 所有装饰层 position: fixed + pointer-events: none，不拦截点击。
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* actions */
+  --color-action-primary: #4fd1ff;
+  --color-action-primary-hover: #83e4ff;
+  --color-action-primary-active: #2ab6e6;
+  --color-action-secondary: rgba(255, 255, 255, 0.08);
+  --color-action-secondary-hover: rgba(255, 255, 255, 0.14);
+  --color-action-secondary-active: rgba(255, 255, 255, 0.22);
+  --color-action-destructive: #ff6b81;
+  --color-action-destructive-hover: #ff9aa7;
+
+  /* feedback */
+  --color-feedback-success-bg: rgba(74, 222, 128, 0.12);
+  --color-feedback-success-text: #86efac;
+  --color-feedback-success-border: rgba(134, 239, 172, 0.32);
+  --color-feedback-success-icon: #4ade80;
+  --color-feedback-warning-bg: rgba(251, 191, 36, 0.12);
+  --color-feedback-warning-text: #fcd34d;
+  --color-feedback-warning-border: rgba(252, 211, 77, 0.32);
+  --color-feedback-warning-icon: #fbbf24;
+  --color-feedback-error-bg: rgba(248, 113, 113, 0.12);
+  --color-feedback-error-text: #ff9aa7;
+  --color-feedback-error-border: rgba(248, 113, 113, 0.34);
+  --color-feedback-error-icon: #f87171;
+  --color-feedback-info-bg: rgba(79, 209, 255, 0.12);
+  --color-feedback-info-text: #9fe6ff;
+  --color-feedback-info-border: rgba(79, 209, 255, 0.35);
+  --color-feedback-info-icon: #4fd1ff;
+
+  /* text */
+  --color-text-primary: #eef1f7;
+  --color-text-secondary: #b7c0d4;
+  --color-text-tertiary: #a3adc2;
+  --color-text-disabled: #79839a;
+  --color-text-on-action: #08121f;
+  --color-text-on-dark: #eef1f7;
+  --color-text-link: #7ce0ff;
+  --color-text-link-hover: #b3efff;
+
+  /* surfaces: 玻璃底一律半透明，靠 backdrop-filter 吃背景 */
+  --color-surface-page: #0a0e18;
+  --color-surface-card: rgba(255, 255, 255, 0.055);
+  --color-surface-raised: rgba(255, 255, 255, 0.085);
+  --color-surface-sunken: rgba(4, 8, 16, 0.45);
+  --color-surface-overlay: rgba(4, 8, 16, 0.6);
+  --color-surface-disabled: rgba(255, 255, 255, 0.04);
+
+  /* borders */
+  --color-border-default: rgba(255, 255, 255, 0.12);
+  --color-border-strong: rgba(255, 255, 255, 0.12);
+  --color-border-focus: #4fd1ff;
+  --color-border-error: #ff7a8a;
+  --color-border-disabled: rgba(255, 255, 255, 0.07);
+
+  /* interactive */
+  --color-interactive-hover-overlay: rgba(255, 255, 255, 0.05);
+  --color-interactive-active-overlay: rgba(255, 255, 255, 0.09);
+  --color-interactive-selected-bg: rgba(79, 209, 255, 0.14);
+  --color-interactive-selected-border: rgba(79, 209, 255, 0.55);
+  --color-interactive-focus-ring: #4fd1ff;
+
+  /* type: 只复用站点已自托管的 Inter / Sarasa Gothic SC / JetBrains Mono */
+  --font-sans: Inter, "Sarasa Gothic SC", system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  /* shadows: 深色玻璃的投影偏冷、偏软 */
+  --shadow-sm: 0 0.0625rem 0.1875rem rgba(2, 6, 16, 0.35);
+  --shadow-md: 0 0.5rem 1.25rem -0.25rem rgba(2, 6, 16, 0.55);
+  --shadow-lg: 0 1rem 2.5rem -0.5rem rgba(2, 6, 16, 0.65);
+}
+
+/* 高特异性兜底：即使 ui.css 的 :root 规则在后加载，也不会把 color-scheme 翻回浅色 */
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+/* ===== 背景：多段低亮度光斑渐变，fixed 不随内部容器滚动 ===== */
+html[data-theme="dark"] body {
+  background-color: #0a0e18;
+  background-image:
+    radial-gradient(70rem 46rem at 6% -12%, rgba(79, 209, 255, 0.16), rgba(79, 209, 255, 0.05) 42%, transparent 68%),
+    radial-gradient(58rem 40rem at 98% 0%, rgba(168, 85, 247, 0.14), rgba(168, 85, 247, 0.04) 44%, transparent 70%),
+    radial-gradient(52rem 38rem at 86% 104%, rgba(236, 72, 153, 0.11), transparent 66%),
+    radial-gradient(46rem 32rem at 12% 94%, rgba(45, 212, 191, 0.10), transparent 66%),
+    linear-gradient(180deg, #0a0e18 0%, #0b1120 48%, #090d16 100%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  background-size: cover;
+}
+
+/* ===== 装饰光层：fixed + pointer-events:none；JS 只平移这一层 ===== */
+html[data-theme="dark"] body::before {
+  content: "";
+  position: fixed;
+  inset: -3rem;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    radial-gradient(42rem 30rem at 20% 26%, rgba(79, 209, 255, 0.10), transparent 68%),
+    radial-gradient(36rem 26rem at 80% 72%, rgba(217, 70, 239, 0.08), transparent 70%);
+  transform: translate3d(calc(var(--glass-px, 0) * 10px), calc(var(--glass-py, 0) * 10px), 0);
+  transition: transform 600ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  will-change: transform;
+}
+
+/* ===== 外围骨架（浅色玻璃，压暗以让内容浮起来） ===== */
+html[data-theme="dark"] .topbar {
+  background: rgba(10, 16, 28, 0.58);
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 0 rgba(2, 6, 16, 0.45);
+}
+
+html[data-theme="dark"] .sidebar {
+  background: rgba(10, 16, 28, 0.52);
+  border-right-color: rgba(255, 255, 255, 0.12);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+html[data-theme="dark"] .bottom-nav {
+  background: rgba(10, 16, 28, 0.66);
+  border-top-color: rgba(255, 255, 255, 0.12);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* ===== 主面板：白 5.5% 玻璃 + 16px 模糊 + 12% 白边 + 1px 顶部高光 ===== */
+html[data-theme="dark"] .card {
+  background: rgba(255, 255, 255, 0.055);
+  border-color: rgba(255, 255, 255, 0.12);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), 0 1rem 2rem -1rem rgba(2, 6, 16, 0.75);
+}
+
+/* 弹窗里的 .card 需要更实的底，否则背后的表格会透字 */
+html[data-theme="dark"] .ak-modal {
+  background: rgba(15, 21, 36, 0.82);
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), var(--shadow-lg);
+}
+
+html[data-theme="dark"] .stat-box,
+html[data-theme="dark"] .toggle-row,
+html[data-theme="dark"] .menu-card {
+  border-color: rgba(255, 255, 255, 0.12);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+/* 结果条：ui.css 用 border 颜色表达 routed/err429 状态，这里不能覆盖 border-color */
+html[data-theme="dark"] .result-banner {
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), var(--shadow-sm);
+}
+
+/* 可点击的模型卡：保留 ui.css 的位移/边框 hover，另建一层玻璃高光 */
+html[data-theme="dark"] .mc,
+html[data-theme="dark"] .add-pick {
+  border-color: rgba(255, 255, 255, 0.12);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), 0 0.5rem 1rem -0.75rem rgba(2, 6, 16, 0.6);
+}
+
+html[data-theme="dark"] .mc:hover,
+html[data-theme="dark"] .add-pick:hover {
+  border-color: var(--color-action-primary-hover);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), var(--shadow-md), 0 0 1rem -0.25rem rgba(79, 209, 255, 0.25);
+}
+
+/* 主题选择卡的“已选中”描边在 ui.css 里用 box-shadow 实现，需随玻璃阴影一起重建 */
+html[data-theme="dark"] .theme-card.active {
+  border-color: var(--color-action-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 0 0 0.125rem var(--color-interactive-selected-border);
+}
+
+html[data-theme="dark"] .theme-card.active:hover {
+  border-color: var(--color-action-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 0 0 0.125rem var(--color-interactive-selected-border), 0 0 1rem -0.25rem rgba(79, 209, 255, 0.25);
+}
+
+html[data-theme="dark"] .run-pill {
+  border-color: rgba(255, 255, 255, 0.12);
+  -webkit-backdrop-filter: blur(12px) saturate(130%);
+  backdrop-filter: blur(12px) saturate(130%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+/* 小标签：只补一道玻璃高光，背景/边框继续吃 token（hover 不被抢） */
+html[data-theme="dark"] .keytag,
+html[data-theme="dark"] .pill,
+html[data-theme="dark"] .chip {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+html[data-theme="dark"] .side-item.active {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+/* 提供商列表选中态保留 ui.css 的青蓝描边，仅补玻璃高光 */
+html[data-theme="dark"] .pl-item.active {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: var(--color-action-primary-hover);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+/* ===== 浮层 ===== */
+html[data-theme="dark"] .ak-modal-backdrop {
+  background: rgba(4, 8, 16, 0.56);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+  backdrop-filter: blur(10px) saturate(120%);
+}
+
+html[data-theme="dark"] .msg {
+  background: rgba(15, 22, 36, 0.78);
+  border-color: rgba(79, 209, 255, 0.45);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), var(--shadow-lg);
+}
+
+/* ===== 控件：把 ui.css 写死的粉色光晕换成主题青蓝 =====
+   次级按钮的 12% 白边由 --color-border-strong 提供，不再单独选中 button——
+   .side-item / .bn-item 也是 <button>，统一选中会把它们的透明边描出来。 */
+html[data-theme="dark"] button.primary:hover {
+  background: var(--color-action-primary-hover);
+  border-color: var(--color-action-primary-hover);
+  box-shadow: 0 0.25rem 0.75rem rgba(79, 209, 255, 0.32);
+}
+
+html[data-theme="dark"] input:focus,
+html[data-theme="dark"] select:focus,
+html[data-theme="dark"] .ak-key-input:focus,
+html[data-theme="dark"] .pd-field .val:focus {
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 0.1875rem rgba(79, 209, 255, 0.22);
+}
+
+/* 锁定字段沿用 ui.css 的“无焦点光晕”约定 */
+html[data-theme="dark"] .pd-field .val.locked:focus {
+  border-color: var(--color-border-disabled);
+  box-shadow: none;
+}
+
+/* ===== 横向滚动表格：ui.css 的 sticky 首/尾列用半透明 surface-card 作底，
+        本主题的 surface-card 是半透明的，若不压成近实色，滚动的单元格会透字。
+        只在 sticky 生效的宽度（>640px）覆盖，避免污染 ≤640px 的卡片式表格。 ===== */
+@media (min-width: 641px) {
+  html[data-theme="dark"] .tbl-scroll table td:first-child,
+  html[data-theme="dark"] .tbl-scroll table th:first-child,
+  html[data-theme="dark"] .tbl-scroll table td:last-child,
+  html[data-theme="dark"] .tbl-scroll table th:last-child {
+    background-color: rgba(16, 22, 36, 0.96);
+  }
+}
+
+/* ===== 无 backdrop-filter 时的降级：把玻璃底换成近实色，保证可读 ===== */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-theme="dark"] .card,
+  html[data-theme="dark"] .topbar,
+  html[data-theme="dark"] .sidebar,
+  html[data-theme="dark"] .bottom-nav,
+  html[data-theme="dark"] .stat-box,
+  html[data-theme="dark"] .toggle-row,
+  html[data-theme="dark"] .menu-card,
+  html[data-theme="dark"] .result-banner,
+  html[data-theme="dark"] .mc,
+  html[data-theme="dark"] .add-pick,
+  html[data-theme="dark"] .run-pill,
+  html[data-theme="dark"] .ak-modal,
+  html[data-theme="dark"] .msg {
+    background-color: rgba(13, 19, 31, 0.94);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme="dark"] body::before {
+    transform: none;
+    transition: none;
+  }
+}

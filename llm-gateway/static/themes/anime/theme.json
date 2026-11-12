@@ -1,0 +1,9 @@
+{
+  "name": "二次元",
+  "author": "sloxphrite73",
+  "version": "1.0.0",
+  "description": "浅色粉紫、圆角与樱花飘落",
+  "mode": "light",
+  "css": ["theme.css"],
+  "js": ["theme.js"]
+}

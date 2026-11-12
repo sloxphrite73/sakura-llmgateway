@@ -1,0 +1,367 @@
+/* Anime (二次元) — Sakura LLM Gateway built-in LIGHT theme.
+   Blush-pink + lavender surfaces, generous rounded corners, falling sakura.
+
+   Maintainer notes:
+   - Self-contained + offline: every --color-* / --font-* / --shadow-* token that
+     ui.css reads is (re)defined at :root below; nothing is fetched from the
+     network, no remote webfont, no embedded image data.
+   - Visual overrides are prefixed with `html` on purpose: the console injects
+     ui.css AFTER this stylesheet on first paint, so a plain `.card {…}` would
+     lose on a specificity tie. `html .card` wins regardless of file order.
+   - Layout is untouched: no position/display/width/height on .app / .main /
+     .card, and body keeps ui.css's overflow:hidden.
+   - Every decoration layer is position:fixed + pointer-events:none. */
+
+/* ==========================================================================
+   1. tokens — light blush-pink palette
+   ========================================================================== */
+:root {
+  color-scheme: light;
+
+  /* actions */
+  --color-action-primary: #ff6fa5;
+  --color-action-primary-hover: #ff8ab8;
+  --color-action-primary-active: #e35a8f;
+  --color-action-secondary: #fff0f6;
+  --color-action-secondary-hover: #ffe5ef;
+  --color-action-secondary-active: #d94d86;
+  --color-action-destructive: #e5484d;
+  --color-action-destructive-hover: #cc3b40;
+
+  /* feedback (accent = the exact palette hue, *-text deepened for AA contrast) */
+  --color-feedback-success-bg: #eefbf3;
+  --color-feedback-success-text: #1f8a52;
+  --color-feedback-success-border: #a8e7c1;
+  --color-feedback-success-icon: #31b26a;
+  --color-feedback-warning-bg: #fff8ea;
+  --color-feedback-warning-text: #b0721a;
+  --color-feedback-warning-border: #f6d59b;
+  --color-feedback-warning-icon: #d98b1f;
+  --color-feedback-error-bg: #fef1f2;
+  --color-feedback-error-text: #cf3b40;
+  --color-feedback-error-border: #f7b9bc;
+  --color-feedback-error-icon: #e5484d;
+  --color-feedback-info-bg: #eff6fd;
+  --color-feedback-info-text: #3b84c0;
+  --color-feedback-info-border: #b7dbf6;
+  --color-feedback-info-icon: #5aa9e6;
+
+  /* text */
+  --color-text-primary: #3a2f3a;
+  --color-text-secondary: #7d6b7d;
+  --color-text-tertiary: #856a78;
+  --color-text-disabled: #b9a9b9;
+  --color-text-on-action: #241a24;
+  --color-text-on-dark: #ffffff;
+  --color-text-link: #c23c70;
+  --color-text-link-hover: #b83c70;
+
+  /* surfaces */
+  --color-surface-page: #fff7fb;
+  --color-surface-card: #ffffff;
+  --color-surface-raised: #fff0f6;
+  --color-surface-sunken: #fffafc;
+  --color-surface-overlay: rgba(74, 32, 52, 0.38);
+  --color-surface-disabled: #fff0f6;
+
+  /* borders */
+  --color-border-default: #ffe5ef;
+  --color-border-strong: #ffd0e2;
+  --color-border-focus: #ff6fa5;
+  --color-border-error: #e5484d;
+  --color-border-disabled: #ffe5ef;
+
+  /* interaction states */
+  --color-interactive-hover-overlay: rgba(255, 111, 165, 0.08);
+  --color-interactive-active-overlay: rgba(255, 111, 165, 0.16);
+  --color-interactive-selected-bg: #ffe5ef;
+  --color-interactive-selected-border: #ffb7d1;
+  --color-interactive-focus-ring: #ff6fa5;
+
+  /* type */
+  --font-sans: "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  /* soft pink shadows */
+  --shadow-sm: 0 1px 4px rgba(255, 111, 165, 0.10);
+  --shadow-md: 0 2px 10px rgba(255, 111, 165, 0.12);
+  --shadow-lg: 0 8px 24px rgba(255, 111, 165, 0.18);
+}
+
+/* ==========================================================================
+   2. page canvas — soft pink / lavender wash behind the console
+   (painted as the canvas background, so the petal layer sits above it)
+   ========================================================================== */
+body {
+  background-color: var(--color-surface-page);
+  background-image:
+    radial-gradient(72rem 46rem at 8% -16%, rgba(255, 176, 208, 0.26) 0%, rgba(255, 176, 208, 0) 68%),
+    radial-gradient(60rem 42rem at 104% 2%, rgba(198, 173, 255, 0.18) 0%, rgba(198, 173, 255, 0) 70%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+/* ==========================================================================
+   3. shell — topbar / sidebar / bottom-nav
+   ========================================================================== */
+html .topbar {
+  background: linear-gradient(180deg, #ffffff 0%, #fffafc 100%);
+  border-bottom-color: var(--color-border-default);
+  box-shadow: 0 1px 12px rgba(255, 111, 165, 0.08);
+}
+
+html .topbar .brand { color: var(--color-text-link); }
+
+html .sidebar {
+  background: linear-gradient(180deg, #fffafc 0%, #fff7fb 100%);
+  border-right-color: var(--color-border-default);
+}
+
+html .bottom-nav {
+  background: linear-gradient(0deg, #fffafc 0%, #fff7fb 100%);
+  border-top-color: var(--color-border-default);
+}
+
+html .iconbtn { border-radius: 0.75rem; }
+
+html .run-pill { border-color: var(--color-border-default); }
+
+html .run-pill .dot {
+  box-shadow: 0 0 0 0.1875rem rgba(49, 178, 106, 0.16);
+}
+
+/* ==========================================================================
+   4. cards & panels — rounded, 1px pink→lilac gradient hairline, soft glow
+   (background-clip: padding-box / border-box = the gradient only paints the
+   1px border ring; the card keeps its white fill and its exact box size)
+   ========================================================================== */
+html .card {
+  border-radius: 1rem;
+  border-color: transparent;
+  background-color: var(--color-surface-card);
+  background-image:
+    linear-gradient(180deg, #ffffff 0%, #ffffff 52%, #fff5f9 100%),
+    linear-gradient(135deg, #ffd0e2 0%, #f0dcff 52%, #ffe5ef 100%);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  box-shadow: var(--shadow-md);
+}
+
+html .stat-box {
+  border-radius: 1rem;
+  border-color: transparent;
+  background-color: var(--color-surface-card);
+  background-image:
+    linear-gradient(180deg, #ffffff 0%, #ffffff 38%, #fff5f9 100%),
+    linear-gradient(135deg, #ffd0e2 0%, #f0dcff 52%, #ffe5ef 100%);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  box-shadow: var(--shadow-sm);
+}
+
+html .mc {
+  border-radius: 1rem;
+  border-color: transparent;
+  background-color: var(--color-surface-card);
+  background-image:
+    linear-gradient(180deg, #ffffff 0%, #ffffff 55%, #fff5f9 100%),
+    linear-gradient(135deg, #ffd0e2 0%, #f0dcff 52%, #ffe5ef 100%);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  box-shadow: var(--shadow-sm);
+}
+
+html .add-pick {
+  border-radius: 1rem;
+  border-color: transparent;
+  background-color: var(--color-surface-card);
+  background-image:
+    linear-gradient(180deg, #ffffff 0%, #ffffff 55%, #fff5f9 100%),
+    linear-gradient(135deg, #ffd0e2 0%, #f0dcff 52%, #ffe5ef 100%);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+}
+
+html .toggle-row { border-radius: 0.875rem; }
+
+html .menu-card {
+  border-radius: 0.875rem;
+  border-color: var(--color-border-default);
+  box-shadow: var(--shadow-sm);
+}
+
+html .result-banner { border-radius: 0.875rem; }
+
+html .ak-modal { border-radius: 1.25rem; }
+
+html .theme-preview { border-radius: 0.75rem; }
+
+/* ==========================================================================
+   5. navigation rows
+   ========================================================================== */
+html .side-item { border-radius: 0.75rem; }
+
+html .side-item.active {
+  background: var(--color-interactive-selected-bg);
+  box-shadow: inset 0.1875rem 0 0 var(--color-action-primary);
+}
+
+html .pl-item { border-radius: 0.75rem; }
+
+/* ==========================================================================
+   6. controls — one radius scale, pink focus ring
+   ========================================================================== */
+html input:not([type="checkbox"]),
+html select,
+html button { border-radius: 0.625rem; }
+
+html .pd-field .val { border-radius: 0.625rem; }
+
+html .ak-key-input { border-radius: 0.625rem; }
+
+html .keytag {
+  border-radius: 0.625rem;
+  background: var(--color-surface-sunken);
+}
+
+html .pill {
+  border-radius: 999px;
+  background: var(--color-surface-sunken);
+}
+
+html input:focus,
+html select:focus { box-shadow: 0 0 0 0.1875rem rgba(255, 111, 165, 0.18); }
+
+html .pd-field .val:focus { box-shadow: 0 0 0 0.1875rem rgba(255, 111, 165, 0.18); }
+
+html .ak-key-input:focus { box-shadow: 0 0 0 0.1875rem rgba(255, 111, 165, 0.18); }
+
+html button.primary:hover { box-shadow: 0 0.25rem 0.625rem rgba(255, 111, 165, 0.35); }
+
+/* ==========================================================================
+   7. stats / tables / toast / modal
+   ========================================================================== */
+html .hist .bar { border-radius: 0.25rem 0.25rem 0 0; }
+
+/* charts use the pure accent hues; the *-text tokens stay deepened for text */
+html .hist .bar.ok { background: var(--color-feedback-success-icon); }
+
+html .hist .bar.fail { background: var(--color-feedback-error-icon); }
+
+html .tbl-scroll table td:first-child,
+html .tbl-scroll table th:first-child {
+  box-shadow: 0.125rem 0 0.375rem -0.125rem rgba(255, 111, 165, 0.22);
+}
+
+html .tbl-scroll table td:last-child,
+html .tbl-scroll table th:last-child {
+  box-shadow: -0.125rem 0 0.375rem -0.125rem rgba(255, 111, 165, 0.22);
+}
+
+html .ak-modal-backdrop { background: var(--color-surface-overlay); }
+
+html .msg {
+  border-radius: 0.875rem;
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-lg);
+}
+
+/* ==========================================================================
+   8. selection & scrollbars
+   ========================================================================== */
+::selection {
+  background: rgba(255, 111, 165, 0.22);
+  color: var(--color-text-primary);
+}
+
+html { scrollbar-color: var(--color-border-strong) transparent; }
+
+::-webkit-scrollbar-track { background: transparent; }
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover { background: var(--color-action-primary-hover); }
+
+/* ==========================================================================
+   9. sakura layer — nodes are created by theme.js (never by CSS content),
+      so the layer can be removed cleanly on theme switch.
+      .anime-fx-back  sits BEHIND all console content (z-index:-1): petals are
+                      visible in the page gutters / padding and never cover text.
+      .anime-fx-front is a few small, low-alpha petals in front of the UI.
+   ========================================================================== */
+.anime-fx {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  overflow: hidden;
+  pointer-events: none;
+  contain: layout paint;
+  opacity: 0;
+  transition: opacity 1.6s ease;
+}
+
+.anime-fx.is-live { opacity: 1; }
+
+.anime-fx-back { z-index: -1; }
+
+.anime-fx-front { z-index: 5; }
+
+.anime-petal {
+  position: absolute;
+  top: 0;
+  left: var(--anime-x, 50%);
+  width: var(--anime-size, 12px);
+  height: var(--anime-size, 12px);
+  margin-left: calc(var(--anime-size, 12px) * -0.5);
+  will-change: transform;
+  animation-name: anime-fall;
+  animation-duration: var(--anime-dur, 18s);
+  animation-timing-function: linear;
+  animation-delay: var(--anime-delay, 0s);
+  animation-iteration-count: infinite;
+}
+
+/* real petal silhouette: one rounded corner pair + a soft pink gradient */
+.anime-petal::before {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 100% 0 100% 0;
+  background-image: linear-gradient(135deg, var(--anime-c1, #ffe3ee) 0%, var(--anime-c2, #ffa6cd) 100%);
+  box-shadow: 0 0 4px rgba(255, 138, 184, 0.35);
+  opacity: var(--anime-op, 0.55);
+  will-change: transform;
+  animation-name: anime-spin;
+  animation-duration: var(--anime-spin, 7s);
+  animation-timing-function: linear;
+  animation-delay: var(--anime-delay, 0s);
+  animation-iteration-count: infinite;
+  animation-direction: var(--anime-spin-dir, normal);
+}
+
+/* constant-speed descent (–20vh → 100vh, 24vh per segment) plus a gentle
+   left/right drift; two transform animations, both compositor-friendly */
+@keyframes anime-fall {
+  0%   { transform: translate3d(-9px, -20vh, 0); }
+  20%  { transform: translate3d(8px, 4vh, 0); }
+  40%  { transform: translate3d(-11px, 28vh, 0); }
+  60%  { transform: translate3d(7px, 52vh, 0); }
+  80%  { transform: translate3d(-8px, 76vh, 0); }
+  100% { transform: translate3d(6px, 100vh, 0); }
+}
+
+@keyframes anime-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* belt-and-braces: theme.js already creates nothing under reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .anime-fx { display: none !important; }
+}

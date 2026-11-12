@@ -1,0 +1,8 @@
+{
+  "name": "Dracula",
+  "author": "sloxphrite73",
+  "version": "1.0.0",
+  "description": "Dracula 官方暗紫配色",
+  "mode": "dark",
+  "css": ["theme.css"]
+}

@@ -1,0 +1,263 @@
+/* Dracula - built-in dark theme for the Sakura LLM Gateway console.
+   Official Dracula palette: canvas #282a36, current line / selection
+   #44475a, foreground #f8f8f2, comment #6272a4, neon cyan #8be9fd,
+   green #50fa7b, orange #ffb86c, pink #ff79c6, purple #bd93f9,
+   red #ff5555, yellow #f1fa8c.
+   Self-contained: overrides every token sakura-dark defines, then adds
+   cosmetic-only rules. No layout changes, no external assets. */
+
+:root {
+  color-scheme: dark;
+
+  /* action */
+  --color-action-primary: #bd93f9;
+  --color-action-primary-hover: #caa9fa;
+  --color-action-primary-active: #a679f0;
+  --color-action-secondary: #343746;
+  --color-action-secondary-hover: #44475a;
+  --color-action-secondary-active: #6272a4;
+  --color-action-destructive: #ff5555;
+  --color-action-destructive-hover: #ff6e6e;
+
+  /* feedback (alpha tints derived from the official accents) */
+  --color-feedback-success-bg: rgba(80, 250, 123, 0.12);
+  --color-feedback-success-text: #50fa7b;
+  --color-feedback-success-border: rgba(80, 250, 123, 0.38);
+  --color-feedback-success-icon: #50fa7b;
+  --color-feedback-warning-bg: rgba(241, 250, 140, 0.10);
+  --color-feedback-warning-text: #f1fa8c;
+  --color-feedback-warning-border: rgba(241, 250, 140, 0.35);
+  --color-feedback-warning-icon: #f1fa8c;
+  --color-feedback-error-bg: rgba(255, 85, 85, 0.12);
+  --color-feedback-error-text: #ff5555;
+  --color-feedback-error-border: rgba(255, 85, 85, 0.38);
+  --color-feedback-error-icon: #ff5555;
+  --color-feedback-info-bg: rgba(139, 233, 253, 0.10);
+  --color-feedback-info-text: #8be9fd;
+  --color-feedback-info-border: rgba(139, 233, 253, 0.35);
+  --color-feedback-info-icon: #8be9fd;
+
+  /* text */
+  --color-text-primary: #f8f8f2;
+  --color-text-secondary: rgba(248, 248, 242, 0.72);
+  --color-text-tertiary: #929fce;
+  --color-text-disabled: rgba(98, 114, 164, 0.65);
+  --color-text-on-action: #282a36;
+  --color-text-on-dark: #f8f8f2;
+  --color-text-link: #8be9fd;
+  --color-text-link-hover: #b8f4ff;
+
+  /* surfaces */
+  --color-surface-page: #282a36;
+  --color-surface-card: #21222c;
+  --color-surface-raised: #343746;
+  --color-surface-sunken: #191a21;
+  --color-surface-overlay: rgba(25, 26, 33, 0.72);
+  --color-surface-disabled: #343746;
+
+  /* borders */
+  --color-border-default: #44475a;
+  --color-border-strong: #6272a4;
+  --color-border-focus: #bd93f9;
+  --color-border-error: #ff5555;
+  --color-border-disabled: #343746;
+
+  /* interaction */
+  --color-interactive-hover-overlay: rgba(248, 248, 242, 0.04);
+  --color-interactive-active-overlay: rgba(248, 248, 242, 0.08);
+  --color-interactive-selected-bg: #44475a;
+  --color-interactive-selected-border: #bd93f9;
+  --color-interactive-focus-ring: #bd93f9;
+
+  /* type: developer-first, mono for data and identifiers */
+  --font-sans: Inter, "Segoe UI", system-ui, "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, Consolas, monospace;
+
+  /* elevation */
+  --shadow-sm: 0 0.0625rem 0.1875rem 0 rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 0.125rem 0.375rem -0.0625rem rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 0.25rem 0.75rem -0.125rem rgba(0, 0, 0, 0.55);
+}
+
+/* ===== page atmosphere: painted on .app, no extra DOM ===== */
+:root .app {
+  background:
+    radial-gradient(72rem 34rem at 88% -14%, rgba(189, 147, 249, 0.10), transparent 62%),
+    radial-gradient(48rem 28rem at -10% 110%, rgba(255, 121, 198, 0.06), transparent 60%),
+    var(--color-surface-page);
+}
+
+/* topbar: a hairline of neon under the chrome */
+:root .topbar {
+  background-image: linear-gradient(180deg, rgba(189, 147, 249, 0.06), transparent 90%);
+  box-shadow: inset 0 -1px 0 rgba(139, 233, 253, 0.06);
+}
+
+/* live status pill */
+:root .run-pill {
+  background: rgba(80, 250, 123, 0.06);
+  border-color: rgba(80, 250, 123, 0.32);
+}
+:root .run-pill .dot {
+  box-shadow: 0 0 0 0.1875rem rgba(80, 250, 123, 0.16);
+}
+
+/* sidebar selection: current-line fill plus a purple spine */
+:root .side-item.active {
+  background: var(--color-interactive-selected-bg);
+  color: var(--color-text-primary);
+  border-color: rgba(189, 147, 249, 0.35);
+  box-shadow: inset 0.125rem 0 0 var(--color-action-primary);
+}
+:root .side-item.active svg {
+  color: var(--color-action-primary);
+}
+
+/* card hover: lift the border to comment-blue, never light up the surface */
+:root .card,
+:root .stat-box {
+  transition: border-color 0.15s ease;
+}
+:root .card:hover,
+:root .mc:hover,
+:root .add-pick:hover,
+:root .stat-box:hover {
+  border-color: var(--color-border-strong);
+}
+
+/* the active theme card keeps its purple ring even while hovered */
+:root .mc.theme-card.active {
+  border-color: var(--color-action-primary);
+  box-shadow: 0 0 0 0.125rem rgba(189, 147, 249, 0.28);
+}
+
+/* selected provider / filter chip */
+:root .pl-item.active {
+  background: var(--color-interactive-selected-bg);
+  border-color: var(--color-interactive-selected-border);
+  color: var(--color-text-primary);
+}
+:root .pl-item.active .pl-badge {
+  color: var(--color-action-primary);
+  border-color: rgba(189, 147, 249, 0.45);
+}
+:root .chip {
+  background: rgba(52, 55, 70, 0.45);
+  border-color: var(--color-border-default);
+}
+:root .chip:hover {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-link);
+}
+:root .chip.active {
+  background: var(--color-interactive-selected-bg);
+  border-color: var(--color-action-primary);
+  color: var(--color-text-primary);
+}
+
+/* active tab underline takes the focus purple */
+:root .subtabs {
+  border-bottom-color: rgba(68, 71, 90, 0.6);
+}
+:root .subtabs button.active {
+  border-bottom-color: var(--color-action-primary);
+}
+:root .bottom-nav .bn-item.active {
+  color: var(--color-action-primary);
+}
+
+/* table / list separators: 60% current line, deliberately looser than tokens */
+:root td,
+:root th {
+  border-bottom-color: rgba(68, 71, 90, 0.6);
+}
+:root .section-title {
+  border-bottom-color: rgba(68, 71, 90, 0.6);
+}
+:root .erow,
+:root .prio-row + .prio-row {
+  border-top-color: rgba(68, 71, 90, 0.6);
+}
+
+/* primary action: solid purple with a 1px inner highlight */
+:root button.primary {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+:root button.primary:hover {
+  background: var(--color-action-primary-hover);
+  border-color: var(--color-action-primary-hover);
+  color: var(--color-text-on-action);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 0.25rem 0.75rem rgba(189, 147, 249, 0.28);
+}
+:root button.primary:active {
+  background: var(--color-action-primary-active);
+  border-color: var(--color-action-primary-active);
+  box-shadow: inset 0 2px 4px rgba(40, 42, 54, 0.35);
+}
+
+/* focus halo: purple instead of the default pink wash */
+:root input:focus,
+:root select:focus,
+:root .pd-field .val:focus,
+:root .ak-key-input:focus {
+  box-shadow: 0 0 0 3px rgba(189, 147, 249, 0.22);
+}
+:root input[type="checkbox"] {
+  accent-color: var(--color-action-primary);
+}
+
+/* developer surfaces: mono first, a touch of tracking */
+:root code,
+:root .mono,
+:root .keytag,
+:root td.num,
+:root .mc-meta b,
+:root .mc-hover b,
+:root .menu-card .mc-row b,
+:root .stat-box .num,
+:root .hist-x,
+:root .ver-chip {
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+:root .keytag {
+  color: var(--color-text-link);
+  border-color: var(--color-border-default);
+}
+
+/* token histogram shares the primary purple */
+:root .hist .bar.tok {
+  background: var(--color-action-primary);
+  opacity: 0.9;
+}
+
+/* modal: dim the page, keep the panel on the card surface */
+:root .ak-modal-backdrop {
+  background: rgba(25, 26, 33, 0.72);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+:root .ak-modal {
+  border-color: var(--color-border-strong);
+  box-shadow:
+    0 1.5rem 4rem rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* toast */
+:root .msg {
+  border-color: var(--color-border-strong);
+  box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.5);
+}
+
+/* text selection + scrollbar */
+::selection {
+  background: var(--color-interactive-selected-bg);
+  color: var(--color-text-primary);
+}
+:root {
+  scrollbar-color: var(--color-border-default) var(--color-surface-card);
+}

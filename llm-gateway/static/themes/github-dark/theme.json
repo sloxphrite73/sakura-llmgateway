@@ -1,0 +1,8 @@
+{
+  "name": "GitHub Dark",
+  "author": "sloxphrite73",
+  "version": "1.0.0",
+  "description": "GitHub Primer 深色（dark dimmed）配色",
+  "mode": "dark",
+  "css": ["theme.css"]
+}
