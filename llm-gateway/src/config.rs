@@ -124,6 +124,17 @@ fn default_quota_cooldown_secs() -> u64 {
     5 * 3600
 }
 
+/// Default bench time for a transport-level failure (1s): the upstream never
+/// saw the request, so the key spent nothing and must come back fast.
+fn default_transport_error_cooldown_secs() -> u64 {
+    1
+}
+
+/// Default per-request budget for transport failures (no upstream quota spent).
+fn default_max_transport_retries() -> u32 {
+    24
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
     #[serde(default = "crate::new_id")]
@@ -337,6 +348,39 @@ pub struct Config {
     /// fallback; an upstream `Retry-After` always wins when present.
     #[serde(default = "default_quota_cooldown_secs")]
     pub quota_cooldown_secs: u64,
+    /// Cap on the window-drain estimate for an ordinary rate-limit 429 (rpm/tpm),
+    /// in seconds. `None` (default) keeps the historical behaviour: the estimate
+    /// is whatever `window_recovery_secs` computes, clamped to [2, 900].
+    ///
+    /// Set it (e.g. 10) to trade "wait for the window to drain" for "rotate on
+    /// quickly and let the next key try": with long-context traffic a single
+    /// request can eat most of a key's TPM budget, the 60s estimate benches that
+    /// key for the rest of the minute, and the whole pool can end up cooling at
+    /// once. A short cap keeps the rotation moving (more 429s seen, less wall
+    /// clock spent waiting). `Retry-After` and a per-key `cooldown_secs` still
+    /// win over this cap, and it never *lengthens* an estimate.
+    #[serde(default)]
+    pub rate_limit_cooldown_secs: Option<u64>,
+    /// When true, the window-drain estimate for a rate-limit 429 stops assuming
+    /// the retried request will consume another `avg_req` tokens ("a 429 does not
+    /// spend TPM"). With long contexts that extra term alone usually pushes the
+    /// estimate to the full window, so this shortens cooldowns without touching
+    /// the observed usage. Default false = historical behaviour.
+    #[serde(default)]
+    pub rate_limit_assume_free: bool,
+    /// Cooldown for a key whose request failed at the transport layer (connect /
+    /// TLS / send / read before any response). The upstream never saw the
+    /// request, so the key did not spend any of its quota — benching it for the
+    /// old 5s was pure lost capacity: a burst of flaky connections used to bench
+    /// the whole pool and stall every request. Default 1s (was a hard-coded 5).
+    #[serde(default = "default_transport_error_cooldown_secs")]
+    pub transport_error_cooldown_secs: u64,
+    /// How many transport failures ONE client request may absorb before giving
+    /// up. These failures cost no upstream quota, so the per-request budget is
+    /// separate from `max_attempts` (which counts quota-consuming attempts).
+    /// Default 24 — enough to walk a 17-key pool twice.
+    #[serde(default = "default_max_transport_retries")]
+    pub max_transport_retries: u32,
     pub auth: AuthSettings,
     pub providers: Vec<Provider>,
     /// Currency -> USD rate (e.g. `{"CNY": 0.14}`), for normalizing `bill_balance`
@@ -369,6 +413,10 @@ impl Default for Config {
             max_hold_secs: default_max_hold_secs(),
             auth_invalid_secs: default_auth_invalid_secs(),
             quota_cooldown_secs: default_quota_cooldown_secs(),
+            rate_limit_cooldown_secs: Some(5),
+            rate_limit_assume_free: true,
+            transport_error_cooldown_secs: default_transport_error_cooldown_secs(),
+            max_transport_retries: default_max_transport_retries(),
             auth: AuthSettings::default(),
             providers: Vec::new(),
             currency_rates: std::collections::BTreeMap::new(),

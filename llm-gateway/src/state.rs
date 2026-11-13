@@ -531,13 +531,63 @@ mod tests {
     }
 
     #[test]
+    fn rate_limit_cap_shortens_window_estimate() {
+        // 实验分支核心：窗口推算本来会给 40s+ 的长冷却，rate_limit_cooldown_secs=5
+        // 会把它压到 5s —— 429 在上游不消耗配额，所以短线轮换优于长等。
+        let (app, dir) = app_with_provider(None, None);
+        {
+            let mut pool = app.pool.lock().unwrap();
+            let m = pool.metrics.entry("k".into()).or_default();
+            for i in 0..5 {
+                m.req_times.push_back(Instant::now() - Duration::from_secs(i));
+            }
+            m.token_events.push_back((Instant::now() - Duration::from_secs(50), 90_000));
+        }
+        app.mark_rate_limited("p", "k", None, "429");
+        let remaining = cooldown_remaining(&app, "k");
+        assert!((4..=5).contains(&remaining), "capped to 5s, got {remaining}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn assume_free_drops_the_avg_req_term() {
+        // 同一次 429：历史算法假设"下一次还会吃掉 avg_req"，于是立刻判满窗口；
+        // assume_free 只看已消耗量，所以同一个状态不会算出冷却。
+        let now = Instant::now();
+        let mut m = KeyMetrics::default();
+        m.req_times.push_back(now);
+        m.token_events.push_back((now, 900));
+        let classic = window_recovery_secs(&m, now, None, Some(1000), false);
+        let free = window_recovery_secs(&m, now, None, Some(1000), true);
+        assert!(classic.is_some(), "classic: 900 + avg(900) > 1000 → 需要排空");
+        assert_eq!(free, None, "assume_free: 900 ≤ 1000 → 无需冷却");
+    }
+
+    #[test]
+    fn rate_limit_429_refunds_the_pick_sample() {
+        let (app, dir) = app_with_provider(None, None);
+        {
+            let mut pool = app.pool.lock().unwrap();
+            let m = pool.metrics.entry("k".into()).or_default();
+            for _ in 0..3 {
+                m.req_times.push_back(Instant::now());
+            }
+        }
+        app.mark_rate_limited("p", "k", None, "429");
+        let pool = app.pool.lock().unwrap();
+        assert_eq!(pool.metrics.get("k").unwrap().req_times.len(), 2, "failed attempt refunded");
+        drop(pool);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn real_429_learned_is_ignored_default_applies() {
         // PASS §38: learned_cooldown is deprecated (the prober was removed) —
         // a stale learned value must NOT affect the chain; with no window data
         // the global default applies.
         let (app, dir) = app_with_provider(Some(4), None);
         app.mark_rate_limited("p", "k", None, "r");
-        assert!((59..=60).contains(&cooldown_remaining(&app, "k")), "learned ignored → default 60");
+        assert!((4..=5).contains(&cooldown_remaining(&app, "k")), "learned ignored → short cap 5");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -545,7 +595,7 @@ mod tests {
     fn real_429_default_when_no_window_data() {
         let (app, dir) = app_with_provider(Some(221), None);
         app.mark_rate_limited("p", "k", None, "r");
-        assert!((59..=60).contains(&cooldown_remaining(&app, "k")), "no metrics → default 60");
+        assert!((4..=5).contains(&cooldown_remaining(&app, "k")), "no metrics → short cap 5");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -567,10 +617,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("extend-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let app = App::new(Config::default(), dir.join("gateway.json"));
-        app.mark_rate_limited("p", "k", None, "r"); // 60s (default floor)
+        app.mark_rate_limited("p", "k", None, "r"); // 5s（实验分支的短上限）
         // A shorter probe hold must not shorten the AIMD cooldown.
         app.extend_cooldown_at_least("k", 5);
-        assert!((59..=60).contains(&cooldown_remaining(&app, "k")), "must not shorten");
+        assert!((4..=5).contains(&cooldown_remaining(&app, "k")), "must not shorten");
         // A longer hold extends.
         app.extend_cooldown_at_least("k", 120);
         assert!((119..=120).contains(&cooldown_remaining(&app, "k")), "must extend");
@@ -594,7 +644,8 @@ mod tests {
         let pool = app.pool.lock().unwrap();
         let m = pool.metrics.get("k").unwrap();
         assert_eq!(m.capacity_samples.len(), 1);
-        assert_eq!(m.capacity_samples[0], (2, 500), "sampled (rpm, tpm) at the 429");
+        // 429 的这次尝试会被 mark_rate_limited 退还（上游没受理），所以样本 rpm=1。
+        assert_eq!(m.capacity_samples[0], (1, 500), "sampled (rpm, tpm) at the 429, failed attempt refunded");
         drop(pool);
         // A (0,0)-usage 429 later is uninformative and must NOT be recorded
         // (limit hit by traffic outside our window would zero the estimate).
@@ -622,7 +673,7 @@ mod tests {
         for i in [32, 31, 30] {
             m.req_times.push_back(now - Duration::from_secs(i));
         }
-        assert_eq!(window_recovery_secs(&m, now, Some(3), None), Some(26));
+        assert_eq!(window_recovery_secs(&m, now, Some(3), None, false), Some(26));
     }
 
     #[test]
@@ -635,7 +686,7 @@ mod tests {
         m.req_times.push_back(now - Duration::from_secs(10));
         m.token_events.push_back((now - Duration::from_secs(30), 600));
         m.token_events.push_back((now - Duration::from_secs(10), 600));
-        assert_eq!(window_recovery_secs(&m, now, None, Some(1000)), Some(45));
+        assert_eq!(window_recovery_secs(&m, now, None, Some(1000), false), Some(45));
     }
 
     #[test]
@@ -644,10 +695,10 @@ mod tests {
         let now = Instant::now();
         m.req_times.push_back(now);
         // No capacity configured → None (caller falls back to the default).
-        assert_eq!(window_recovery_secs(&m, now, None, None), None);
+        assert_eq!(window_recovery_secs(&m, now, None, None, false), None);
         // Capacity configured but window usage is BELOW it (the 429 came from
         // something the window can't explain) → None too.
-        assert_eq!(window_recovery_secs(&m, now, Some(10), None), None);
+        assert_eq!(window_recovery_secs(&m, now, Some(10), None, false), None);
     }
 
     #[test]
@@ -657,7 +708,7 @@ mod tests {
         let mut m = KeyMetrics::default();
         let now = Instant::now();
         m.req_times.push_back(now);
-        assert_eq!(window_recovery_secs(&m, now, Some(1), None), Some(54)); // 60×0.9
+        assert_eq!(window_recovery_secs(&m, now, Some(1), None, false), Some(54)); // 60×0.9
         // TPM floor: total=800, avg=400, cap=1000 → need 200 drained → oldest
         // event expires in 1s → ×0.9 → clamp to 2s.
         let mut m3 = KeyMetrics::default();
@@ -667,7 +718,7 @@ mod tests {
         m3.token_events.push_back((now - Duration::from_secs(58), 400));
         // total=800, avg=400, cap=1000 → need 800+400-1000=200 → oldest event
         // (400 ≥ 200) expires in 1s → ×0.9 = 0.9 → ceil 1 → clamp 2s.
-        assert_eq!(window_recovery_secs(&m3, now, None, Some(1000)), Some(2));
+        assert_eq!(window_recovery_secs(&m3, now, None, Some(1000), false), Some(2));
     }
 
     #[test]
@@ -995,6 +1046,18 @@ impl App {
         true
     }
 
+    /// Drop the RPM sample that `pick_key`/`select_strategy` recorded for an
+    /// attempt that never spent upstream quota (transport failure, or a 429 —
+    /// the latter is refunded inside `mark_rate_limited`). Our own 60s window is
+    /// the only evidence `window_recovery_secs` has; counting rejected attempts
+    /// in it makes every estimate longer than the provider's reality.
+    pub fn refund_attempt(&self, key_id: &str) {
+        let mut pool = self.pool.lock().unwrap();
+        if let Some(m) = pool.metrics.get_mut(key_id) {
+            m.req_times.pop_back();
+        }
+    }
+
     /// Mark a key as cooling down. `retry_after_secs` wins if present.
     /// (learned_cooldown is no longer read anywhere — PASS §38 removed the
     /// prober; the field stays in the schema for backward compatibility.)
@@ -1055,13 +1118,19 @@ impl App {
             .and_then(|p| p.keys.iter().find(|k| k.id == key_id));
         let per_key = key_cfg.and_then(|k| k.cooldown_secs);
         let (cap_rpm, cap_tpm) = configured_capacity(&cfg, provider_id, key_id);
+        let hard_cap = cfg.rate_limit_cooldown_secs;
+        let assume_free = cfg.rate_limit_assume_free;
 
         let mut pool = self.pool.lock().unwrap();
-        // Diagnostic sample of the load at the 429 moment. (0,0) is
-        // uninformative (the limit was hit by traffic outside our window).
-        {
+        // Diagnostic sample of the load at the 429 moment, plus the cooldown that
+        // the window estimate implies. A 429 means the upstream rejected the
+        // attempt, so it spent none of the key's RPM/TPM budget: the pick-time
+        // sample is dropped first, otherwise our own window over-states load and
+        // feeds a longer estimate back into every subsequent 429.
+        let secs = {
             let now = Instant::now();
             let m = pool.metrics.entry(key_id.to_string()).or_default();
+            m.req_times.pop_back();
             m.req_times.retain(|t| now.duration_since(*t) <= Duration::from_secs(METRIC_RPM_WINDOW_SECS));
             m.token_events
                 .retain(|(t, _)| now.duration_since(*t) <= Duration::from_secs(METRIC_TPM_WINDOW_SECS));
@@ -1073,18 +1142,21 @@ impl App {
                     m.capacity_samples.pop_front();
                 }
             }
-        }
-        let secs = match retry_after_secs {
-            Some(ra) => ra.max(1),
-            None => match per_key {
-                Some(pk) => pk.max(1),
-                None => pool
-                    .metrics
-                    .get(key_id)
-                    .and_then(|m| window_recovery_secs(m, Instant::now(), cap_rpm, cap_tpm))
-                    .unwrap_or(default_secs)
-                    .max(1),
-            },
+            let est = window_recovery_secs(m, now, cap_rpm, cap_tpm, assume_free);
+            match retry_after_secs {
+                Some(ra) => ra.max(1),
+                None => match per_key {
+                    Some(pk) => pk.max(1),
+                    // The cap only ever shortens an estimate; it never lengthens
+                    // one, and it stands in for a missing estimate.
+                    None => match (est, hard_cap) {
+                        (Some(e), Some(c)) => e.min(c).max(1),
+                        (Some(e), None) => e.max(1),
+                        (None, Some(c)) => c.max(1),
+                        (None, None) => default_secs,
+                    },
+                },
+            }
         };
         pool.cooling.insert(key_id.to_string(), Instant::now() + Duration::from_secs(secs));
         pool.last_error.insert(key_id.to_string(), reason.to_string());
@@ -1470,11 +1542,17 @@ fn configured_capacity(
 /// Bias low (×0.9): underestimating costs one cheap rotation and the next 429
 /// re-estimates with fresher data; overestimating parks a key (the forbidden
 /// direction, §30.3).
+/// `assume_free` = "a 429 does not spend TPM": the rejected attempt never
+/// reached the upstream, so the drain only has to cover what was actually
+/// consumed (`total - c`) instead of `total + avg_req - c`. With long contexts
+/// the extra `avg_req` term alone saturates the 60s window, which is why every
+/// cooldown in production came out as exactly 60s.
 fn window_recovery_secs(
     m: &KeyMetrics,
     now: Instant,
     cap_rpm: Option<u32>,
     cap_tpm: Option<u32>,
+    assume_free: bool,
 ) -> Option<u64> {
     let win = Duration::from_secs(METRIC_RPM_WINDOW_SECS);
     let mut parts: Vec<u64> = Vec::new();
@@ -1497,13 +1575,19 @@ fn window_recovery_secs(
             if reqs > 0 { (total / reqs).max(1) } else { 2000 }
         };
         if total + avg_req > c as u64 {
-            let need_drain = total + avg_req - c as u64;
-            let mut acc = 0u64;
-            for (t, n) in &m.token_events {
-                acc += n;
-                if acc >= need_drain {
-                    parts.push(win.saturating_sub(now.saturating_duration_since(*t)).as_secs());
-                    break;
+            let need_drain = if assume_free {
+                total.saturating_sub(c as u64)
+            } else {
+                (total + avg_req).saturating_sub(c as u64)
+            };
+            if need_drain > 0 {
+                let mut acc = 0u64;
+                for (t, n) in &m.token_events {
+                    acc += n;
+                    if acc >= need_drain {
+                        parts.push(win.saturating_sub(now.saturating_duration_since(*t)).as_secs());
+                        break;
+                    }
                 }
             }
         }

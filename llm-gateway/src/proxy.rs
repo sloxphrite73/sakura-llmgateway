@@ -433,6 +433,8 @@ where
     // spends the hold budget — the loop always terminates (PASS §38). The
     // legacy max_attempts budget is superseded by the hold budget.
     let mut held_ms = 0u64;
+    // Transport failures cost no upstream quota, so they get their own budget.
+    let mut transport_failures = 0u32;
     loop {
         let row = match app.select_strategy(&set, &sorts) {
             SelectResult::Routed(r) => r,
@@ -522,12 +524,28 @@ where
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
-                // Timeout / connection failure: rotate to the next key. The key gets a
-                // short cooldown (not a rate-limit cooldown) so it recovers quickly.
-                // Per-key tally: this key failed and is being rotated out.
+                // Transport failure: the upstream never saw this request, so the key
+                // spent no quota. Refund the pick-time RPM sample, bench the key for
+                // the (short, configurable) transport cooldown, and do NOT charge it
+                // to the quota-consuming attempt budget — otherwise a flaky network
+                // burns the whole pool for 5s each and every client request stalls.
+                transport_failures += 1;
                 app.record_key_stat(false, &row.api_key_id);
                 app.record_rotation(&row.provider_id);
-                app.mark_cooldown(&row.provider_id, &row.api_key_id, Some(5), &format!("network error: {e}"));
+                app.refund_attempt(&row.api_key_id);
+                let secs = cfg.transport_error_cooldown_secs.max(1);
+                app.mark_cooldown(&row.provider_id, &row.api_key_id, Some(secs), &format!("network error: {e}"));
+                if transport_failures >= cfg.max_transport_retries {
+                    app.record_stat(false, Some(&row.api_key_id), &row.provider_id, &row.upstream_model);
+                    return error_response_for(
+                        StatusCode::BAD_GATEWAY,
+                        format!(
+                            "upstream transport failed {} times in one request: {e}",
+                            transport_failures
+                        ),
+                        inbound,
+                    );
+                }
                 continue;
             }
         };
