@@ -1,8 +1,8 @@
 {
-  "name": "二次元",
+  "name": "二次元 · Miku",
   "author": "sloxphrite73",
-  "version": "1.0.0",
-  "description": "浅色粉紫、圆角与樱花飘落",
+  "version": "2.0.0",
+  "description": "粉紫二次元 wiki 皮肤：圆润字体、20px 纸卡、胶囊控件、右侧半透明初音未来与樱花飘落",
   "mode": "light",
   "css": ["theme.css"],
   "js": ["theme.js"]

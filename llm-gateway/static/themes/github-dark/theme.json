@@ -1,8 +1,8 @@
 {
   "name": "GitHub Dark",
   "author": "sloxphrite73",
-  "version": "1.0.0",
-  "description": "GitHub Primer 深色（dark dimmed）配色",
+  "version": "2.0.0",
+  "description": "Primer 深色配色 + GitHub 产品语言：紧凑排版、细边框、细笔画图标",
   "mode": "dark",
   "css": ["theme.css"]
 }

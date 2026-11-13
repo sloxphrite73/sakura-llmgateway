@@ -1,19 +1,32 @@
-/* Anime (二次元) — Sakura LLM Gateway built-in LIGHT theme.
-   Blush-pink + lavender surfaces, generous rounded corners, falling sakura.
+/* Anime (二次元) — Sakura LLM Gateway built-in LIGHT theme, v2 "wiki skin".
+   Blush-pink + lavender surfaces, rounded display type, pill controls, soft
+   paper-like panels, a translucent Hatsune Miku standing at the right edge,
+   and drifting sakura.
 
    Maintainer notes:
-   - Self-contained + offline: every --color-* / --font-* / --shadow-* token that
-     ui.css reads is (re)defined at :root below; nothing is fetched from the
-     network, no remote webfont, no embedded image data.
+   - Self-contained + offline: every --color-* / --font-* / --shadow-* token
+     ui.css reads is (re)defined at :root. No CSS imports, no remote webfont,
+     no embedded data URI. The only asset reference is the local theme file
+     `bg-miku.svg` (CC BY 3.0, see CREDITS.md).
    - Visual overrides are prefixed with `html` on purpose: the console injects
-     ui.css AFTER this stylesheet on first paint, so a plain `.card {…}` would
-     lose on a specificity tie. `html .card` wins regardless of file order.
-   - Layout is untouched: no position/display/width/height on .app / .main /
-     .card, and body keeps ui.css's overflow:hidden.
-   - Every decoration layer is position:fixed + pointer-events:none. */
+     ui.css AFTER this stylesheet, so a plain `.card {…}` would lose on a
+     specificity tie. `html .card` wins regardless of file order.
+   - Layout is untouched: no position / display / width / height on .app /
+     .main / .card, and body keeps ui.css's overflow:hidden.
+   - The Miku layer lives on body's own background stack: the first layer is
+     the left→right reading veil (nearly solid over the text column, clearing
+     to the right), the second is `bg-miku.svg` anchored bottom-right. Body's
+     pink→lilac gradients sit underneath. If bg-miku.svg is deleted the veil
+     and gradients still paint a normal light theme (graceful fallback, no
+     broken-image box, no layout shift).
+   - Narrow viewports shrink the picture to 46% of the viewport height; the
+     veil still keeps the reading column clean.
+   - Every transition names its properties (never an all-property shorthand);
+     hover movement is a 2px compositor transform, active presses a 0.97 scale.
+   - The sakura layer at the bottom is unchanged; it adds no DOM nodes here. */
 
 /* ==========================================================================
-   1. tokens — light blush-pink palette
+   1. tokens — light blush-pink palette (all 53 tokens ui.css reads)
    ========================================================================== */
 :root {
   color-scheme: light;
@@ -78,51 +91,110 @@
   --color-interactive-selected-border: #ffb7d1;
   --color-interactive-focus-ring: #ff6fa5;
 
-  /* type */
-  --font-sans: "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  /* type — rounded-first stack (offline mac/win fall back to Segoe UI/system) */
+  --font-sans: "SF Pro Rounded", "Nunito", "Quicksand", "Segoe UI", system-ui,
+    "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
 
-  /* soft pink shadows */
+  /* soft pink elevation — values unchanged from v1 */
   --shadow-sm: 0 1px 4px rgba(255, 111, 165, 0.10);
   --shadow-md: 0 2px 10px rgba(255, 111, 165, 0.12);
   --shadow-lg: 0 8px 24px rgba(255, 111, 165, 0.18);
 }
 
 /* ==========================================================================
-   2. page canvas — soft pink / lavender wash behind the console
-   (painted as the canvas background, so the petal layer sits above it)
+   2. type scale — 14.5px body on a 1.75 rhythm, tabular figures everywhere
    ========================================================================== */
-body {
-  background-color: var(--color-surface-page);
-  background-image:
-    radial-gradient(72rem 46rem at 8% -16%, rgba(255, 176, 208, 0.26) 0%, rgba(255, 176, 208, 0) 68%),
-    radial-gradient(60rem 42rem at 104% 2%, rgba(198, 173, 255, 0.18) 0%, rgba(198, 173, 255, 0) 70%);
-  background-repeat: no-repeat;
-  background-attachment: fixed;
+html body {
+  font-size: 14.5px;
+  line-height: 1.75;
+  font-variant-numeric: tabular-nums;
+}
+
+/* controls keep a compact line box so pills and fields stay the same height */
+html button,
+html input,
+html select {
+  line-height: 1.5;
+}
+
+/* headings: rounded-bold, very slight positive tracking */
+html h1,
+html h2,
+html h3,
+html .main h2.board-title,
+html .section-title,
+html .mc-name,
+html .edit-name,
+html .theme-card .theme-name,
+html .topbar .brand {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+html .main h2.board-title {
+  font-size: 1.75rem;
+  line-height: 1.25;
 }
 
 /* ==========================================================================
-   3. shell — topbar / sidebar / bottom-nav
+   3. page canvas — pink/lavender wash + the Miku background layer
+   ========================================================================== */
+html body {
+  background-color: var(--color-surface-page);
+  background-image:
+    /* reading veil: nearly solid over the text column, clearing to the right */
+    linear-gradient(
+      90deg,
+      rgba(255, 247, 251, 0.98) 0%,
+      rgba(255, 247, 251, 0.94) 38%,
+      rgba(255, 247, 251, 0.70) 68%,
+      rgba(255, 247, 251, 0.55) 100%
+    ),
+    /* the picture: the only image reference in this theme (local asset) */
+    url("bg-miku.svg"),
+    radial-gradient(72rem 46rem at 8% -16%, rgba(255, 176, 208, 0.30) 0%, rgba(255, 176, 208, 0) 68%),
+    radial-gradient(64rem 44rem at 102% 3%, rgba(198, 173, 255, 0.22) 0%, rgba(198, 173, 255, 0) 70%),
+    radial-gradient(42rem 42rem at 88% 78%, rgba(48, 172, 199, 0.10) 0%, rgba(48, 172, 199, 0) 72%),
+    linear-gradient(150deg, #fff8fc 0%, #fdf3ff 44%, #f7f0ff 100%);
+  background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+  background-position: center, right 3% bottom -4%, center, center, center, center;
+  background-size: cover, auto 72%, auto, auto, auto, cover;
+  background-attachment: fixed, fixed, fixed, fixed, fixed, fixed;
+}
+
+/* Fallback: if bg-miku.svg is ever deleted, that layer paints nothing and the
+   veil + pastel gradients below still render a complete light theme — no
+   broken-image box and no layout shift, because the picture is only paint. */
+
+/* narrow screens: shrink the picture to 46% height; the veil still covers the
+   full-width reading column, so body text keeps its contrast */
+@media (max-width: 900px) {
+  html body {
+    background-size: cover, auto 46%, auto, auto, auto, cover;
+  }
+}
+
+/* ==========================================================================
+   4. shell — topbar / sidebar / bottom-nav (opaque, so no figure behind chrome)
    ========================================================================== */
 html .topbar {
-  background: linear-gradient(180deg, #ffffff 0%, #fffafc 100%);
+  background: linear-gradient(180deg, #ffffff 0%, #fffafd 100%);
   border-bottom-color: var(--color-border-default);
-  box-shadow: 0 1px 12px rgba(255, 111, 165, 0.08);
+  box-shadow: 0 2px 14px rgba(255, 111, 165, 0.07);
 }
 
 html .topbar .brand { color: var(--color-text-link); }
 
 html .sidebar {
-  background: linear-gradient(180deg, #fffafc 0%, #fff7fb 100%);
+  background: linear-gradient(180deg, #fffafd 0%, #fff6fb 100%);
   border-right-color: var(--color-border-default);
 }
 
 html .bottom-nav {
-  background: linear-gradient(0deg, #fffafc 0%, #fff7fb 100%);
+  background: linear-gradient(0deg, #fffafd 0%, #fff6fb 100%);
   border-top-color: var(--color-border-default);
 }
-
-html .iconbtn { border-radius: 0.75rem; }
 
 html .run-pill { border-color: var(--color-border-default); }
 
@@ -131,102 +203,198 @@ html .run-pill .dot {
 }
 
 /* ==========================================================================
-   4. cards & panels — rounded, 1px pink→lilac gradient hairline, soft glow
-   (background-clip: padding-box / border-box = the gradient only paints the
-   1px border ring; the card keeps its white fill and its exact box size)
+   5. panels — 20px paper cards with a 1px pink→lilac hairline + soft bloom
+   (background-clip: padding-box / border-box paints the gradient only in the
+    1px ring; the white fill and the exact border-box size are preserved)
    ========================================================================== */
-html .card {
-  border-radius: 1rem;
+html .card,
+html .stat-box,
+html .mc,
+html .add-pick,
+html .ak-modal {
   border-color: transparent;
+  border-radius: 20px;
   background-color: var(--color-surface-card);
   background-image:
-    linear-gradient(180deg, #ffffff 0%, #ffffff 52%, #fff5f9 100%),
-    linear-gradient(135deg, #ffd0e2 0%, #f0dcff 52%, #ffe5ef 100%);
-  background-origin: border-box;
-  background-clip: padding-box, border-box;
-  box-shadow: var(--shadow-md);
-}
-
-html .stat-box {
-  border-radius: 1rem;
-  border-color: transparent;
-  background-color: var(--color-surface-card);
-  background-image:
-    linear-gradient(180deg, #ffffff 0%, #ffffff 38%, #fff5f9 100%),
+    linear-gradient(180deg, #ffffff 0%, #ffffff 58%, #fff6fa 100%),
     linear-gradient(135deg, #ffd0e2 0%, #f0dcff 52%, #ffe5ef 100%);
   background-origin: border-box;
   background-clip: padding-box, border-box;
   box-shadow: var(--shadow-sm);
 }
 
-html .mc {
-  border-radius: 1rem;
-  border-color: transparent;
-  background-color: var(--color-surface-card);
-  background-image:
-    linear-gradient(180deg, #ffffff 0%, #ffffff 55%, #fff5f9 100%),
-    linear-gradient(135deg, #ffd0e2 0%, #f0dcff 52%, #ffe5ef 100%);
-  background-origin: border-box;
-  background-clip: padding-box, border-box;
-  box-shadow: var(--shadow-sm);
+html .card { box-shadow: var(--shadow-md); }
+
+/* roomy density: 22px inside every panel, 18px between panels/cards */
+html .card-pad { padding: 22px; }
+
+html .stat-box { padding: 22px; }
+
+html .mc { padding: 22px; }
+
+html .add-pick { padding: 22px; }
+
+html .card + .card { margin-top: 18px; }
+
+html .stat-grid { gap: 18px; }
+
+html .mc-grid { gap: 18px; }
+
+html .add-choose { gap: 18px; }
+
+html .cards { gap: 18px; }
+
+/* 26px of air above each section heading */
+html .section { margin-top: 26px; }
+
+html .section-title {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  margin-top: 26px;
+  padding-bottom: 0.75rem;
+  border-bottom-color: var(--color-border-default);
+  margin-bottom: 1.25rem;
 }
 
-html .add-pick {
-  border-radius: 1rem;
-  border-color: transparent;
-  background-color: var(--color-surface-card);
-  background-image:
-    linear-gradient(180deg, #ffffff 0%, #ffffff 55%, #fff5f9 100%),
-    linear-gradient(135deg, #ffd0e2 0%, #f0dcff 52%, #ffe5ef 100%);
-  background-origin: border-box;
-  background-clip: padding-box, border-box;
+/* the right-aligned .note can sit over the figure's shoulder at the far right;
+   a 1px page-pink edge + soft glow keeps every glyph on canvas-level contrast
+   without painting a visible chip/band or shifting the row */
+html .section-title .note {
+  text-shadow:
+    0 0 1px rgba(255, 247, 251, 1),
+    0 0 3px rgba(255, 247, 251, 0.95),
+    0 0 6px rgba(255, 247, 251, 0.8);
 }
 
-html .toggle-row { border-radius: 0.875rem; }
+/* hover lift — 2px only, so the 18px gutters keep cards from ever overlapping */
+html .card,
+html .stat-box,
+html .mc,
+html .add-pick,
+html .theme-card {
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.18s,
+    background-color 0.18s;
+}
+
+html .card:hover,
+html .stat-box:hover,
+html .mc:hover,
+html .add-pick:hover,
+html .theme-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+/* clickable panels warm their gradient hairline up instead of switching it */
+html .mc:hover,
+html .add-pick:hover {
+  border-color: transparent;
+  background-image:
+    linear-gradient(180deg, #ffffff 0%, #ffffff 58%, #fff3f9 100%),
+    linear-gradient(135deg, #ffb8d4 0%, #e2c4ff 52%, #ffd0e2 100%);
+}
 
 html .menu-card {
-  border-radius: 0.875rem;
+  border-radius: 16px;
   border-color: var(--color-border-default);
   box-shadow: var(--shadow-sm);
 }
 
-html .result-banner { border-radius: 0.875rem; }
+html .toggle-row { border-radius: 16px; }
 
-html .ak-modal { border-radius: 1.25rem; }
+html .result-banner { border-radius: 16px; }
 
-html .theme-preview { border-radius: 0.75rem; }
+html .theme-preview { border-radius: 12px; }
 
 /* ==========================================================================
-   5. navigation rows
+   6. navigation rows — pill-shaped nav chips, glowing active icon
    ========================================================================== */
-html .side-item { border-radius: 0.75rem; }
+html .side-item {
+  border-radius: 999px;
+  padding: 0.625rem 0.875rem;
+  transition: background-color 0.18s, color 0.18s, box-shadow 0.18s;
+}
 
 html .side-item.active {
-  background: var(--color-interactive-selected-bg);
-  box-shadow: inset 0.1875rem 0 0 var(--color-action-primary);
+  background-color: var(--color-interactive-selected-bg);
+  background-image: linear-gradient(100deg, #ffe3ef 0%, #f2e2ff 58%, #ffe9f2 100%);
+  font-weight: 700;
+  box-shadow: 0 6px 16px rgba(255, 111, 165, 0.16),
+    inset 0 0 0 1px rgba(255, 183, 209, 0.7);
 }
 
-html .pl-item { border-radius: 0.75rem; }
+html .side-item.active svg {
+  color: var(--color-text-link);
+  filter: drop-shadow(0 0 5px rgba(255, 111, 165, 0.45));
+}
+
+html .pl-item { border-radius: 12px; }
 
 /* ==========================================================================
-   6. controls — one radius scale, pink focus ring
+   7. controls — pill buttons, 12px fields, pink focus ring
    ========================================================================== */
-html input:not([type="checkbox"]),
-html select,
-html button { border-radius: 0.625rem; }
-
-html .pd-field .val { border-radius: 0.625rem; }
-
-html .ak-key-input { border-radius: 0.625rem; }
-
-html .keytag {
-  border-radius: 0.625rem;
-  background: var(--color-surface-sunken);
+html button {
+  border-radius: 999px;
+  padding: 0.5rem 1rem;
 }
 
-html .pill {
+html .iconbtn {
   border-radius: 999px;
-  background: var(--color-surface-sunken);
+  padding: 0.4375rem;
+}
+
+html .val,
+html input:not([type="checkbox"]),
+html select,
+html .pd-field .val,
+html .ak-key-input,
+html .erow .eval {
+  border-radius: 12px;
+}
+
+html .keytag { border-radius: 12px; }
+
+html .pill,
+html .chip,
+html .primary { border-radius: 999px; }
+
+html .ak-paste { border-radius: 999px; }
+
+/* icon system: 1.9px rounded strokes, 1.1rem UI glyphs (ui.css's 1.7 rules are
+   class-scoped, so the same scopes are repeated here to win the specificity) */
+html svg,
+html .iconbtn svg,
+html .lang-toggle svg,
+html .side-item svg,
+html .bn-item svg,
+html .bottom-nav .bn-item svg,
+html .add-pick .ap-icon svg,
+html .ak-paste svg,
+html .alias-x svg {
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+html .iconbtn svg,
+html .lang-toggle svg,
+html .side-item svg,
+html .bn-item svg,
+html .bottom-nav .bn-item svg,
+html .ak-paste svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+/* exceptions: the add-provider feature glyph stays large, inline tag × stays small */
+html .add-pick .ap-icon svg {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+html .alias-x svg {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 html input:focus,
@@ -236,12 +404,24 @@ html .pd-field .val:focus { box-shadow: 0 0 0 0.1875rem rgba(255, 111, 165, 0.18
 
 html .ak-key-input:focus { box-shadow: 0 0 0 0.1875rem rgba(255, 111, 165, 0.18); }
 
-html button.primary:hover { box-shadow: 0 0.25rem 0.625rem rgba(255, 111, 165, 0.35); }
+html button.primary:hover { box-shadow: 0 0.25rem 0.75rem rgba(255, 111, 165, 0.35); }
+
+/* pressed: a tiny 0.97 scale; nav rows keep their own pressed feedback */
+html button:active { transform: scale(0.97); }
 
 /* ==========================================================================
-   7. stats / tables / toast / modal
+   8. stats / tables / charts / toast / modal
    ========================================================================== */
-html .hist .bar { border-radius: 0.25rem 0.25rem 0 0; }
+html .stat-box .num {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+html .stat-box .label { margin-top: 0.375rem; }
+
+html .hist .bar { border-radius: 6px 6px 0 0; }
 
 /* charts use the pure accent hues; the *-text tokens stay deepened for text */
 html .hist .bar.ok { background: var(--color-feedback-success-icon); }
@@ -261,13 +441,13 @@ html .tbl-scroll table th:last-child {
 html .ak-modal-backdrop { background: var(--color-surface-overlay); }
 
 html .msg {
-  border-radius: 0.875rem;
+  border-radius: 16px;
   border-color: var(--color-border-strong);
   box-shadow: var(--shadow-lg);
 }
 
 /* ==========================================================================
-   8. selection & scrollbars
+   9. selection & scrollbars
    ========================================================================== */
 ::selection {
   background: rgba(255, 111, 165, 0.22);
@@ -286,11 +466,11 @@ html { scrollbar-color: var(--color-border-strong) transparent; }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-action-primary-hover); }
 
 /* ==========================================================================
-   9. sakura layer — nodes are created by theme.js (never by CSS content),
-      so the layer can be removed cleanly on theme switch.
-      .anime-fx-back  sits BEHIND all console content (z-index:-1): petals are
-                      visible in the page gutters / padding and never cover text.
-      .anime-fx-front is a few small, low-alpha petals in front of the UI.
+   10. sakura layer — unchanged; nodes are created by theme.js (never by CSS
+       content), so the layer can be removed cleanly on theme switch.
+       .anime-fx-back  sits BEHIND all console content (z-index:-1): petals are
+                       visible in the page gutters / padding and never cover text.
+       .anime-fx-front is a few small, low-alpha petals in front of the UI.
    ========================================================================== */
 .anime-fx {
   position: fixed;
@@ -364,4 +544,12 @@ html { scrollbar-color: var(--color-border-strong) transparent; }
 /* belt-and-braces: theme.js already creates nothing under reduced motion */
 @media (prefers-reduced-motion: reduce) {
   .anime-fx { display: none !important; }
+
+  html .card:hover,
+  html .stat-box:hover,
+  html .mc:hover,
+  html .add-pick:hover,
+  html button:active {
+    transform: none;
+  }
 }

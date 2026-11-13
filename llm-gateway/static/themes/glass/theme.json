@@ -1,8 +1,8 @@
 {
   "name": "毛玻璃",
   "author": "sloxphrite73",
-  "version": "1.0.0",
-  "description": "半透明面板 + 背景模糊的通透风格",
+  "version": "2.0.0",
+  "description": "macOS 式层叠玻璃：三级玻璃、大圆角、强模糊、软投影",
   "mode": "dark",
   "css": ["theme.css"],
   "js": ["theme.js"]

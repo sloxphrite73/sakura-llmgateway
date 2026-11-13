@@ -69,9 +69,11 @@
   --color-interactive-selected-border: #bd93f9;
   --color-interactive-focus-ring: #bd93f9;
 
-  /* type: developer-first, mono for data and identifiers */
-  --font-sans: Inter, "Segoe UI", system-ui, "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, Consolas, monospace;
+  /* type: mono-first. JetBrains Mono is self-hosted (latin); Sarasa Gothic SC
+     is the self-hosted CJK mono face, so the Chinese UI keeps the editor grid
+     instead of falling back to a proportional sans. */
+  --font-sans: "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, Consolas, "Sarasa Gothic SC", "Microsoft YaHei UI", monospace;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, Consolas, "Sarasa Gothic SC", monospace;
 
   /* elevation */
   --shadow-sm: 0 0.0625rem 0.1875rem 0 rgba(0, 0, 0, 0.35);
@@ -260,4 +262,368 @@
 }
 :root {
   scrollbar-color: var(--color-border-default) var(--color-surface-card);
+}
+
+/* ===== v2.1 — type, density, shape ===== */
+
+/* 1. editor type: 13px body, 1.65 leading, mono labels at 12px */
+:root body {
+  font-size: 0.8125rem;          /* 13px */
+  line-height: 1.65;
+  letter-spacing: 0.01em;
+}
+:root .topbar .brand {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  letter-spacing: 0.01em;
+}
+:root .section-title,
+:root .erow .elbl,
+:root th {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;            /* 12px */
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  line-height: 1.5;
+}
+:root .section-title .note {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0.04em;
+}
+
+/* 2. numbers are compared down a column: mono + tabular */
+:root .stat-box .num {
+  font-family: var(--font-mono);
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+:root .stat-box .label {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  margin-top: 0.375rem;
+}
+:root td.num,
+:root .mc-meta b,
+:root .mc-hover b,
+:root .menu-card .mc-row b,
+:root .hist-x,
+:root .hist-detail b {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* 3. medium-loose editor density: 18px card padding, 8px rows, 24px group air */
+:root .section { margin-top: 1.5rem; }        /* 24px above a group heading */
+:root .section:first-child { margin-top: 0; }
+:root .card-pad { padding: 1.125rem; }        /* 18px */
+:root .stat-box,
+:root .mc { padding: 1.125rem; }              /* 18px */
+:root .add-pick { padding: 1.125rem 1.25rem; }/* 18px 20px */
+:root td,
+:root th {
+  padding: 0.5rem 0.875rem;                   /* 8px 14px */
+}
+:root td { font-size: 0.8125rem; line-height: 1.65; }
+:root th { line-height: 1.5; }
+
+/* mono is wider than the old sans: model ids break at hyphens, never mid-token */
+:root .mc-name {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+/* 4. shape: 8px radii, 1px current-line hairline, whisper of top light */
+:root .card,
+:root .stat-box,
+:root .mc,
+:root .add-pick,
+:root .toggle-row,
+:root .menu-card,
+:root .ak-modal,
+:root .side-item,
+:root .pl-item {
+  border-radius: 8px;
+}
+:root .card,
+:root .stat-box,
+:root .mc,
+:root .add-pick,
+:root .toggle-row,
+:root .menu-card {
+  border-color: #44475a;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+:root .keytag {
+  border-radius: 4px;
+  padding: 0.125rem 0.4375rem;
+}
+:root button { border-radius: 8px; }
+:root input,
+:root select,
+:root .pd-field .val {
+  border-radius: 8px;
+}
+
+/* ===== v2.2 — icons, interaction light, motion ===== */
+
+/* 5. icons: 1.6px round strokes, 16.8px, glow only on the current item */
+:root .side-item svg,
+:root .bottom-nav .bn-item svg,
+:root .iconbtn svg,
+:root .lang-toggle svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+:root .side-item.active svg,
+:root .bottom-nav .bn-item.active svg {
+  color: #bd93f9;
+  filter: drop-shadow(0 0 4px rgba(189, 147, 249, 0.55));
+}
+
+/* 6. motion: four explicit properties, never `all` */
+:root .side-item,
+:root .pl-item,
+:root .chip,
+:root .iconbtn,
+:root button,
+:root input,
+:root select,
+:root .pd-field .val,
+:root .erow .eval,
+:root .ak-key-input,
+:root .card,
+:root .stat-box,
+:root .toggle-row,
+:root .menu-card {
+  transition: background-color 0.15s, border-color 0.15s,
+    box-shadow 0.15s, filter 0.15s;
+}
+:root .mc,
+:root .add-pick {
+  transition: background-color 0.15s, border-color 0.15s,
+    box-shadow 0.15s, filter 0.15s, transform 0.15s;
+}
+
+/* 7. the only neon: selected nav row, selected chip, active theme card,
+   and a hovered button. Everything else stays matte. */
+:root .side-item.active,
+:root .side-item.active:hover {
+  background: var(--color-interactive-selected-bg);
+  color: var(--color-text-primary);
+  border-color: transparent;
+  box-shadow:
+    inset 3px 0 0 #bd93f9,
+    0 0 0 1px #bd93f9,
+    0 0 12px rgba(189, 147, 249, 0.28);
+}
+:root .chip.active,
+:root .chip.active:hover {
+  background: var(--color-interactive-selected-bg);
+  border-color: #bd93f9;
+  color: var(--color-text-primary);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px #bd93f9, 0 0 12px rgba(189, 147, 249, 0.28);
+}
+:root .mc.theme-card.active,
+:root .mc.theme-card.active:hover {
+  border-color: #bd93f9;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 0 0 1px #bd93f9,
+    0 0 12px rgba(189, 147, 249, 0.28);
+}
+:root button:hover {
+  border-color: #bd93f9;
+  box-shadow: 0 0 0 1px #bd93f9, 0 0 12px rgba(189, 147, 249, 0.28);
+}
+:root button.primary {
+  color: var(--color-text-on-action);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+:root button.primary:hover {
+  background: var(--color-action-primary-hover);
+  border-color: var(--color-action-primary-hover);
+  color: var(--color-text-on-action);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 0 0 1px #bd93f9,
+    0 0 12px rgba(189, 147, 249, 0.28);
+}
+:root button.primary:active {
+  background: var(--color-action-primary-active);
+  border-color: var(--color-action-primary-active);
+  color: var(--color-text-on-action);
+  box-shadow: inset 0 2px 4px rgba(40, 42, 54, 0.35);
+}
+
+/* composite controls keep their own quiet hover */
+:root .subtabs button:hover,
+:root .bottom-nav .bn-item:hover,
+:root .ak-paste:hover,
+:root button.ghost:hover {
+  box-shadow: none;
+}
+:root .subtabs button:hover {
+  border-color: transparent;
+  background: transparent;
+}
+:root .bottom-nav .bn-item:hover,
+:root .bottom-nav .bn-item:active {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-link);
+  transform: none;
+}
+:root .ak-paste:hover {
+  border-color: transparent;
+  background: var(--color-surface-sunken);
+  color: var(--color-text-link);
+}
+:root button.ghost:hover {
+  border-color: transparent;
+  background: var(--color-surface-raised);
+  color: var(--color-text-link);
+}
+
+/* inputs: purple focus without the old pink wash */
+:root input:not([type="checkbox"]):focus,
+:root select:focus,
+:root .pd-field .val:focus,
+:root .ak-key-input:focus {
+  border-color: #bd93f9;
+  box-shadow: 0 0 0 1px #bd93f9, 0 0 12px rgba(189, 147, 249, 0.22);
+}
+:root .erow .eval:focus {
+  border-color: #bd93f9;
+  background: var(--color-surface-raised);
+  box-shadow: 0 0 0 1px rgba(189, 147, 249, 0.55);
+}
+:root input[type="checkbox"] { accent-color: var(--color-action-primary); }
+
+/* Dracula selection: literal current-line + foreground */
+:root ::selection {
+  background: #44475a;
+  color: #f8f8f2;
+}
+
+/* ===== v2.3 — structure & texture: the console reads like an editor =====
+   Deltas over v2.1/v2.2: cell gutters tighten to 8px 10px, the bottom nav
+   joins the motion set, .elbl joins the tracked mono labels, and the modal
+   border drops to the same current-line hairline the cards use. The token
+   block above is untouched; no position/display/width/height changes, no
+   margins moved (the 24px group air is the same 24px, just written in px). */
+
+/* 8. type: mono labels at 12px with editor tracking; figures line up.
+   --font-sans already leads with "JetBrains Mono"; it keeps the self-hosted
+   Sarasa CJK face behind it so Chinese stays on the mono grid. */
+:root body {
+  line-height: 1.65;
+}
+:root .section-title,
+:root .erow .elbl,                 /* base sheet styles .erow .elbl, so match it */
+:root th {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;              /* 12px */
+  letter-spacing: 0.07em;
+}
+:root .stat-box .num,
+:root td.num,
+:root .mc-meta b {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 9. shape: one 8px radius, one #44475a hairline for every static surface.
+   Static chrome stays matte — only a selected state is allowed to emit light. */
+:root .card,
+:root .mc,
+:root .add-pick,
+:root .stat-box,
+:root .ak-modal {
+  border-radius: 8px;
+  border: 1px solid #44475a;
+}
+/* selected chip / current theme card: purple ring + 12px bloom */
+:root .chip.active,
+:root .chip.active:hover,
+:root .mc.theme-card.active,
+:root .mc.theme-card.active:hover {
+  box-shadow: 0 0 0 1px #bd93f9, 0 0 12px rgba(189, 147, 249, 0.28);
+}
+/* sidebar current row: 3px purple spine + the same ring and bloom in ONE
+   declaration, so the spine and the glow can never overwrite each other */
+:root .side-item.active,
+:root .side-item.active:hover {
+  box-shadow:
+    inset 3px 0 0 #bd93f9,
+    0 0 0 1px #bd93f9,
+    0 0 12px rgba(189, 147, 249, 0.28);
+}
+
+/* 10. density: 18px card padding, 8px 10px cell gutters, 24px above a heading.
+   Every .section-title is the first child of its .section, so the 24px of air
+   lives on the wrapper — adding it to the title as well would double to 48px. */
+:root .card-pad {
+  padding: 18px;
+}
+:root td,
+:root th {
+  padding: 8px 10px;
+}
+:root .section {
+  margin-top: 24px;
+}
+:root .section:first-child {
+  margin-top: 0;
+}
+
+/* 11. icons: 1.6px round strokes at 16.8px; only the current nav item glows */
+:root .side-item svg,
+:root .bottom-nav .bn-item svg,
+:root .iconbtn svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+:root .side-item.active svg {
+  filter: drop-shadow(0 0 4px rgba(189, 147, 249, 0.55));
+}
+
+/* 12. motion: four explicit properties, never `all` */
+:root button,
+:root .iconbtn,
+:root .side-item,
+:root .bottom-nav .bn-item,
+:root .chip,
+:root .mc,
+:root .add-pick {
+  transition: background-color 0.15s, border-color 0.15s,
+    box-shadow 0.15s, filter 0.15s;
+}
+:root button.primary {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+::selection,
+:root ::selection {
+  background: #44475a;
+  color: #f8f8f2;
 }
