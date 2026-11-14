@@ -135,6 +135,16 @@ fn default_max_transport_retries() -> u32 {
     24
 }
 
+/// Inactivity timeout that still allows a long-context prefill to complete.
+fn default_upstream_read_timeout_secs() -> u64 {
+    300
+}
+
+/// Total upstream timeout (streams may legitimately run for many minutes).
+fn default_upstream_total_timeout_secs() -> u64 {
+    900
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
     #[serde(default = "crate::new_id")]
@@ -381,6 +391,22 @@ pub struct Config {
     /// Default 24 — enough to walk a 17-key pool twice.
     #[serde(default = "default_max_transport_retries")]
     pub max_transport_retries: u32,
+    /// Upstream inactivity timeout, in seconds — the longest the gateway waits
+    /// for the next byte before treating the connection as stalled.
+    ///
+    /// This is measured from the moment the request is sent, so it has to cover
+    /// the provider's **prefill**: with a 400K-token prompt the upstream can sit
+    /// silently for minutes before returning response headers. The old hard-coded
+    /// 120s cut those requests off and rotated keys, which made long-context
+    /// traffic both slow (each retry re-sent the whole body) and self-defeating
+    /// (every retry hit the same prefill wall). 300s covers the observed worst
+    /// case while still detecting a genuinely dead connection.
+    #[serde(default = "default_upstream_read_timeout_secs")]
+    pub upstream_read_timeout_secs: u64,
+    /// Total upstream request timeout, in seconds. Must exceed the read timeout;
+    /// a stream that keeps emitting bytes can legitimately run for a long time.
+    #[serde(default = "default_upstream_total_timeout_secs")]
+    pub upstream_total_timeout_secs: u64,
     pub auth: AuthSettings,
     pub providers: Vec<Provider>,
     /// Currency -> USD rate (e.g. `{"CNY": 0.14}`), for normalizing `bill_balance`
@@ -417,6 +443,8 @@ impl Default for Config {
             rate_limit_assume_free: true,
             transport_error_cooldown_secs: default_transport_error_cooldown_secs(),
             max_transport_retries: default_max_transport_retries(),
+            upstream_read_timeout_secs: default_upstream_read_timeout_secs(),
+            upstream_total_timeout_secs: default_upstream_total_timeout_secs(),
             auth: AuthSettings::default(),
             providers: Vec::new(),
             currency_rates: std::collections::BTreeMap::new(),

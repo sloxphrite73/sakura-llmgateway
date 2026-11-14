@@ -595,6 +595,26 @@ pub struct SettingsInput {
     /// Bench duration for quota-exhausted keys. None = keep current.
     #[serde(default)]
     pub quota_cooldown_secs: Option<u64>,
+    /// Cap on the window-drain estimate for an ordinary rate-limit 429.
+    /// None = keep current (so an older console can't silently reset it).
+    /// `Some(0)` = no cap (the historical behaviour).
+    #[serde(default)]
+    pub rate_limit_cooldown_secs: Option<u64>,
+    /// Assume a 429'd attempt spent no TPM. None = keep current.
+    #[serde(default)]
+    pub rate_limit_assume_free: Option<bool>,
+    /// Bench duration for transport failures (no upstream quota spent).
+    #[serde(default)]
+    pub transport_error_cooldown_secs: Option<u64>,
+    /// Per-request budget for transport failures.
+    #[serde(default)]
+    pub max_transport_retries: Option<u32>,
+    /// Upstream inactivity timeout — must cover a long-context prefill.
+    #[serde(default)]
+    pub upstream_read_timeout_secs: Option<u64>,
+    /// Total upstream timeout.
+    #[serde(default)]
+    pub upstream_total_timeout_secs: Option<u64>,
 }
 
 pub async fn update_settings(
@@ -618,6 +638,25 @@ pub async fn update_settings(
         }
         if let Some(v) = input.quota_cooldown_secs {
             c.quota_cooldown_secs = v.max(1);
+        }
+        if let Some(v) = input.rate_limit_cooldown_secs {
+            // 0 is the documented "no cap" escape hatch.
+            c.rate_limit_cooldown_secs = if v == 0 { None } else { Some(v.max(1)) };
+        }
+        if let Some(v) = input.rate_limit_assume_free {
+            c.rate_limit_assume_free = v;
+        }
+        if let Some(v) = input.transport_error_cooldown_secs {
+            c.transport_error_cooldown_secs = v.max(1);
+        }
+        if let Some(v) = input.max_transport_retries {
+            c.max_transport_retries = v.max(1);
+        }
+        if let Some(v) = input.upstream_read_timeout_secs {
+            c.upstream_read_timeout_secs = v.max(1);
+        }
+        if let Some(v) = input.upstream_total_timeout_secs {
+            c.upstream_total_timeout_secs = v.max(1);
         }
     });
     ok(cfg)
@@ -1011,6 +1050,13 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
         "max_hold_secs": cfg.max_hold_secs,
         "auth_invalid_secs": cfg.auth_invalid_secs,
         "quota_cooldown_secs": cfg.quota_cooldown_secs,
+        // `null` = uncapped; the console renders 0 in that slot.
+        "rate_limit_cooldown_secs": cfg.rate_limit_cooldown_secs,
+        "rate_limit_assume_free": cfg.rate_limit_assume_free,
+        "transport_error_cooldown_secs": cfg.transport_error_cooldown_secs,
+        "max_transport_retries": cfg.max_transport_retries,
+        "upstream_read_timeout_secs": cfg.upstream_read_timeout_secs,
+        "upstream_total_timeout_secs": cfg.upstream_total_timeout_secs,
         "auth": cfg.auth,
         "api_port": api_port,
         "ui_port": ui_port,

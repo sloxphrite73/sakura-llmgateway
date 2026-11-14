@@ -60,6 +60,13 @@ export interface Status {
   max_hold_secs?: number;
   auth_invalid_secs?: number;
   quota_cooldown_secs?: number;
+  /** null = no cap on the window-drain estimate for a rate-limit 429. */
+  rate_limit_cooldown_secs?: number | null;
+  rate_limit_assume_free?: boolean;
+  transport_error_cooldown_secs?: number;
+  max_transport_retries?: number;
+  upstream_read_timeout_secs?: number;
+  upstream_total_timeout_secs?: number;
   api_port: number;
   ui_port: number;
   auth?: { enabled: boolean; keys: string[] };

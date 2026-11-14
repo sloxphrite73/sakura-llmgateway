@@ -27,6 +27,10 @@ export function SettingsView() {
   const holdRef = useRef<HTMLInputElement>(null);
   const invalidRef = useRef<HTMLInputElement>(null);
   const quotaRef = useRef<HTMLInputElement>(null);
+  const rlCapRef = useRef<HTMLInputElement>(null);
+  const rlFreeRef = useRef<HTMLInputElement>(null);
+  const transportRef = useRef<HTMLInputElement>(null);
+  const readTimeoutRef = useRef<HTMLInputElement>(null);
   const apiPortRef = useRef<HTMLInputElement>(null);
   const uiPortRef = useRef<HTMLInputElement>(null);
   const authRef = useRef<HTMLInputElement>(null);
@@ -48,6 +52,11 @@ export function SettingsView() {
         },
         auth_invalid_secs: +(invalidRef.current ? invalidRef.current.value : 0) || 3600,
         quota_cooldown_secs: +(quotaRef.current ? quotaRef.current.value : 0) || 18000,
+        // 0 = no cap (keep the historical window-drain estimate).
+        rate_limit_cooldown_secs: +(rlCapRef.current ? rlCapRef.current.value : 0),
+        rate_limit_assume_free: !!(rlFreeRef.current && rlFreeRef.current.checked),
+        transport_error_cooldown_secs: +(transportRef.current ? transportRef.current.value : 0) || 1,
+        upstream_read_timeout_secs: +(readTimeoutRef.current ? readTimeoutRef.current.value : 0) || 300,
       });
       await refresh();
       toast(t('已保存'));
@@ -99,6 +108,10 @@ export function SettingsView() {
             <label className="field"><span>{t('全冷却最长等待（秒）')}</span><input ref={holdRef} type="number" defaultValue={s.max_hold_secs != null ? s.max_hold_secs : 120} /></label>
             <label className="field"><span>{t('401/403 异常时长（秒）')}</span><input ref={invalidRef} type="number" defaultValue={s.auth_invalid_secs != null ? s.auth_invalid_secs : 3600} /></label>
             <label className="field"><span>{t('配额耗尽冷却（秒）')}</span><input ref={quotaRef} type="number" defaultValue={s.quota_cooldown_secs != null ? s.quota_cooldown_secs : 18000} /></label>
+            <label className="field"><span>{t('限流冷却上限（秒，0=不限）')}</span><input ref={rlCapRef} type="number" defaultValue={s.rate_limit_cooldown_secs != null ? s.rate_limit_cooldown_secs : 0} /></label>
+            <label className="field"><span>{t('传输失败冷却（秒）')}</span><input ref={transportRef} type="number" defaultValue={s.transport_error_cooldown_secs != null ? s.transport_error_cooldown_secs : 1} /></label>
+            <label className="field"><span>{t('上游读取超时（秒）')}</span><input ref={readTimeoutRef} type="number" defaultValue={s.upstream_read_timeout_secs != null ? s.upstream_read_timeout_secs : 300} /></label>
+            <label className="field"><span>{t('429 视为不消耗配额')}</span><input ref={rlFreeRef} type="checkbox" defaultChecked={!!s.rate_limit_assume_free} /></label>
             <label className="field"><span>{t('API 端口')}</span><input ref={apiPortRef} type="number" defaultValue={s.api_port || 8000} /></label>
             <label className="field"><span>{t('UI 端口')}</span><input ref={uiPortRef} type="number" defaultValue={s.ui_port || 8001} /></label>
           </div>

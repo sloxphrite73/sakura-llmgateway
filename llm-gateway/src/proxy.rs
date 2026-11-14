@@ -1,7 +1,7 @@
 use crate::protocol::{
     self, AnthropicToOpenAiStream, OpenAiToAnthropicStream, Protocol,
 };
-use crate::state::{now_ms, App};
+use crate::state::{mask_key, now_ms, App};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -173,8 +173,9 @@ async fn call_upstream(
     url: &str,
     payload: &serde_json::Value,
 ) -> Result<reqwest::Response, reqwest::Error> {
+    let total = app.read_config().upstream_total_timeout_secs.max(1);
     let builder = apply_upstream_auth(
-        app.http.post(url).timeout(Duration::from_secs(600)),
+        app.http.post(url).timeout(Duration::from_secs(total)),
         key_secret,
         provider.protocol(),
     );
@@ -506,12 +507,24 @@ where
             build_upstream_payload(&inbound_body, inbound, &provider, &row.upstream_model);
         let url = upstream_chat_url(&provider.base_url, upstream_proto);
         // Estimated prompt size with the real BPE tokenizer — used ONLY when the
-        // upstream omits `usage`. Counted once per request (attempt 0) because the
-        // messages are identical across attempts and BPE on a large prompt is not
-        // free. The model name differs per attempt but contributes ~2 tokens.
-        let est_in_tokens: u64 = *est_in.get_or_init(|| {
-            crate::tokenizer::count(&crate::tokenizer::payload_text(&upstream_payload))
-        });
+        // upstream omits `usage`. Counted once per request because the messages are
+        // identical across attempts (the model name differs by ~2 tokens).
+        //
+        // BPE over a 400K-token prompt takes seconds of pure CPU, and running it
+        // inline would block a tokio worker — with a long-context request in flight,
+        // every OTHER request on that worker stalls too, which is indistinguishable
+        // from "the gateway stopped rotating". spawn_blocking keeps the runtime free.
+        let est_in_tokens: u64 = match est_in.get() {
+            Some(v) => *v,
+            None => {
+                let text = crate::tokenizer::payload_text(&upstream_payload);
+                let n = tokio::task::spawn_blocking(move || crate::tokenizer::count(&text))
+                    .await
+                    .unwrap_or(0);
+                let _ = est_in.set(n);
+                n
+            }
+        };
 
         // Timing split: ttfb is "upstream accepted the request and returned
         // response headers". A huge ttfb means the provider queued us; a small
@@ -524,9 +537,40 @@ where
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
-                // Transport failure: the upstream never saw this request, so the key
-                // spent no quota. Refund the pick-time RPM sample, bench the key for
-                // the (short, configurable) transport cooldown, and do NOT charge it
+                // A timeout here is not a network fault: the connection was
+                // established and the request was accepted, the upstream just
+                // never produced a byte within the inactivity window. For long
+                // contexts that is the provider's prefill running long, so rotating
+                // keys cannot help — every retry would re-send the whole prompt
+                // (hundreds of KB) and wait the same wall again, which is exactly
+                // what made big-context requests crawl. Fail fast with an honest
+                // 504 instead, and leave the key untouched: it did nothing wrong.
+                if e.is_timeout() {
+                    app.record_key_stat(false, &row.api_key_id);
+                    app.record_stat(false, Some(&row.api_key_id), &row.provider_id, &row.upstream_model);
+                    crate::rlog!(
+                        "[req] upstream TIMEOUT after {}ms model={} key={} — no byte received within {}s \
+                         (long-context prefill?). Not rotating: the prompt would have to be re-sent.",
+                        ttfb_ms,
+                        row.upstream_model,
+                        mask_key(&row.api_key_id),
+                        cfg.upstream_read_timeout_secs,
+                    );
+                    return error_response_for(
+                        StatusCode::GATEWAY_TIMEOUT,
+                        format!(
+                            "upstream sent nothing for {}s (provider prefill/stall). \
+                             The request was not retried: rotating keys cannot shorten the \
+                             provider's own prefill. Raise upstream_read_timeout_secs if this \
+                             prompt is expected to take longer.",
+                            cfg.upstream_read_timeout_secs
+                        ),
+                        inbound,
+                    );
+                }
+                // Any other transport failure: the upstream never saw this request, so
+                // the key spent no quota. Refund the pick-time RPM sample, bench the key
+                // for the (short, configurable) transport cooldown, and do NOT charge it
                 // to the quota-consuming attempt budget — otherwise a flaky network
                 // burns the whole pool for 5s each and every client request stalls.
                 transport_failures += 1;

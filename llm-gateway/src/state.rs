@@ -496,7 +496,16 @@ mod tests {
     }
 
     fn app_with_provider(learned: Option<u64>, per_key: Option<u64>) -> (App, String) {
-        let dir = std::env::temp_dir().join(format!("rl-test-{}-{:?}-{:?}", std::process::id(), learned, per_key));
+        // Unique per test: two tests with the same (learned, per_key) used to share
+        // this directory, and one's remove_dir_all raced the other's write — a
+        // PermissionDenied that only showed up when the scheduler interleaved them.
+        let dir = std::env::temp_dir().join(format!(
+            "rl-test-{}-{}-{:?}-{:?}",
+            std::process::id(),
+            crate::new_id(),
+            learned,
+            per_key
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let mut cfg = Config::default(); // default_cooldown 60
         cfg.providers.push(crate::config::Provider {
@@ -755,14 +764,22 @@ pub(crate) fn mask_key(k: &str) -> String {
 }
 impl App {
     pub fn new(config: Config, config_path: std::path::PathBuf) -> Self {
+        let read_timeout_secs = config.upstream_read_timeout_secs.max(1);
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             // Per-read inactivity timeout: a stalled upstream (accepted the
-            // connection, never sends a byte) used to block for the whole 600s
-            // request timeout — the user saw a 25-minute "no reaction". 120s of
-            // silence now fails the attempt and rotates to the next key. Long
-            // streams are unaffected: the clock resets on every received byte.
-            .read_timeout(Duration::from_secs(120))
+            // connection, never sends a byte) must eventually fail the attempt
+            // instead of blocking for the whole total timeout — the user once saw
+            // a 25-minute "no reaction".
+            //
+            // It is measured from the send, so it also bounds the wait for
+            // response headers, i.e. the provider's prefill. That is why the value
+            // is configurable and defaults to 300s: a 400K-token prompt routinely
+            // needs minutes before the first byte, and the previous hard-coded
+            // 120s turned every long-context request into a "network error" that
+            // rotated keys and re-sent the whole body. Long streams are unaffected
+            // either way: the clock resets on every received byte.
+            .read_timeout(Duration::from_secs(read_timeout_secs))
             .build()
             .expect("failed to build http client");
         let stats_path = config_path.with_file_name("stats.json");
