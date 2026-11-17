@@ -541,9 +541,11 @@ mod tests {
 
     #[test]
     fn rate_limit_cap_shortens_window_estimate() {
-        // 实验分支核心：窗口推算本来会给 40s+ 的长冷却，rate_limit_cooldown_secs=5
-        // 会把它压到 5s —— 429 在上游不消耗配额，所以短线轮换优于长等。
+        // 长上下文场景的核心开关：窗口推算本来会给几十秒的长冷却，
+        // rate_limit_cooldown_secs=5 会把它压到 5s —— 429 在上游不消耗配额，
+        // 所以短线轮换优于长等。默认值是 None（旧行为），这里显式打开。
         let (app, dir) = app_with_provider(None, None);
+        app.write_config(|c| c.rate_limit_cooldown_secs = Some(5));
         {
             let mut pool = app.pool.lock().unwrap();
             let m = pool.metrics.entry("k".into()).or_default();
@@ -596,7 +598,7 @@ mod tests {
         // the global default applies.
         let (app, dir) = app_with_provider(Some(4), None);
         app.mark_rate_limited("p", "k", None, "r");
-        assert!((4..=5).contains(&cooldown_remaining(&app, "k")), "learned ignored → short cap 5");
+        assert!((59..=60).contains(&cooldown_remaining(&app, "k")), "learned ignored → default 60");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -604,7 +606,7 @@ mod tests {
     fn real_429_default_when_no_window_data() {
         let (app, dir) = app_with_provider(Some(221), None);
         app.mark_rate_limited("p", "k", None, "r");
-        assert!((4..=5).contains(&cooldown_remaining(&app, "k")), "no metrics → short cap 5");
+        assert!((59..=60).contains(&cooldown_remaining(&app, "k")), "no metrics → default 60");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -626,10 +628,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("extend-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let app = App::new(Config::default(), dir.join("gateway.json"));
-        app.mark_rate_limited("p", "k", None, "r"); // 5s（实验分支的短上限）
+        app.mark_rate_limited("p", "k", None, "r"); // 60s (default floor)
         // A shorter probe hold must not shorten the AIMD cooldown.
         app.extend_cooldown_at_least("k", 5);
-        assert!((4..=5).contains(&cooldown_remaining(&app, "k")), "must not shorten");
+        assert!((59..=60).contains(&cooldown_remaining(&app, "k")), "must not shorten");
         // A longer hold extends.
         app.extend_cooldown_at_least("k", 120);
         assert!((119..=120).contains(&cooldown_remaining(&app, "k")), "must extend");

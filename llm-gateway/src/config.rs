@@ -439,8 +439,13 @@ impl Default for Config {
             max_hold_secs: default_max_hold_secs(),
             auth_invalid_secs: default_auth_invalid_secs(),
             quota_cooldown_secs: default_quota_cooldown_secs(),
-            rate_limit_cooldown_secs: Some(5),
-            rate_limit_assume_free: true,
+            // Ship the historical behaviour as the default: capping rate-limit
+            // cooldowns and dropping the "a retry costs another avg_req" term both
+            // raise the number of 429s a request walks through, which is the right
+            // trade for long-context traffic but not for everyone. Opt in via the
+            // settings page (`rate_limit_cooldown_secs` / `rate_limit_assume_free`).
+            rate_limit_cooldown_secs: None,
+            rate_limit_assume_free: false,
             transport_error_cooldown_secs: default_transport_error_cooldown_secs(),
             max_transport_retries: default_max_transport_retries(),
             upstream_read_timeout_secs: default_upstream_read_timeout_secs(),
