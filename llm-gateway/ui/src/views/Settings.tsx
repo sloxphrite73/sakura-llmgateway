@@ -23,7 +23,6 @@ export function SettingsView() {
   const s = state.data.status || ({} as Record<string, any>);
   const { themes, themeId } = state.data;
   const cooldownRef = useRef<HTMLInputElement>(null);
-  const attemptsRef = useRef<HTMLInputElement>(null);
   const holdRef = useRef<HTMLInputElement>(null);
   const invalidRef = useRef<HTMLInputElement>(null);
   const quotaRef = useRef<HTMLInputElement>(null);
@@ -42,7 +41,6 @@ export function SettingsView() {
     try {
       await api('PUT', '/api/settings', {
         default_cooldown_secs: +(cooldownRef.current ? cooldownRef.current.value : 0) || 60,
-        max_attempts: +(attemptsRef.current ? attemptsRef.current.value : 0) || 3,
         max_hold_secs: +(holdRef.current ? holdRef.current.value : 0),
         api_port: +(apiPortRef.current ? apiPortRef.current.value : 0) || 8000,
         ui_port: +(uiPortRef.current ? uiPortRef.current.value : 0) || 8001,
@@ -104,7 +102,6 @@ export function SettingsView() {
         <div className="card card-pad">
           <div className="form-grid">
             <label className="field"><span>{t('默认冷却时间（秒）')}</span><input ref={cooldownRef} type="number" defaultValue={s.default_cooldown_secs != null ? s.default_cooldown_secs : 60} /></label>
-            <label className="field"><span>{t('每请求最大尝试次数')}</span><input ref={attemptsRef} type="number" defaultValue={s.max_attempts != null ? s.max_attempts : 3} /></label>
             <label className="field"><span>{t('全冷却最长等待（秒）')}</span><input ref={holdRef} type="number" defaultValue={s.max_hold_secs != null ? s.max_hold_secs : 120} /></label>
             <label className="field"><span>{t('401/403 异常时长（秒）')}</span><input ref={invalidRef} type="number" defaultValue={s.auth_invalid_secs != null ? s.auth_invalid_secs : 3600} /></label>
             <label className="field"><span>{t('配额耗尽冷却（秒）')}</span><input ref={quotaRef} type="number" defaultValue={s.quota_cooldown_secs != null ? s.quota_cooldown_secs : 18000} /></label>

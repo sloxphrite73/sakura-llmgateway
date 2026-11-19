@@ -35,8 +35,7 @@ pub struct Row {
     pub api_key_id: String,
     pub key_secret: String,
     /// The logical model group id this row belongs to (spec §1). Set on build;
-    /// read by the future dry-run/UI surface + carried for diagnostics.
-    #[allow(dead_code)]
+    /// read by the dry-run surface + carried for diagnostics.
     pub group_id: String,
     // --- runtime (filled by select_strategy from the pool) ---
     /// Not in the `invalid` (401/403-quarantine) map (spec §2.3).
@@ -746,7 +745,6 @@ mod tests {
             key: format!("sk-{id}"),
             display_name: String::new(),
             cooldown_secs: None,
-            learned_cooldown: None,
             seed_rpm: None,
             seed_tpm: None,
             seed_success_rate: None,
@@ -765,7 +763,6 @@ mod tests {
             model_allowlist_only: false,
             aliases: BTreeMap::new(),
             protocol: String::new(),
-            has_token_balance_api: false,
             has_bill_balance_api: false,
             price_table: pa_price,
             output_price_table: BTreeMap::new(),
@@ -781,7 +778,6 @@ mod tests {
             model_allowlist_only: false,
             aliases: BTreeMap::new(),
             protocol: String::new(),
-            has_token_balance_api: false,
             has_bill_balance_api: false,
             price_table: BTreeMap::new(),
             output_price_table: BTreeMap::new(),
@@ -896,7 +892,6 @@ mod tests {
             key: "sk-s1".into(),
             display_name: String::new(),
             cooldown_secs: None,
-            learned_cooldown: None,
             seed_rpm: Some(60),
             seed_tpm: Some(240_000),
             seed_success_rate: Some(0.85),
@@ -912,7 +907,6 @@ mod tests {
             model_allowlist_only: false,
             aliases: BTreeMap::new(),
             protocol: String::new(),
-            has_token_balance_api: false,
             has_bill_balance_api: false,
             price_table: BTreeMap::new(),
             output_price_table: BTreeMap::new(),

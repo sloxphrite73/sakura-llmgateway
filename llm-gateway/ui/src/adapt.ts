@@ -59,8 +59,7 @@ export function adaptAll(
         dname: k.display_name || '',
         valid: !k.invalid, cool: !!k.cooling, cd,
         untilMs: k.cooling ? k.cooling.until_ms : 0,
-        // 生效冷却时长: 每 Key 覆盖 → 全局默认（learned_cooldown 已随探测器
-        // 移除而弃用，PASS §38；冷却主要来自 429 时的窗口推算，不落盘）。
+        // 生效冷却时长: 每 Key 覆盖 → 全局默认（冷却主要来自 429 时的窗口推算，不落盘）。
         cdDur: k.cooldown_secs != null ? k.cooldown_secs
              : ((status && status.default_cooldown_secs != null) ? status.default_cooldown_secs : 0),
         masked: k.key || '••••',

@@ -66,10 +66,6 @@ pub struct ApiKey {
     /// Per-key cooldown override in seconds. `None` = use global default.
     #[serde(default)]
     pub cooldown_secs: Option<u64>,
-    /// Cooldown in seconds learned by post-429 probing. Machine-written, distinct from
-    /// the user-set `cooldown_secs`; beats it in cooldown resolution order.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub learned_cooldown: Option<u64>,
     // --- metric seeds (spec §2.2 "手动 seed + 自动覆盖"): pre-set initial values
     // used only while a key has no live measurement history (fill_rows `None`
     // branch leaves the skeleton; the `Some(m)` branch overwrites with live
@@ -167,13 +163,6 @@ pub struct Provider {
     /// Auth header, request path and body format all follow from this.
     #[serde(default)]
     pub protocol: String,
-    /// Whether this upstream exposes a token-balance/quota API the gateway can poll
-    /// (fills the `token_balance` strategy sort attribute, spec §2.2). `false` (default)
-    /// = treat as unlimited (+∞ per spec); the gateway skips polling. Of the free
-    /// catalog only Mistral could (indirectly, via admin rate-limit) — low value, so
-    /// effectively always +∞. See doc/research/provider-balance-apis.md.
-    #[serde(default)]
-    pub has_token_balance_api: bool,
     /// Whether this upstream exposes a bill/credit balance API (fills the
     /// `bill_balance` sort attribute, spec §2.2). `false` (default) = +∞, skip polling.
     /// Tier A (same key as inference): Moonshot / SiliconFlow / Novita / Requesty /
@@ -254,29 +243,6 @@ pub enum SortKey {
     K, // availability      desc (smoothed success_rate × capacity headroom)
 }
 
-impl SortKey {
-    /// Parse a single letter (case-insensitive) into a `SortKey`. Used by the
-    /// `PUT /api/strategy` write path (impl-spec §8); serde handles the
-    /// deserialize side for config files.
-    #[allow(dead_code)]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_uppercase().as_str() {
-            "A" => Some(Self::A),
-            "B" => Some(Self::B),
-            "C" => Some(Self::C),
-            "D" => Some(Self::D),
-            "E" => Some(Self::E),
-            "F" => Some(Self::F),
-            "G" => Some(Self::G),
-            "H" => Some(Self::H),
-            "I" => Some(Self::I),
-            "J" => Some(Self::J),
-            "K" => Some(Self::K),
-            _ => None,
-        }
-    }
-}
-
 /// Two filter toggles (spec §4) that shrink the full `(provider, model, key)`
 /// table to a candidate subset. Defaults are both `true` = the north-compat
 /// "exact (provider, model), only round keys" = current gateway behavior.
@@ -340,8 +306,6 @@ pub struct Config {
     pub ui_port: u16,
     /// Default cooldown for a 429'd key (when neither Retry-After nor per-key override exists).
     pub default_cooldown_secs: u64,
-    /// Max attempts per client request (retry on 429/5xx/timeout before first byte).
-    pub max_attempts: u32,
     /// Zero-failure mode (PASS §38): when every valid key is cooling, hold the
     /// request until the soonest key recovers instead of 429ing the client —
     /// bounded by this total hold budget (seconds). 0 = never hold (old
@@ -387,7 +351,7 @@ pub struct Config {
     pub transport_error_cooldown_secs: u64,
     /// How many transport failures ONE client request may absorb before giving
     /// up. These failures cost no upstream quota, so the per-request budget is
-    /// separate from `max_attempts` (which counts quota-consuming attempts).
+    /// separate from the hold budget (`max_hold_secs`).
     /// Default 24 — enough to walk a 17-key pool twice.
     #[serde(default = "default_max_transport_retries")]
     pub max_transport_retries: u32,
@@ -435,7 +399,6 @@ impl Default for Config {
             api_port: 8000,
             ui_port: 8001,
             default_cooldown_secs: 60,
-            max_attempts: 3,
             max_hold_secs: default_max_hold_secs(),
             auth_invalid_secs: default_auth_invalid_secs(),
             quota_cooldown_secs: default_quota_cooldown_secs(),

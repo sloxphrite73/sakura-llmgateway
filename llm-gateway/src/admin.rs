@@ -26,8 +26,6 @@ pub struct ProviderInput {
     pub model_allowlist_only: Option<bool>,
     /// `"openai"` (default) or `"anthropic"` — the wire protocol this upstream speaks.
     pub protocol: Option<String>,
-    /// Whether this upstream exposes a pollable token-balance API (spec §2.2).
-    pub has_token_balance_api: Option<bool>,
     /// Whether this upstream exposes a pollable bill/credit-balance API (spec §2.2).
     pub has_bill_balance_api: Option<bool>,
 }
@@ -49,7 +47,6 @@ pub async fn create_provider(
             model_allowlist_only: input.model_allowlist_only.unwrap_or(false),
             aliases: Default::default(),
             protocol: input.protocol.unwrap_or_default(),
-            has_token_balance_api: input.has_token_balance_api.unwrap_or(false),
             has_bill_balance_api: input.has_bill_balance_api.unwrap_or(false),
             price_table: Default::default(),
             output_price_table: Default::default(),
@@ -75,9 +72,6 @@ pub async fn update_provider(
             }
             if let Some(protocol) = &input.protocol {
                 p.protocol = protocol.clone();
-            }
-            if let Some(v) = input.has_token_balance_api {
-                p.has_token_balance_api = v;
             }
             if let Some(v) = input.has_bill_balance_api {
                 p.has_bill_balance_api = v;
@@ -211,7 +205,6 @@ pub async fn add_key(
                 key: input.key.trim().to_string(),
                 display_name: input.display_name.trim().to_string(),
                 cooldown_secs: input.cooldown_secs,
-                learned_cooldown: None,
                 seed_rpm: input.seed_rpm,
                 seed_tpm: input.seed_tpm,
                 seed_success_rate: input.seed_success_rate,
@@ -580,7 +573,6 @@ pub async fn set_model_images(
 #[derive(serde::Deserialize)]
 pub struct SettingsInput {
     pub default_cooldown_secs: u64,
-    pub max_attempts: u32,
     #[serde(default)]
     pub max_hold_secs: Option<u64>,
     pub auth: AuthSettings,
@@ -623,7 +615,6 @@ pub async fn update_settings(
 ) -> Response {
     let cfg = app.write_config(|c| {
         c.default_cooldown_secs = input.default_cooldown_secs.max(1);
-        c.max_attempts = input.max_attempts.clamp(1, 10);
         if let Some(h) = input.max_hold_secs {
             c.max_hold_secs = h;
         }
@@ -738,9 +729,9 @@ pub async fn import_config(
 /// POST /api/config/import-legacy — selective merge for migrating a pre-UI-refactor
 /// gateway config into the current one. Parses the imported config (lenient — serde
 /// defaults fill the new fields the old config lacks), then adopts ONLY its
-/// `providers` (which carry keys + models + `learned_cooldown`). The current global
-/// settings (ports/auth/cooldown/max_attempts/strategy/model_groups/currency_rates)
-/// are kept untouched — only provider data is replaced.
+/// `providers` (which carry keys + models). The current global settings
+/// (ports/auth/cooldown/strategy/model_groups/currency_rates) are kept
+/// untouched — only provider data is replaced.
 pub async fn import_legacy_config(
     State(app): State<std::sync::Arc<App>>,
     Json(input): Json<ImportConfigInput>,
@@ -989,7 +980,6 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                         "key": mask(&k.key),
                         "display_name": k.display_name,
                         "cooldown_secs": k.cooldown_secs,
-                        "learned_cooldown": k.learned_cooldown,
                         "seed_rpm": k.seed_rpm,
                         "seed_tpm": k.seed_tpm,
                         "seed_success_rate": k.seed_success_rate,
@@ -1024,7 +1014,6 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
                 "protocol": p.protocol,
                 "aliases": p.aliases,
                 "model_allowlist_only": p.model_allowlist_only,
-                "has_token_balance_api": p.has_token_balance_api,
                 "has_bill_balance_api": p.has_bill_balance_api,
                 "rpm_limit": p.rpm_limit,
                 "tpm_limit": p.tpm_limit,
@@ -1046,7 +1035,6 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
         "version": env!("GATEWAY_VERSION"),
         "now_ms": now_ms(),
         "default_cooldown_secs": cfg.default_cooldown_secs,
-        "max_attempts": cfg.max_attempts,
         "max_hold_secs": cfg.max_hold_secs,
         "auth_invalid_secs": cfg.auth_invalid_secs,
         "quota_cooldown_secs": cfg.quota_cooldown_secs,

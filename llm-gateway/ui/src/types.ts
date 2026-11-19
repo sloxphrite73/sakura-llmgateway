@@ -56,7 +56,6 @@ export interface ServerProvider {
 export interface Status {
   providers: ServerProvider[];
   default_cooldown_secs?: number;
-  max_attempts?: number;
   max_hold_secs?: number;
   auth_invalid_secs?: number;
   quota_cooldown_secs?: number;

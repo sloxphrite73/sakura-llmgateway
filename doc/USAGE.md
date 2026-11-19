@@ -107,9 +107,6 @@ dark/light + EN/中文, persisted to localStorage). By section:
 
 - **Default cooldown (seconds)** — how long a 429'd key rests when the upstream
   sends no `Retry-After` and the key has no override (default 60).
-- **Max attempts per request** — retry budget multiplier (default 3). The
-  effective budget is `max_attempts × number of keys`, so a request only fails
-  after every available key has been tried.
 - **API port / UI port** — take effect after a restart.
 - **Local API auth** — off by default. When enabled, agents must present one of
   the configured keys as a Bearer token on `/v1/*`.
@@ -180,8 +177,8 @@ always displayed masked (head + tail visible); click **Show** to reveal the full
 
 Each row shows:
 
-- **Smart cooldown** — each key's effective cooldown (`learned_cooldown` → per-key
-  `cooldown_secs` → global default).
+- **Smart cooldown** — each key's effective cooldown (per-key `cooldown_secs` →
+  global default).
 - **Status** — Available / Cooling · Xs left / Invalid; the page polls `/api/status`
   **once per second** and surgically updates the status, cooldown countdown, request
   count and error cells, so the countdown ticks down live and keys flip
@@ -302,14 +299,13 @@ api_key_id)` triple table and, per request:
 5. **Terminal**:
    - routed → serve that `(provider, model, api_key_id)`;
    - no valid+non-cooled but valid rows exist (all cooling) → `429` +
-     `Retry-After: min(remaining_secs)` (precise seconds from the measured
-     `learned_cooldown` — the differentiator vs fixed-cooldown routers);
+     `Retry-After: min(remaining_secs)` (precise seconds — the differentiator
+     vs fixed-cooldown routers);
    - no valid row → `429` (no Retry-After; invalid keys don't recover by
      waiting);
    - empty candidate set → `429`.
 
-`learned_cooldown` (§4.1) feeds `cold`/`remaining_secs` **orthogonally** — the
-strategy layer only reads it. **Model groups** (`model_groups` in the config) let
+**Model groups** (`model_groups` in the config) let
 "model-first" fall back across providers: a group is the *same* logical model
 offered by one or more providers (e.g. `gpt-4o` = `{openai/gpt-4o, azure/gpt-4o}`);
 each model belongs to exactly one group.
@@ -428,7 +424,6 @@ through byte-for-byte.
   "api_port": 8000,
   "ui_port": 8001,
   "default_cooldown_secs": 60,
-  "max_attempts": 3,
   "auth": { "enabled": false, "keys": [] },
   "strategy": {
     "filter": { "lock_model_group": true, "lock_provider": true },
@@ -462,7 +457,6 @@ through byte-for-byte.
 |---|---|
 | `api_port` / `ui_port` | Local API and console ports (restart to apply) |
 | `default_cooldown_secs` | 429 cooldown when no `Retry-After` and no per-key override |
-| `max_attempts` | Retry budget multiplier (effective budget = × key count) |
 | `auth` | Optional Bearer auth for the local `/v1` API |
 | `keys[].cooldown_secs` | Per-key cooldown override; `null` = global default |
 | `keys[].seed_*` | Preset initial metrics (`seed_rpm`/`seed_tpm`/`seed_success_rate`/`seed_avg_tftt_ms`/`seed_tps`); auto-overridden once the key serves traffic. All optional, see §4.3 |

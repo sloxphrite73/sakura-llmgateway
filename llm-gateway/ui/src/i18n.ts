@@ -65,7 +65,7 @@ const EN: Record<string, string> = {
   '成功':'Success', '失败':'Fail', 'Token 消耗':'Tokens',
   '{h}:00 · 成功 {ok} / 失败 {fail}':'{h}:00 · {ok} ok / {fail} fail', '{h}:00 · {n} tok':'{h}:00 · {n} tok',
   '全局设置 · 端口修改后重启生效':'Global settings · port changes need restart', '基本':'Basic',
-  '默认冷却时间（秒）':'Default cooldown (s)', '每请求最大尝试次数':'Max attempts per request', 'API 端口':'API port', 'UI 端口':'UI port',
+  '默认冷却时间（秒）':'Default cooldown (s)', 'API 端口':'API port', 'UI 端口':'UI port',
   '启用本地 API 鉴权':'Enable local API auth', '鉴权 Key，逗号分隔':'Auth keys, comma-separated', '保存设置':'Save settings',
   '全冷却最长等待（秒）':'Max hold when all cooling (s)',
   '401/403 异常时长（秒）':'401/403 bench time (s)', '配额耗尽冷却（秒）':'Quota-exhausted cooldown (s)',

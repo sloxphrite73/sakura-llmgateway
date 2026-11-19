@@ -83,8 +83,7 @@ fn error_response_for(status: StatusCode, message: String, inbound: Protocol) ->
 
 /// Like `error_response_for`, but attaches a `Retry-After` header (delta-seconds)
 /// when given — used for the spec §6 "all-cooling" 429 so the client learns the
-/// soonest a valid key recovers (learned_cooldown-driven; the OmniRoute
-/// differentiator: precise seconds, not a fixed dead value).
+/// soonest a valid key recovers (precise seconds, not a fixed dead value).
 fn error_response_with_retry(
     status: StatusCode,
     message: String,
@@ -431,8 +430,8 @@ where
 
     // No attempt counter: every failed attempt marks its key cooling/invalid,
     // so the ready set strictly shrinks between holds, and each hold strictly
-    // spends the hold budget — the loop always terminates (PASS §38). The
-    // legacy max_attempts budget is superseded by the hold budget.
+    // spends the hold budget — the loop always terminates (PASS §38). The old
+    // per-request attempts budget was superseded by the hold budget.
     let mut held_ms = 0u64;
     // Transport failures cost no upstream quota, so they get their own budget.
     let mut transport_failures = 0u32;

@@ -378,7 +378,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // SettingsInput is a full-settings write — resend current values + theme.
       await api('PUT', '/api/settings', {
         default_cooldown_secs: s.default_cooldown_secs ?? 60,
-        max_attempts: s.max_attempts ?? 3,
         max_hold_secs: s.max_hold_secs ?? 120,
         auth: s.auth || { enabled: false, keys: [] },
         api_port: s.api_port || 8000,
