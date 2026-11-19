@@ -182,6 +182,70 @@ async fn call_upstream(
 }
 
 // ---------------------------------------------------------------------------
+// Upstream body plumbing: classic passes an untouched response; the TTFT
+// hedge passes a winner whose first chunk the first-byte race already read.
+// ---------------------------------------------------------------------------
+
+/// Copy the upstream headers we forward on success (skipping length/encoding
+/// — the gateway re-chunks the body).
+fn upstream_headers(resp: &reqwest::Response) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    for (name, value) in resp.headers() {
+        if name == reqwest::header::CONTENT_LENGTH || name == reqwest::header::TRANSFER_ENCODING {
+            continue;
+        }
+        if let (Ok(n), Ok(v)) = (
+            axum::http::HeaderName::from_bytes(name.as_str().as_bytes()),
+            axum::http::HeaderValue::from_bytes(value.as_bytes()),
+        ) {
+            headers.insert(n, v);
+        }
+    }
+    headers
+}
+
+enum UpstreamBody {
+    /// Classic: the untouched response.
+    Response(reqwest::Response),
+    /// Hedge winner: the first body chunk (already read — that byte won the
+    /// TTFT race) followed by the rest of the stream.
+    Chained {
+        first: axum::body::Bytes,
+        rest: futures_util::stream::BoxStream<'static, Result<axum::body::Bytes, reqwest::Error>>,
+    },
+}
+
+impl UpstreamBody {
+    /// Buffered read (non-streaming clients): collect every byte.
+    async fn into_bytes(self) -> Result<axum::body::Bytes, reqwest::Error> {
+        match self {
+            UpstreamBody::Response(r) => r.bytes().await,
+            UpstreamBody::Chained { first, mut rest } => {
+                let mut buf = first.to_vec();
+                while let Some(chunk) = rest.next().await {
+                    buf.extend_from_slice(&chunk?);
+                }
+                Ok(axum::body::Bytes::from(buf))
+            }
+        }
+    }
+
+    /// Streaming read: the full body as one stream (first chunk first).
+    fn into_stream(
+        self,
+    ) -> futures_util::stream::BoxStream<'static, Result<axum::body::Bytes, reqwest::Error>> {
+        match self {
+            UpstreamBody::Response(r) => r.bytes_stream().boxed(),
+            UpstreamBody::Chained { first, rest } => {
+                futures_util::stream::once(async move { Ok(first) })
+                    .chain(rest)
+                    .boxed()
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // POST /v1/chat/completions
 // ---------------------------------------------------------------------------
 
@@ -198,8 +262,8 @@ pub async fn chat_completions(
         app,
         body,
         Protocol::OpenAi,
-        |app, payload, provider_id, key_id, client_model, is_stream, est_in, ttfb_ms| {
-            finish_openai(app, payload, provider_id, key_id, client_model, is_stream, est_in, ttfb_ms)
+        |app, headers, body, provider_id, key_id, client_model, is_stream, est_in, ttfb_ms| {
+            finish_openai(app, headers, body, provider_id, key_id, client_model, is_stream, est_in, ttfb_ms)
         },
     )
     .await
@@ -222,8 +286,8 @@ pub async fn anthropic_messages(
         app,
         body,
         Protocol::Anthropic,
-        |app, payload, provider_id, key_id, client_model, is_stream, est_in, ttfb_ms| {
-            finish_anthropic(app, payload, provider_id, key_id, client_model, is_stream, est_in, ttfb_ms)
+        |app, headers, body, provider_id, key_id, client_model, is_stream, est_in, ttfb_ms| {
+            finish_anthropic(app, headers, body, provider_id, key_id, client_model, is_stream, est_in, ttfb_ms)
         },
     )
     .await
@@ -356,7 +420,7 @@ async fn forward<F, Fut>(
     finish: F,
 ) -> Response
 where
-    F: FnOnce(Arc<App>, reqwest::Response, String, String, String, bool, u64, u64) -> Fut,
+    F: FnOnce(Arc<App>, HeaderMap, UpstreamBody, String, String, String, bool, u64, u64) -> Fut,
     Fut: std::future::Future<Output = Response>,
 {
     use crate::strategy::{build_candidates, SelectResult};
@@ -411,6 +475,9 @@ where
     // the client sees latency, not failure. Total hold bounded by
     // max_hold_secs; beyond it we finally 429 with Retry-After.
     let max_hold_ms = cfg.max_hold_secs.saturating_mul(1000);
+    // Routing mode snapshot (ttft hedge / classic walk) — same policy as the
+    // sort stack: read once, mid-request edits are an edge case.
+    let mode = cfg.strategy.mode;
     // Estimated prompt tokens (real BPE tokenizer), computed at most once per
     // request — lazily, and only used when the upstream omits `usage`.
     let est_in: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
@@ -427,6 +494,40 @@ where
         .first()
         .map(|r| r.upstream_model.clone())
         .unwrap_or_else(|| client_model.clone());
+
+    if mode == crate::config::StrategyMode::Ttft {
+        // The hedge walker needs the BPE estimate up front (every fire shares
+        // the same messages), so compute it once from a representative
+        // payload instead of lazily per attempt like classic.
+        let rep = set.rows[0].clone();
+        let provider0 = app
+            .read_config()
+            .provider_by_id(&rep.provider_id)
+            .map(|p| p.clone());
+        let est_hedge = match &provider0 {
+            Some(p) => {
+                let payload0 =
+                    build_upstream_payload(&inbound_body, inbound, p, &rep.upstream_model);
+                let text = crate::tokenizer::payload_text(&payload0);
+                tokio::task::spawn_blocking(move || crate::tokenizer::count(&text))
+                    .await
+                    .unwrap_or(0)
+            }
+            None => 0,
+        };
+        return forward_hedge(
+            app,
+            inbound_body,
+            inbound,
+            &set,
+            is_stream,
+            est_hedge,
+            stats_model,
+            max_hold_ms,
+            finish,
+        )
+        .await;
+    }
 
     // No attempt counter: every failed attempt marks its key cooling/invalid,
     // so the ready set strictly shrinks between holds, and each hold strictly
@@ -600,7 +701,8 @@ where
             // pass the upstream model id (= the managed model id the UI's model card
             // shows) so per-model request/token/tftt buckets key on mo.id, not the
             // raw client string (which may be "provider/model" or an alias).
-            return finish(app, resp, row.provider_id, row.api_key_id, row.upstream_model.clone(), is_stream, est_in_tokens, ttfb_ms).await;
+            let headers = upstream_headers(&resp);
+            return finish(app, headers, UpstreamBody::Response(resp), row.provider_id, row.api_key_id, row.upstream_model.clone(), is_stream, est_in_tokens, ttfb_ms).await;
         }
 
         // Error before first byte. Rotate to the next key for key-scoped failures
@@ -689,12 +791,473 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// TTFT hedge mode (strategy.mode = "ttft" — the default preset 「TTFT 优先」)
+// ---------------------------------------------------------------------------
+
+/// Hanging-request cap for the hedge pool (spec: 挂着最多五个).
+const HEDGE_MAX_HANGING: usize = 5;
+
+/// Everything a hedge fire needs to know about its row — cloned into the
+/// fire/race tasks and back through events for grading and the finish path.
+#[derive(Clone)]
+struct HedgeCtx {
+    provider_id: String,
+    key_id: String,
+    key_secret: String,
+    upstream_model: String,
+}
+
+/// Result of one fired request at response-header time.
+enum HeadersOutcome {
+    /// Non-429-class success: the response is parked as "hanging" and keeps
+    /// racing for its first body byte (that byte is the TTFT winner trigger).
+    Accepted {
+        ctx: HedgeCtx,
+        headers: HeaderMap,
+        body: reqwest::Response,
+        ttfb_ms: u64,
+    },
+    /// An HTTP error status: graded exactly like the classic walk (429
+    /// quota/rate split, 401/403 invalid, 408/5xx short cooldown; a
+    /// non-rotating 4xx is the request's own fault and fails it entirely).
+    Status {
+        ctx: HedgeCtx,
+        code: u16,
+        retry_after: Option<u64>,
+        snippet: String,
+    },
+    /// Transport-level failure (connect/TLS/send/stall). In hedge mode a
+    /// timeout here is a *candidate* failure, not a request failure — the
+    /// other racing candidates are already past it — so it takes the
+    /// transport-failure budget instead of the classic fast 504.
+    Transport { ctx: HedgeCtx, err: reqwest::Error },
+}
+
+/// Result of a hanging request's first-byte race.
+enum FirstByteOutcome {
+    /// First body byte arrived — this candidate wins the TTFT race.
+    Won {
+        ctx: HedgeCtx,
+        headers: HeaderMap,
+        first: axum::body::Bytes,
+        rest: futures_util::stream::BoxStream<'static, Result<axum::body::Bytes, reqwest::Error>>,
+        ttfb_ms: u64,
+    },
+    /// The body broke before any byte arrived (or the 200 was empty).
+    Broke { ctx: HedgeCtx, err: Option<reqwest::Error> },
+}
+
+/// Walker event: a fire's headers resolved, or a hang's first byte resolved.
+enum HedgeEv {
+    Headers(usize, HeadersOutcome),
+    Hang(u64, FirstByteOutcome),
+}
+
+/// Fire one request and resolve it at response-header time.
+async fn hedge_fire(
+    app: Arc<App>,
+    inbound_body: serde_json::Value,
+    inbound: Protocol,
+    ctx: HedgeCtx,
+) -> HeadersOutcome {
+    // Re-read config per fire: the provider may have been edited since the
+    // candidate set was built (same policy as the classic walk).
+    let cfg = app.read_config();
+    let provider = match cfg.provider_by_id(&ctx.provider_id) {
+        Some(p) => p.clone(),
+        None => {
+            // Provider vanished mid-request: a candidate-local failure.
+            return HeadersOutcome::Status {
+                ctx,
+                code: 503,
+                retry_after: None,
+                snippet: "provider disappeared (edited mid-request)".into(),
+            };
+        }
+    };
+    let payload = build_upstream_payload(&inbound_body, inbound, &provider, &ctx.upstream_model);
+    let url = upstream_chat_url(&provider.base_url, provider.protocol());
+    let t0 = std::time::Instant::now();
+    match call_upstream(&app, &provider, &ctx.key_secret, &url, &payload).await {
+        Err(err) => HeadersOutcome::Transport { ctx, err },
+        Ok(resp) => {
+            let ttfb_ms = t0.elapsed().as_millis() as u64;
+            let status = resp.status();
+            if status.is_success() {
+                let headers = upstream_headers(&resp);
+                HeadersOutcome::Accepted { ctx, headers, body: resp, ttfb_ms }
+            } else {
+                let code = status.as_u16();
+                let retry_after = resp
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(parse_retry_after);
+                let snippet: String =
+                    resp.text().await.unwrap_or_default().chars().take(500).collect();
+                HeadersOutcome::Status { ctx, code, retry_after, snippet }
+            }
+        }
+    }
+}
+
+/// Race a hanging response for its first body byte. The first non-empty chunk
+/// wins the hedge; the already-read chunk is chained back in front of the
+/// rest so the success pipeline sees an unbroken body.
+async fn hedge_race_first_byte(
+    ctx: HedgeCtx,
+    headers: HeaderMap,
+    ttfb_ms: u64,
+    resp: reqwest::Response,
+) -> FirstByteOutcome {
+    let mut stream = resp.bytes_stream();
+    loop {
+        match stream.next().await {
+            None => return FirstByteOutcome::Broke { ctx, err: None },
+            Some(Err(err)) => return FirstByteOutcome::Broke { ctx, err: Some(err) },
+            // Zero-length chunks are not a body byte.
+            Some(Ok(b)) if b.is_empty() => continue,
+            Some(Ok(b)) => {
+                return FirstByteOutcome::Won { ctx, headers, first: b, rest: stream.boxed(), ttfb_ms }
+            }
+        }
+    }
+}
+
+/// Cancel every pending hang — the winner takes the request.
+fn cancel_hanging(hanging: &mut Vec<(u64, tokio::task::JoinHandle<()>)>) {
+    for (_, h) in hanging.drain(..) {
+        h.abort();
+    }
+}
+
+/// Remove a resolved hang and grade a Broke outcome: a key failure — record
+/// it and bench the key briefly so the next round sorts it down.
+fn hang_broke(
+    app: &Arc<App>,
+    hanging: &mut Vec<(u64, tokio::task::JoinHandle<()>)>,
+    id: u64,
+    ctx: HedgeCtx,
+    err: Option<reqwest::Error>,
+) {
+    if let Some(pos) = hanging.iter().position(|(h, _)| *h == id) {
+        let _ = hanging.remove(pos);
+    }
+    app.record_key_stat(false, &ctx.key_id);
+    app.record_stat(false, Some(&ctx.key_id), &ctx.provider_id, &ctx.upstream_model);
+    let reason = match err {
+        Some(e) => format!("hanging response broke before first byte: {e}"),
+        None => "hanging response closed before first byte (empty 200 body)".into(),
+    };
+    app.mark_cooldown(&ctx.provider_id, &ctx.key_id, Some(5), &reason);
+}
+
+/// Grade an error status exactly like the classic walk, minus the 250ms
+/// politeness gap (the hedge spec says a 429 jumps at once). Returns the
+/// request-scoped error response when the failure is the request's own fault.
+fn hedge_grade_status(
+    app: &Arc<App>,
+    ctx: &HedgeCtx,
+    code: u16,
+    retry_after: Option<u64>,
+    snippet: &str,
+    inbound: Protocol,
+) -> Option<Response> {
+    if should_rotate(code) {
+        app.record_key_stat(false, &ctx.key_id);
+        app.record_rotation(&ctx.provider_id);
+        crate::rlog!(
+            "[proxy] hedge rotate: provider={} key={} http={} => {}",
+            ctx.provider_id,
+            crate::state::mask_key(&ctx.key_secret),
+            code,
+            if code == 429 && is_quota_exhausted(snippet) {
+                "quota cooldown"
+            } else if code == 429 {
+                "rate-limit cooldown"
+            } else if code == 401 || code == 403 {
+                "invalid (401/403)"
+            } else {
+                "short cooldown"
+            }
+        );
+        if code == 429 {
+            // Quota exhausted → the configured quota cooldown (an upstream
+            // Retry-After wins); plain rate-limit → the full cooldown chain.
+            let reason = format!("HTTP {code}: {snippet}");
+            if is_quota_exhausted(snippet) {
+                let cfg = app.read_config();
+                let secs = retry_after.unwrap_or(cfg.quota_cooldown_secs).max(1);
+                app.mark_cooldown(&ctx.provider_id, &ctx.key_id, Some(secs), &reason);
+            } else {
+                app.mark_rate_limited(&ctx.provider_id, &ctx.key_id, retry_after, &reason);
+            }
+        } else if code == 401 || code == 403 {
+            let secs = app.read_config().auth_invalid_secs.max(1);
+            let reason = format!("HTTP {code}: {snippet}");
+            app.mark_invalid(&ctx.provider_id, &ctx.key_id, secs, &reason);
+        } else {
+            let reason = format!("HTTP {code}: {snippet}");
+            app.mark_cooldown(&ctx.provider_id, &ctx.key_id, Some(5), &reason);
+        }
+        return None;
+    }
+    // Request-scoped 4xx: identical on every key — fail the whole request.
+    app.record_stat(false, None, &ctx.provider_id, &ctx.upstream_model);
+    Some(error_response_for(
+        StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_GATEWAY),
+        format!("upstream error: {snippet}"),
+        inbound,
+    ))
+}
+
+/// TTFT hedge walker. Per round: K-sorted snapshot → dealt into 2–3 shards,
+/// one pointer each walking its shard (at most one headers-pending request
+/// per shard); a 429/error fires the next row at once; an accepted request
+/// hangs (≤ `HEDGE_MAX_HANGING`) and the pointers keep firing; the first
+/// body byte anywhere wins and cancels everything else. When every pointer
+/// walks out its shard the round re-sorts and deals again — hanging requests
+/// survive across rounds, and a previous round's hang winning mid-round is
+/// taken at once. All-cooling keeps the classic zero-failure hold; a
+/// request-scoped 4xx or the transport budget fails the whole request.
+#[allow(clippy::too_many_arguments)]
+async fn forward_hedge<F, Fut>(
+    app: Arc<App>,
+    inbound_body: serde_json::Value,
+    inbound: Protocol,
+    set: &crate::strategy::CandidateSet,
+    is_stream: bool,
+    est_in_tokens: u64,
+    stats_model: String,
+    max_hold_ms: u64,
+    finish: F,
+) -> Response
+where
+    F: FnOnce(Arc<App>, HeaderMap, UpstreamBody, String, String, String, bool, u64, u64) -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<HedgeEv>();
+    let mut next_hang_id: u64 = 0;
+    // Pending hangs: (id, task). Cancel on win = abort() → the dropped
+    // reqwest stream closes the upstream connection.
+    let mut hanging: Vec<(u64, tokio::task::JoinHandle<()>)> = Vec::new();
+    let mut held_ms = 0u64;
+    let mut transport_failures = 0u32;
+
+    'rounds: loop {
+        let rows = app.ttft_snapshot(set);
+        let fireable: Vec<crate::strategy::Row> =
+            rows.iter().filter(|r| r.valid && r.non_cooled).cloned().collect();
+
+        if fireable.is_empty() {
+            // Nothing new to fire. Pending hangs can still win — wait for one
+            // event, then re-snapshot (a broke hang frees nothing to fire, but
+            // cooldowns may have expired meanwhile).
+            if !hanging.is_empty() {
+                match rx.recv().await {
+                    Some(HedgeEv::Hang(
+                        _,
+                        FirstByteOutcome::Won { ctx, headers, first, rest, ttfb_ms },
+                    )) => {
+                        cancel_hanging(&mut hanging);
+                        app.clear_error(&ctx.key_id);
+                        return finish(
+                            app,
+                            headers,
+                            UpstreamBody::Chained { first, rest },
+                            ctx.provider_id,
+                            ctx.key_id,
+                            ctx.upstream_model,
+                            is_stream,
+                            est_in_tokens,
+                            ttfb_ms,
+                        )
+                        .await;
+                    }
+                    Some(HedgeEv::Hang(id, FirstByteOutcome::Broke { ctx, err })) => {
+                        hang_broke(&app, &mut hanging, id, ctx, err);
+                    }
+                    _ => { /* defensive: no headers are pending in this state */ }
+                }
+                continue 'rounds;
+            }
+            // No hangs and nothing fireable → the §6 terminals.
+            if rows.iter().any(|r| r.valid) {
+                // AllCooling: hold until the soonest valid key recovers.
+                let retry_after =
+                    rows.iter().filter(|r| r.valid).map(|r| r.remaining_secs).min().unwrap_or(0);
+                if retry_after > 0 && held_ms.saturating_add(retry_after * 1000) <= max_hold_ms {
+                    let wait_ms = retry_after.saturating_mul(1000).saturating_add(500);
+                    tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                    held_ms += wait_ms;
+                    continue 'rounds;
+                }
+                app.record_stat(false, None, "unknown", &stats_model);
+                return error_response_with_retry(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "all candidate keys are rate-limited (cooling down)".into(),
+                    inbound,
+                    Some(retry_after).filter(|s| *s > 0),
+                );
+            }
+            if !rows.is_empty() {
+                // NoValid: invalid keys don't recover by waiting.
+                app.record_stat(false, None, "unknown", &stats_model);
+                return error_response_with_retry(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "all candidate keys are invalid (auth-failed)".into(),
+                    inbound,
+                    None,
+                );
+            }
+            app.record_stat(false, None, "unknown", &stats_model);
+            return error_response_with_retry(
+                StatusCode::TOO_MANY_REQUESTS,
+                "no candidate keys available".into(),
+                inbound,
+                None,
+            );
+        }
+
+        let shards = crate::strategy::hedge_deal(fireable);
+        let mut ptr: Vec<usize> = vec![0; shards.len()];
+        let mut inflight: Vec<Option<tokio::task::JoinHandle<()>>> =
+            (0..shards.len()).map(|_| None).collect();
+
+        loop {
+            // Fire everything fireable: at most one headers-pending request
+            // per shard (the pointer walks sequentially — 429 jumps at once),
+            // paused entirely while the hang pool is at its cap.
+            for s in 0..shards.len() {
+                if inflight[s].is_some() || hanging.len() >= HEDGE_MAX_HANGING {
+                    continue;
+                }
+                if ptr[s] < shards[s].len() {
+                    let row = shards[s][ptr[s]].clone();
+                    ptr[s] += 1;
+                    app.note_fired(&row.api_key_id);
+                    let ctx = HedgeCtx {
+                        provider_id: row.provider_id.clone(),
+                        key_id: row.api_key_id.clone(),
+                        key_secret: row.key_secret.clone(),
+                        upstream_model: row.upstream_model.clone(),
+                    };
+                    let app2 = app.clone();
+                    let body2 = inbound_body.clone();
+                    let tx2 = tx.clone();
+                    let shard = s;
+                    inflight[shard] = Some(tokio::spawn(async move {
+                        let out = hedge_fire(app2, body2, inbound, ctx).await;
+                        let _ = tx2.send(HedgeEv::Headers(shard, out));
+                    }));
+                }
+            }
+
+            // Round exhausted: every pointer walked out its shard and nothing
+            // is headers-pending → re-snapshot (K data moved: 429s and failures
+            // landed) and deal a new round. Hangs persist across rounds.
+            if (0..shards.len()).all(|s| ptr[s] >= shards[s].len() && inflight[s].is_none()) {
+                continue 'rounds;
+            }
+
+            let ev = match rx.recv().await {
+                Some(e) => e,
+                None => continue 'rounds, // all senders dropped: nothing racing
+            };
+            match ev {
+                HedgeEv::Headers(s, out) => {
+                    inflight[s] = None;
+                    match out {
+                        HeadersOutcome::Accepted { ctx, headers, body, ttfb_ms } => {
+                            // Accepted: park it in the hang pool, racing first byte.
+                            let id = next_hang_id;
+                            next_hang_id += 1;
+                            let tx2 = tx.clone();
+                            let task = tokio::spawn(async move {
+                                let out = hedge_race_first_byte(ctx, headers, ttfb_ms, body).await;
+                                let _ = tx2.send(HedgeEv::Hang(id, out));
+                            });
+                            hanging.push((id, task));
+                        }
+                        HeadersOutcome::Status { ctx, code, retry_after, snippet } => {
+                            if let Some(resp) =
+                                hedge_grade_status(&app, &ctx, code, retry_after, &snippet, inbound)
+                            {
+                                cancel_hanging(&mut hanging);
+                                for h in inflight.iter_mut().flatten() {
+                                    h.abort();
+                                }
+                                return resp;
+                            }
+                        }
+                        HeadersOutcome::Transport { ctx, err } => {
+                            transport_failures += 1;
+                            app.record_key_stat(false, &ctx.key_id);
+                            app.record_rotation(&ctx.provider_id);
+                            app.refund_attempt(&ctx.key_id);
+                            let reason = format!("network error: {err}");
+                            let secs = app.read_config().transport_error_cooldown_secs.max(1);
+                            app.mark_cooldown(&ctx.provider_id, &ctx.key_id, Some(secs), &reason);
+                            if transport_failures >= app.read_config().max_transport_retries {
+                                app.record_stat(
+                                    false,
+                                    Some(&ctx.key_id),
+                                    &ctx.provider_id,
+                                    &ctx.upstream_model,
+                                );
+                                cancel_hanging(&mut hanging);
+                                for h in inflight.iter_mut().flatten() {
+                                    h.abort();
+                                }
+                                return error_response_for(
+                                    StatusCode::BAD_GATEWAY,
+                                    format!(
+                                        "upstream transport failed {transport_failures} times in one request: {err}"
+                                    ),
+                                    inbound,
+                                );
+                            }
+                        }
+                    }
+                }
+                HedgeEv::Hang(id, out) => match out {
+                    FirstByteOutcome::Won { ctx, headers, first, rest, ttfb_ms } => {
+                        // Winner: cancel every other request and pointer.
+                        cancel_hanging(&mut hanging);
+                        for h in inflight.iter_mut().flatten() {
+                            h.abort();
+                        }
+                        app.clear_error(&ctx.key_id);
+                        return finish(
+                            app,
+                            headers,
+                            UpstreamBody::Chained { first, rest },
+                            ctx.provider_id,
+                            ctx.key_id,
+                            ctx.upstream_model,
+                            is_stream,
+                            est_in_tokens,
+                            ttfb_ms,
+                        )
+                        .await;
+                    }
+                    FirstByteOutcome::Broke { ctx, err } => {
+                        hang_broke(&app, &mut hanging, id, ctx, err);
+                    }
+                },
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Success rendering — OpenAI client
 // ---------------------------------------------------------------------------
 
 fn finish_openai(
     app: Arc<App>,
-    resp: reqwest::Response,
+    headers: HeaderMap,
+    body: UpstreamBody,
     provider_id: String,
     key_id: String,
     client_model: String,
@@ -704,7 +1267,8 @@ fn finish_openai(
 ) -> impl std::future::Future<Output = Response> {
     finish_generic(
         app,
-        resp,
+        headers,
+        body,
         provider_id,
         key_id,
         client_model,
@@ -721,7 +1285,8 @@ fn finish_openai(
 
 fn finish_anthropic(
     app: Arc<App>,
-    resp: reqwest::Response,
+    headers: HeaderMap,
+    body: UpstreamBody,
     provider_id: String,
     key_id: String,
     client_model: String,
@@ -731,7 +1296,8 @@ fn finish_anthropic(
 ) -> impl std::future::Future<Output = Response> {
     finish_generic(
         app,
-        resp,
+        headers,
+        body,
         provider_id,
         key_id,
         client_model,
@@ -747,7 +1313,8 @@ fn finish_anthropic(
 /// protocols differ). Stats and mid-stream interruption handling live here.
 fn finish_generic(
     app: Arc<App>,
-    resp: reqwest::Response,
+    headers: HeaderMap,
+    body: UpstreamBody,
     provider_id: String,
     key_id: String,
     client_model: String,
@@ -757,24 +1324,15 @@ fn finish_generic(
     ttfb_ms: u64,
 ) -> impl std::future::Future<Output = Response> {
     async move {
-        // Headers first — the client must receive them regardless of how the body ends.
-        let mut headers = HeaderMap::new();
-        for (name, value) in resp.headers() {
-            if name == reqwest::header::CONTENT_LENGTH || name == reqwest::header::TRANSFER_ENCODING {
-                continue;
-            }
-            if let (Ok(n), Ok(v)) = (
-                axum::http::HeaderName::from_bytes(name.as_str().as_bytes()),
-                axum::http::HeaderValue::from_bytes(value.as_bytes()),
-            ) {
-                headers.insert(n, v);
-            }
-        }
+        // Headers come from the caller (classic: read off the response; hedge:
+        // captured at accept time) — the client must receive them regardless of
+        // how the body ends.
+        let mut headers = headers;
 
         // --- non-streaming: buffer fully so upstream deaths before completion count as
         // a fail (and never deliver a truncated body as a success).
         if !client_wants_stream {
-            match resp.bytes().await {
+            match body.into_bytes().await {
                 Ok(bytes) => {
                     let parsed: Result<serde_json::Value, _> = serde_json::from_slice(&bytes);
                     let ok = parsed.as_ref().map(|v| v.get("error").is_none()).unwrap_or(true);
@@ -884,7 +1442,7 @@ fn finish_generic(
         if !needs_translation {
             // Same protocol both sides: raw byte passthrough (the old fast path),
             // wrapped in MetricsStream so tftt / usage / tps are still measured.
-            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in, ttfb_ms);
+            let upstream = MetricsStream::new(body.into_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in, ttfb_ms);
             let stream = upstream.map(move |r| match r {
                 Ok(chunk) => Ok::<_, std::io::Error>(chunk),
                 Err(e) => Ok(openai_stream_error_chunk(&e).into_bytes().into()),
@@ -902,7 +1460,7 @@ fn finish_generic(
                 .map(|_| "gateway".to_string())
                 .unwrap_or_else(|| "gateway".to_string());
             let mut state = OpenAiToAnthropicStream::new(model);
-            let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in, ttfb_ms);
+            let upstream = MetricsStream::new(body.into_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in, ttfb_ms);
             let stream = upstream
                 .map(move |r| -> Result<axum::body::Bytes, std::io::Error> {
                     match r {
@@ -923,7 +1481,7 @@ fn finish_generic(
         // Anthropic upstream -> OpenAI client: parse Anthropic SSE events, emit chunks.
         let mut state = AnthropicToOpenAiStream::new();
         let mut buffer: Vec<u8> = Vec::new();
-        let upstream = MetricsStream::new(resp.bytes_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in, ttfb_ms);
+        let upstream = MetricsStream::new(body.into_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in, ttfb_ms);
         let stream = upstream.map(move |r| -> Result<axum::body::Bytes, std::io::Error> {
             match r {
                 Ok(chunk) => Ok(translate_anthropic_chunk(&mut state, &mut buffer, &chunk).into_bytes().into()),

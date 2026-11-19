@@ -524,6 +524,52 @@ pub fn select_preview(
 }
 
 // ---------------------------------------------------------------------------
+// TTFT hedge mode (strategy.mode = "ttft")
+// ---------------------------------------------------------------------------
+
+/// Hedge table order: the fixed `valid ↓` + `non-cooled ↓` leads, then the K
+/// key (availability), ties keep table order. Pure stable sort — the hedge
+/// walker owns per-round shard pointers, so the D1 cursor is not involved.
+pub fn sort_for_ttft(rows: &mut [Row]) {
+    rows.sort_by(|a, b| {
+        b.valid
+            .cmp(&a.valid)
+            .then(b.non_cooled.cmp(&a.non_cooled))
+            .then(
+                b.availability
+                    .partial_cmp(&a.availability)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+}
+
+/// Shard count for the hedge walk (the deal spec): ≥6 rows → 3 shards, 2–5
+/// → 2, 1 → 1, 0 → 0. Two or three parallel pointers is the whole point of
+/// hedging; more would multiply upstream load for little TTFT gain.
+pub fn hedge_shard_count(rows: usize) -> usize {
+    if rows >= 6 {
+        3
+    } else if rows >= 2 {
+        2
+    } else {
+        rows
+    }
+}
+
+/// Deal rows into shards round-robin (row i → shard i % n) so every shard's
+/// head is a top-of-table key: the parallel TTFT race runs between equals.
+/// Contiguous slices would pre-lose shards 2–3 (all weak keys). Callers pass
+/// only valid + non-cooled rows (the snapshot already ordered them away).
+pub fn hedge_deal(rows: Vec<Row>) -> Vec<Vec<Row>> {
+    let n = hedge_shard_count(rows.len());
+    let mut shards: Vec<Vec<Row>> = vec![Vec::new(); n];
+    for (i, r) in rows.into_iter().enumerate() {
+        shards[i % n].push(r);
+    }
+    shards
+}
+
+// ---------------------------------------------------------------------------
 // Tests — pure logic (comparator directions, inf convention, D1 round-robin,
 // north-compat; no pool/config needed).
 // ---------------------------------------------------------------------------
@@ -555,6 +601,44 @@ mod tests {
             capacity_tpm: None,
             availability: 1.0,
         }
+    }
+
+    #[test]
+    fn hedge_shard_count_follows_the_deal_spec() {
+        assert_eq!(hedge_shard_count(0), 0);
+        assert_eq!(hedge_shard_count(1), 1);
+        assert_eq!(hedge_shard_count(2), 2);
+        assert_eq!(hedge_shard_count(5), 2);
+        assert_eq!(hedge_shard_count(6), 3);
+        assert_eq!(hedge_shard_count(30), 3);
+    }
+
+    #[test]
+    fn hedge_deal_interleaves_rows() {
+        // 7 rows → 3 shards; row i lands in shard i%3, so each shard's head
+        // is a top-of-table key (the point of the interleave).
+        let rows: Vec<Row> = (0..7).map(|i| row(&format!("k{i}"), true, true, 0, i)).collect();
+        let shards = hedge_deal(rows);
+        assert_eq!(shards.len(), 3);
+        fn ids(v: &[Row]) -> Vec<&str> {
+            v.iter().map(|r| r.api_key_id.as_str()).collect()
+        }
+        assert_eq!(ids(&shards[0]), vec!["k0", "k3", "k6"]);
+        assert_eq!(ids(&shards[1]), vec!["k1", "k4"]);
+        assert_eq!(ids(&shards[2]), vec!["k2", "k5"]);
+    }
+
+    #[test]
+    fn sort_for_ttft_puts_valid_noncooled_availability_first() {
+        let mut rows = vec![
+            row("cool", true, false, 30, 0), // valid but cooling → after healthy
+            row("dead", false, true, 0, 1),  // invalid → last
+            { let mut r = row("weak", true, true, 0, 2); r.availability = 0.3; r },
+            { let mut r = row("best", true, true, 0, 3); r.availability = 0.9; r },
+        ];
+        sort_for_ttft(&mut rows);
+        let ids: Vec<&str> = rows.iter().map(|r| r.api_key_id.as_str()).collect();
+        assert_eq!(ids, vec!["best", "weak", "cool", "dead"]);
     }
 
     #[test]

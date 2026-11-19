@@ -10,11 +10,13 @@ import { t, tp } from '../i18n';
 import { useApp } from '../store';
 import type { RouteResult } from '../types';
 
-/* Strategy presets — one card applies a whole strategy (filter + sort stack).
-   Empty for now: the definition mechanism (a gateway.json field + an apply
-   endpoint) lands later; with zero presets the grid shows two disabled
-   placeholder slots. */
-const PRESETS: { name: string; sorts: string[] }[] = [];
+/* Strategy presets — display only: the cards show the routing modes
+   (`strategy.mode` in gateway.json); switching is a config edit by design
+   (the UI no longer changes routing strategy). */
+const PRESETS: { id: 'ttft' | 'classic'; name: string; desc: string }[] = [
+  { id: 'ttft', name: 'TTFT 优先', desc: 'K 键排表 · 多路对冲竞速 · 首字节先返回者胜' },
+  { id: 'classic', name: '经典顺序', desc: '排序栈 · 游标轮转 · 逐把尝试' },
+];
 
 export function StrategyView() {
   const { state, derived, ui, runDryRun, pname } = useApp();
@@ -30,19 +32,17 @@ export function StrategyView() {
     <>
       <h2 className="board-title">{t('策略管理')}</h2>
       <div className="section">
-        <div className="section-title">{t('策略预设')} <span className="note">{t('一键应用整套路由策略（过滤器 + 排序栈）')}</span></div>
+        <div className="section-title">{t('策略预设')} <span className="note">{t('路由模式 · 经 gateway.json 的 strategy.mode 切换')}</span></div>
         <div className="preset-grid">
-          {PRESETS.length > 0 ? PRESETS.map(p => (
-            <button type="button" key={p.name} className="preset-card" aria-label={p.name}>
-              <span className="pname">{p.name}</span>
-              <span className="faint" style={{ fontSize: '0.75rem' }}>{p.sorts.join(' → ')}</span>
-            </button>
-          )) : [0, 1].map(i => (
-            <div key={i} className="preset-card is-empty" aria-disabled="true">
-              <span className="pname">{t('未配置预设')}</span>
-              <span className="faint" style={{ fontSize: '0.75rem' }}>{t('预设定义机制将在后续版本开放')}</span>
-            </div>
-          ))}
+          {PRESETS.map(p => {
+            const active = (state.data.strategy?.mode ?? 'ttft') === p.id;
+            return (
+              <div key={p.id} className={'preset-card' + (active ? ' is-active' : '')} aria-disabled="true">
+                <span className="pname">{t(p.name)}{active ? ` · ${t('当前')}` : ''}</span>
+                <span className="faint" style={{ fontSize: '0.75rem' }}>{t(p.desc)}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
       <div className="section">

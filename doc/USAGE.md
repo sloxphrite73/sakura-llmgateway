@@ -155,16 +155,24 @@ API keys are managed from the **API Key** tab (see below), not from the provider
 
 ### Strategy
 
-The **策略 / Strategy** tab shows the routing strategy (see §4.2):
+The **策略 / Strategy** tab shows the routing mode (`strategy.mode` in
+`gateway.json`; the UI does not change routing strategy — edit the config or
+import one):
 
-- **Strategy presets** — cards that apply a whole strategy (filter toggles +
-  sort stack) with one click. Preset definitions open in a later version
-  (unconfigured slots render as placeholders); to change the strategy today,
-  edit `strategy.filter` / `strategy.sort` in `gateway.json` or import a
-  config file.
+- **TTFT first (`ttft`, the default)** — the table is K-sorted, dealt into 2–3
+  shards each walked by its own pointer in parallel; a 429 skips to the next
+  row at once, an accepted (non-429) request hangs (≤5) while the pointers
+  keep firing other keys; the first response body byte wins and everything
+  else is cancelled. A fully-walked table re-sorts (K data updated by the
+  failures) and starts a new round; hanging requests survive across rounds;
+  all-cooling keeps the max-hold budget. Note: hedging sends one request to
+  several keys at once — on free-tier pools that is the point, on paid
+  upstreams it burns real money.
+- **Classic (`classic`)** — the sequential filter + sort-stack + cursor walk
+  (see §4.2).
 - **Dry-run preview** — pick a model (+ optional provider) and run a simulated
-  route: it shows the routed key and the full candidate list with each key's
-  valid/cooling/remaining state and metrics.
+  route (classic semantics): it shows the routed key and the full candidate
+  list with each key's valid/cooling/remaining state and metrics.
 
 ### API Key page
 
@@ -460,8 +468,9 @@ through byte-for-byte.
 | `keys[].cooldown_secs` | Per-key cooldown override; `null` = global default |
 | `keys[].seed_*` | Preset initial metrics (`seed_rpm`/`seed_tpm`/`seed_success_rate`/`seed_avg_tftt_ms`/`seed_tps`); auto-overridden once the key serves traffic. All optional, see §4.3 |
 | `providers[].rpm_limit` / `tpm_limit` | Manual RPM/TPM cap; `null` = no cap (console shows the live auto-detected aggregate) |
+| `strategy.mode` | Routing mode: `ttft` (default, hedged racing) / `classic` (sequential walk) |
 | `strategy.filter` | `lock_model_group` + `lock_provider` (both ON = exact provider+model); see §4.2 |
-| `strategy.sort` | 0–3 of A–K (ordered, no dups) — the user sort stack |
+| `strategy.sort` | 0–3 of A–K (ordered, no dups) — the classic-mode sort stack |
 | `model_groups` | Same logical model across providers (entries `[provider_id, upstream_model]`); see §4.2 |
 | `models` | Managed catalog; empty = unmanaged |
 | `model_allowlist_only` | Reject models not in the (non-empty) list |

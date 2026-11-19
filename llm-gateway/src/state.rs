@@ -1206,6 +1206,34 @@ impl App {
         result
     }
 
+    /// TTFT hedge snapshot: fill every candidate row from the pool and sort
+    /// them in hedge order (`sort_for_ttft`: valid lead → non-cooled lead →
+    /// K availability). No persisted cursor — the hedge walker owns per-round
+    /// shard pointers. The RPM window is NOT bumped here: the walker calls
+    /// `note_fired` for each request it actually sends.
+    pub fn ttft_snapshot(&self, set: &crate::strategy::CandidateSet) -> Vec<crate::strategy::Row> {
+        let mut rows = set.rows.clone();
+        let now = Instant::now();
+        let mut pool = self.pool.lock().unwrap();
+        fill_rows(&mut pool, &mut rows, now);
+        drop(pool);
+        crate::strategy::sort_for_ttft(&mut rows);
+        rows
+    }
+
+    /// Bookkeeping for one hedge fire: rolling RPM window sample + request
+    /// counter (the classic path does this inside `select_strategy` at route
+    /// time; a 429 or transport failure refunds the sample downstream).
+    pub fn note_fired(&self, key_id: &str) {
+        let mut pool = self.pool.lock().unwrap();
+        let now = Instant::now();
+        let m = pool.metrics.entry(key_id.to_string()).or_default();
+        m.req_times.push_back(now);
+        let win = Duration::from_secs(METRIC_RPM_WINDOW_SECS);
+        m.req_times.retain(|t| now.duration_since(*t) <= win);
+        *pool.requests.entry(key_id.to_string()).or_insert(0) += 1;
+    }
+
     /// Dry-run preview (impl-spec §8): the same fill + sort + walk as
     /// `select_strategy`, but read-only — it does **not** advance the persisted
     /// cursor or bump the RPM window. Returns the §6 terminal + the full sorted

@@ -86,6 +86,7 @@ export interface Stats {
 }
 
 export interface Strategy {
+  mode?: 'ttft' | 'classic';
   filter: { lock_model_group: boolean; lock_provider: boolean };
   sort: string[];
 }

@@ -243,6 +243,27 @@ pub enum SortKey {
     K, // availability      desc (smoothed success_rate × capacity headroom)
 }
 
+/// Routing execution mode — the preset the strategy page shows.
+/// `ttft` (the default): hedged racing — the table is K-sorted, dealt into
+/// 2–3 shards each walked by its own pointer in parallel; a 429 skips to the
+/// next row at once, an accepted (non-429) request hangs (≤5) while the
+/// pointers keep firing; the first response body byte wins and everything
+/// else is cancelled. A fully-walked table re-sorts and starts a new round;
+/// hanging requests survive across rounds. `classic`: the sequential
+/// filter + sort-stack + cursor walk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StrategyMode {
+    Ttft,
+    Classic,
+}
+
+impl Default for StrategyMode {
+    fn default() -> Self {
+        Self::Ttft
+    }
+}
+
 /// Two filter toggles (spec §4) that shrink the full `(provider, model, key)`
 /// table to a candidate subset. Defaults are both `true` = the north-compat
 /// "exact (provider, model), only round keys" = current gateway behavior.
@@ -272,6 +293,9 @@ impl Default for Filter {
 pub struct Strategy {
     #[serde(default)]
     pub filter: Filter,
+    /// Routing execution mode (ttft hedge / classic walk); missing = ttft.
+    #[serde(default)]
+    pub mode: StrategyMode,
     /// Ordered user sort keys (3rd/4th/5th in the comparator). 0..=3, no dups.
     /// Validated/deduped/capped on load (impl-spec §4.2).
     #[serde(default)]
@@ -280,7 +304,7 @@ pub struct Strategy {
 
 impl Default for Strategy {
     fn default() -> Self {
-        Self { filter: Filter::default(), sort: Vec::new() }
+        Self { filter: Filter::default(), mode: StrategyMode::default(), sort: Vec::new() }
     }
 }
 
@@ -662,5 +686,17 @@ mod tests {
         std::fs::write(&path, format!("\u{feff}{body}")).unwrap();
         assert!(Config::load(&path).is_ok());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The routing mode defaults to ttft (hedged racing) for configs written
+    /// before the field existed; "classic" parses and round-trips.
+    #[test]
+    fn strategy_mode_defaults_to_ttft_and_parses_classic() {
+        let cfg: Config = serde_json::from_str(r#"{"strategy": {"sort": ["K"]}}"#).unwrap();
+        assert_eq!(cfg.strategy.mode, StrategyMode::Ttft);
+        let cfg: Config = serde_json::from_str(r#"{"strategy": {"mode": "classic"}}"#).unwrap();
+        assert_eq!(cfg.strategy.mode, StrategyMode::Classic);
+        let round = serde_json::to_string(&cfg).unwrap();
+        assert!(round.contains("\"mode\":\"classic\""), "{round}");
     }
 }
