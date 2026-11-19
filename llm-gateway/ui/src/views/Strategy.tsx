@@ -1,56 +1,28 @@
-/* Strategy view — filters (2 toggles) + sort stack (3 selects) + dry-run board.
-   Port of renderStrategy() / resultBanner() / onFilterChange() / onSortChange(). */
+/* Strategy view — preset cards + dry-run board.
+   Manual strategy editing (filter toggles + sort-key selects) was removed:
+   routing-strategy changes now go through gateway.json (or a config import).
+   The preset grid is the future one-click apply surface; preset definitions
+   are not open yet, so it renders two disabled placeholder slots until the
+   definition mechanism lands. */
 
 import React from 'react';
 import { t, tp } from '../i18n';
 import { useApp } from '../store';
 import type { RouteResult } from '../types';
 
-/* sort comparators (A-K) — display names only; the server applies them. */
-const SORTS: Record<string, string> = {
-  A: '成功率 ↓',
-  B: 'RPM ↓',
-  C: 'TPM ↓',
-  D: '首字延迟 ↑',
-  E: 'token余额 ↓',
-  F: 'token余额 ↑',
-  G: '账单余额 ↓',
-  H: '账单余额 ↑',
-  I: '单价 ↑',
-  J: '生成速度TPS ↓',
-  K: '可用性 ↓',
-};
-const SORT_KEYS = Object.keys(SORTS);
+/* Strategy presets — one card applies a whole strategy (filter + sort stack).
+   Empty for now: the definition mechanism (a gateway.json field + an apply
+   endpoint) lands later; with zero presets the grid shows two disabled
+   placeholder slots. */
+const PRESETS: { name: string; sorts: string[] }[] = [];
 
 export function StrategyView() {
-  const { state, derived, ui, putStrategy, runDryRun, pname } = useApp();
+  const { state, derived, ui, runDryRun, pname } = useApp();
   const { models, providers } = derived;
-  const { groupLock, provLock, sorts, reqModel, reqProv } = state.ui;
+  const { reqModel, reqProv } = state.ui;
   const res = state.data.res || { state: '429-empty' as const, winner: null, cand: [], retry: null };
   const modelIds = [...new Set(models.map(mo => mo.id))];
 
-  const modeShort = () => {
-    if (groupLock && provLock) return t('精确轮换');
-    if (groupLock && !provLock) return t('模型优先');
-    if (!groupLock && provLock) return t('提供商优先');
-    return t('可用优先');
-  };
-
-  // Overrides are passed explicitly because the store update (dispatch) only
-  // becomes visible to stateRef on the next render — the PUT/dry-run below must
-  // use the new values immediately (same call order as the original: PUT → dry-run).
-  const onFilterChange = async (patch: { groupLock?: boolean; provLock?: boolean }) => {
-    ui(patch);
-    await putStrategy(patch);
-    await runDryRun();
-  };
-  const onSortChange = async (i: number, val: string) => {
-    const next = sorts.slice();
-    next[i] = val;
-    ui({ sorts: next });
-    await putStrategy({ sorts: next });
-    await runDryRun({ sorts: next });
-  };
   const onReqModelChange = async (val: string) => { ui({ reqModel: val }); await runDryRun({ model: val }); };
   const onReqProvChange = async (val: string) => { ui({ reqProv: val }); await runDryRun({ prov: val }); };
 
@@ -58,35 +30,17 @@ export function StrategyView() {
     <>
       <h2 className="board-title">{t('策略管理')}</h2>
       <div className="section">
-        <div className="section-title">{t('过滤器')}</div>
-        <div className="card card-pad">
-          <div className="toggle-row">
-            <span className="tlbl">{t('不改变模型组')}</span>
-            <label className="toggle">
-              <input type="checkbox" aria-label={t('不改变模型组')} checked={groupLock} onChange={e => onFilterChange({ groupLock: e.target.checked })} />
-              <span className="track"></span>
-            </label>
-          </div>
-          <div className="toggle-row">
-            <span className="tlbl">{t('不改变提供商')}</span>
-            <label className="toggle">
-              <input type="checkbox" aria-label={t('不改变提供商')} checked={provLock} onChange={e => onFilterChange({ provLock: e.target.checked })} />
-              <span className="track"></span>
-            </label>
-          </div>
-          <div className="faint" style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>{t('当前：')}{modeShort()}</div>
-        </div>
-      </div>
-      <div className="section">
-        <div className="section-title">{t('优先策略')} <span className="note">{t('关键字 3 / 4 / 5（1=valid↓ 2=非冷却↓ 固定前导）')}</span></div>
-        <div className="card card-pad">
-          {[0, 1, 2].map(i => (
-            <div className="prio-row" key={i}>
-              <span className="plbl">{tp('关键字 {n}', { n: i + 3 })}</span>
-              <select aria-label={tp('关键字 {n}', { n: i + 3 })} value={sorts[i]} onChange={e => onSortChange(i, e.target.value)}>
-                <option value="">{t('（跳过）')}</option>
-                {SORT_KEYS.map(s => <option key={s} value={s}>{s} · {t(SORTS[s])}</option>)}
-              </select>
+        <div className="section-title">{t('策略预设')} <span className="note">{t('一键应用整套路由策略（过滤器 + 排序栈）')}</span></div>
+        <div className="preset-grid">
+          {PRESETS.length > 0 ? PRESETS.map(p => (
+            <button type="button" key={p.name} className="preset-card" aria-label={p.name}>
+              <span className="pname">{p.name}</span>
+              <span className="faint" style={{ fontSize: '0.75rem' }}>{p.sorts.join(' → ')}</span>
+            </button>
+          )) : [0, 1].map(i => (
+            <div key={i} className="preset-card is-empty" aria-disabled="true">
+              <span className="pname">{t('未配置预设')}</span>
+              <span className="faint" style={{ fontSize: '0.75rem' }}>{t('预设定义机制将在后续版本开放')}</span>
             </div>
           ))}
         </div>

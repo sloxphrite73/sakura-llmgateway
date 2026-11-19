@@ -295,7 +295,7 @@ async fn main() {
             delete(admin::delete_alias),
         )
         .route("/api/settings", put(admin::update_settings))
-        .route("/api/strategy", get(admin::get_strategy).put(admin::update_strategy))
+        .route("/api/strategy", get(admin::get_strategy))
         .route("/api/strategy/dry-run", post(admin::strategy_dry_run))
         .route(
             "/api/model-groups",

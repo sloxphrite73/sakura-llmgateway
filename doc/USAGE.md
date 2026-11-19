@@ -155,14 +155,13 @@ API keys are managed from the **API Key** tab (see below), not from the provider
 
 ### Strategy
 
-The **策略 / Strategy** tab configures the routing strategy (see §4.2):
+The **策略 / Strategy** tab shows the routing strategy (see §4.2):
 
-- **Two filter toggles** — `lock_model_group` and `lock_provider` (both ON by
-  default = exact provider+model, only rotate keys). The combination picks one of
-  four candidate modes (exact / model-first / provider-first / available-first).
-- **Sort stack** — three slots for the A–K sort keys (success_rate, rpm, tpm,
-  avg_tftt, token/bill balance ×2, price, tps, availability); the fixed
-  `valid ↓` + `non-cooled ↓` leads are always on and not shown.
+- **Strategy presets** — cards that apply a whole strategy (filter toggles +
+  sort stack) with one click. Preset definitions open in a later version
+  (unconfigured slots render as placeholders); to change the strategy today,
+  edit `strategy.filter` / `strategy.sort` in `gateway.json` or import a
+  config file.
 - **Dry-run preview** — pick a model (+ optional provider) and run a simulated
   route: it shows the routed key and the full candidate list with each key's
   valid/cooling/remaining state and metrics.

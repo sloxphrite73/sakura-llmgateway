@@ -40,8 +40,6 @@ export interface UiState {
   keyFilter: string;
   reqModel: string;
   reqProv: string;
-  groupLock: boolean;
-  provLock: boolean;
   sorts: string[];
   addState: AddState;
   addDraft: AddDraft | null;
@@ -119,8 +117,6 @@ function initialState(): AppState {
       keyFilter: 'all',
       reqModel: '',
       reqProv: '',
-      groupLock: true,
-      provLock: true,
       sorts: ['', '', ''],
       addState: null,
       addDraft: null,
@@ -151,7 +147,6 @@ export interface Controller {
   refresh: () => Promise<void>;
   refreshAkStatus: () => Promise<void>;
   runDryRun: (override?: { model?: string; prov?: string; sorts?: string[] }) => Promise<void>;
-  putStrategy: (override?: { groupLock?: boolean; provLock?: boolean; sorts?: string[] }) => Promise<void>;
   findRealKey: (keyId: string) => Promise<string | null>;
   refreshModelGroups: () => Promise<void>;
   /** Switch console theme: persist to gateway settings + apply immediately. */
@@ -252,8 +247,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // mirror the saved strategy into the UI state (edits PUT immediately)
       const u = stateRef.current.ui;
       const patch: Partial<UiState> = {
-        groupLock: strategy.filter.lock_model_group,
-        provLock: strategy.filter.lock_provider,
         sorts: [strategy.sort[0] || '', strategy.sort[1] || '', strategy.sort[2] || ''],
       };
       const d2 = adaptAll(status, stats, modelGroups);
@@ -310,33 +303,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       refreshAkStatus().finally(() => { akSyncingRef.current = false; });
     }
   }, [refreshAkStatus]);
-
-  /* ---------- strategy PUT ---------- */
-  const putStrategy = useCallback(async (override?: { groupLock?: boolean; provLock?: boolean; sorts?: string[] }) => {
-    const { ui } = stateRef.current;
-    const groupLock = override && override.groupLock !== undefined ? override.groupLock : ui.groupLock;
-    const provLock = override && override.provLock !== undefined ? override.provLock : ui.provLock;
-    const sorts = override && override.sorts ? override.sorts : ui.sorts;
-    try {
-      await api('PUT', '/api/strategy', {
-        filter: { lock_model_group: groupLock, lock_provider: provLock },
-        sort: sorts.filter(Boolean),
-      });
-      const strategy = await api<Strategy>('GET', '/api/strategy');
-      dispatch({ type: 'data', patch: { strategy } });
-      dispatch({
-        type: 'ui',
-        patch: {
-          groupLock: strategy.filter.lock_model_group,
-          provLock: strategy.filter.lock_provider,
-          sorts: [strategy.sort[0] || '', strategy.sort[1] || '', strategy.sort[2] || ''],
-        },
-      });
-    } catch (e) {
-      console.error('putStrategy', e);
-      toast(t('失败: ') + (e as Error).message);
-    }
-  }, []);
 
   /* ---------- misc actions ---------- */
   const setTab = useCallback((id: TabId) => {
@@ -428,7 +394,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const controller: Controller = {
     state, derived, dispatch, ui, setData, setTab, setLocalProv, setModelTab, setLang,
-    pname, refresh, refreshAkStatus, runDryRun, putStrategy, findRealKey, refreshModelGroups,
+    pname, refresh, refreshAkStatus, runDryRun, findRealKey, refreshModelGroups,
     setTheme,
   };
   return <Ctx.Provider value={controller}>{children}</Ctx.Provider>;

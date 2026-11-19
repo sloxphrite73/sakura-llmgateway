@@ -6,6 +6,10 @@
 
 - 死代码清理：移除不再被读取的配置字段 `learned_cooldown`、`max_attempts`、`has_token_balance_api`（旧配置中的多余字段加载时被忽略，无损兼容），删除纯诊断的 429 采样 `capacity_samples`，以及八个零调用入口：`extend_cooldown_at_least`、`min_retry_after_candidates`、`SortKey::parse`、`mark_config_dirty`、`model_avg_tftt`、`model_avg_tps`、`price_of`、`Stats::save`。设置页移除自零失败 hold 上线后不再生效的「每请求最大尝试次数」输入框。清理五处活代码上过期的 `#[allow(dead_code)]`。
 
+### 变更
+
+- 策略页重设计：移除排序键手动选择与过滤器开关——路由策略（过滤器 + 排序栈）不再能从控制台更改，变更经 `gateway.json` 或整份配置导入进行；新增策略预设卡片区（本轮为占位实现：两张未配置占位卡，预设定义机制后续开放）；`PUT /api/strategy` 端点随调用方一并移除，`GET /api/strategy` 与 dry-run 保留。
+
 ## [v0.8.6-beta2] — 2026-11-11
 
 控制台重写为 React 18 + TypeScript，并修复 token 记账、429/401 分级与配置持久化三类长期问题。构建在本地完成。

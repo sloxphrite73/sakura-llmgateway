@@ -188,10 +188,10 @@ button.ghost:hover { color: var(--color-text-link); border-color: transparent; b
 /* ===== strategy ===== */
 .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 0.875rem 1rem; border: 1px solid var(--color-border-default); border-radius: 0.5rem; background: var(--color-surface-card); margin-bottom: 0.625rem; }
 .toggle-row .tlbl { font-size: 0.875rem; color: var(--color-text-primary); }
-.prio-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 0; }
-.prio-row + .prio-row { border-top: 1px solid var(--color-border-default); }
-.prio-row .plbl { width: 5.5rem; font-size: 0.8125rem; color: var(--color-text-secondary); flex: none; }
-.prio-row select { flex: 1; }
+.preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: 0.875rem; }
+.preset-card { display: flex; flex-direction: column; gap: 0.375rem; padding: 0.875rem 1rem; border: 1px solid var(--color-border-default); border-radius: 0.5rem; background: var(--color-surface-card); text-align: left; cursor: pointer; }
+.preset-card .pname { font-size: 0.875rem; font-weight: 600; color: var(--color-text-primary); }
+.preset-card.is-empty { border-style: dashed; opacity: 0.55; cursor: default; }
 .result-banner { padding: 0.875rem 1.125rem; border-radius: 0.5rem; border: 1px solid var(--color-border-default); background: var(--color-surface-raised); margin-bottom: 1rem; font-size: 0.875rem; box-shadow: var(--shadow-sm); }
 .result-banner.routed { border-color: var(--color-feedback-success-text); }
 .result-banner.routed .big { color: var(--color-feedback-success-text); }

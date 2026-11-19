@@ -749,34 +749,11 @@ pub async fn import_legacy_config(
 // ---------- strategy ----------
 
 /// GET /api/strategy — the current routing strategy (filter toggles + sort
-/// stack). Read counterpart to `update_strategy`; the UI loads it on refresh.
+/// stack). The UI loads it on refresh. (The PUT write side was removed together
+/// with the manual strategy editors; change the strategy via gateway.json or a
+/// config import.)
 pub async fn get_strategy(State(app): State<std::sync::Arc<App>>) -> Response {
     ok(app.read_config().strategy)
-}
-
-#[derive(serde::Deserialize)]
-pub struct StrategyInput {
-    pub filter: crate::config::Filter,
-    #[serde(default)]
-    pub sort: Vec<crate::config::SortKey>,
-}
-
-/// PUT /api/strategy — write the routing strategy (filter toggles + the ordered
-/// sort stack, spec §5). The sort is validated (≤3 keys; serde rejects letters
-/// outside A-J with a 400) and normalized (deduped) on write (impl-spec §4.2).
-pub async fn update_strategy(
-    State(app): State<std::sync::Arc<App>>,
-    Json(input): Json<StrategyInput>,
-) -> Response {
-    if input.sort.len() > 3 {
-        return err(StatusCode::BAD_REQUEST, "sort may have at most 3 keys");
-    }
-    let cfg = app.write_config(|c| {
-        c.strategy.filter = input.filter;
-        c.strategy.sort = input.sort;
-        c.normalize_strategy();
-    });
-    ok(cfg)
 }
 
 /// POST /api/strategy/dry-run — simulate the selector for a model without
