@@ -107,6 +107,10 @@ dark/light + EN/中文, persisted to localStorage). By section:
 
 - **Default cooldown (seconds)** — how long a 429'd key rests when the upstream
   sends no `Retry-After` and the key has no override (default 60).
+- **Racing pool cap / pointer header wait** — ttft-mode parameters (defaults
+  10 / 2s): a pointer waits at most that long for a fire's response headers,
+  then the request joins the racing pool and the pointer walks on; the pool
+  pauses the pointers while full.
 - **API port / UI port** — take effect after a restart.
 - **Local API auth** — off by default. When enabled, agents must present one of
   the configured keys as a Bearer token on `/v1/*`.
@@ -160,14 +164,18 @@ The **策略 / Strategy** tab shows the routing mode (`strategy.mode` in
 import one):
 
 - **TTFT first (`ttft`, the default)** — the table is K-sorted, dealt into 2–3
-  shards each walked by its own pointer in parallel; a 429 skips to the next
-  row at once, an accepted (non-429) request hangs (≤5) while the pointers
-  keep firing other keys; the first response body byte wins and everything
-  else is cancelled. A fully-walked table re-sorts (K data updated by the
-  failures) and starts a new round; hanging requests survive across rounds;
-  all-cooling keeps the max-hold budget. Note: hedging sends one request to
-  several keys at once — on free-tier pools that is the point, on paid
-  upstreams it burns real money.
+  shards each walked by its own pointer; a pointer waits at most
+  `hedge_header_deadline_secs` (default 2s) for a fire's response headers —
+  a fast 429 grades and the pointer jumps on, a fast 2xx joins the racing
+  pool, and a fire still unresolved at the deadline is promoted into the pool
+  with the pointer walking on immediately (slow headers and slow 429s never
+  pin a pointer). In the pool (≤ `hedge_pool_cap`, default 10) the first
+  response body byte wins and everything else is cancelled; an entry
+  resolving with an error is kicked out and graded (K sees it next round). A
+  fully-walked table re-sorts and starts a new round; pool entries survive
+  across rounds; all-cooling keeps the max-hold budget. Note: hedging sends
+  one request to several keys at once — on free-tier pools that is the
+  point, on paid upstreams it burns real money.
 - **Classic (`classic`)** — the sequential filter + sort-stack + cursor walk
   (see §4.2).
 - **Dry-run preview** — pick a model (+ optional provider) and run a simulated
@@ -471,6 +479,7 @@ through byte-for-byte.
 | `strategy.mode` | Routing mode: `ttft` (default, hedged racing) / `classic` (sequential walk) |
 | `strategy.filter` | `lock_model_group` + `lock_provider` (both ON = exact provider+model); see §4.2 |
 | `strategy.sort` | 0–3 of A–K (ordered, no dups) — the classic-mode sort stack |
+| `hedge_pool_cap` / `hedge_header_deadline_secs` | ttft mode: racing pool cap (default 10) / pointer header wait in seconds (default 2, then pool) |
 | `model_groups` | Same logical model across providers (entries `[provider_id, upstream_model]`); see §4.2 |
 | `models` | Managed catalog; empty = unmanaged |
 | `model_allowlist_only` | Reject models not in the (non-empty) list |

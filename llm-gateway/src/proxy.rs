@@ -794,9 +794,6 @@ where
 // TTFT hedge mode (strategy.mode = "ttft" — the default preset 「TTFT 优先」)
 // ---------------------------------------------------------------------------
 
-/// Hanging-request cap for the hedge pool (spec: 挂着最多五个).
-const HEDGE_MAX_HANGING: usize = 5;
-
 /// Everything a hedge fire needs to know about its row — cloned into the
 /// fire/race tasks and back through events for grading and the finish path.
 #[derive(Clone)]
@@ -847,10 +844,42 @@ enum FirstByteOutcome {
     Broke { ctx: HedgeCtx, err: Option<reqwest::Error> },
 }
 
-/// Walker event: a fire's headers resolved, or a hang's first byte resolved.
+/// Lifecycle phase of one hedge fire (the walker's per-fire bookkeeping).
+enum FirePhase {
+    /// Still in its pointer window: headers pending, deadline ticking. Does
+    /// NOT occupy a racing-pool slot.
+    Pointer(usize),
+    /// Promoted past the pointer deadline: still awaiting headers, occupying
+    /// a racing-pool slot.
+    PoolHeaders,
+    /// A 2xx response racing for its first body byte (a pool entry).
+    PoolRacing,
+}
+
+/// Racing-pool occupancy: promoted fires + first-byte racers. Pointer-window
+/// fires don't count — the pool fills from the deadline, not the fire.
+fn hedge_pool_count(
+    fires: &std::collections::HashMap<u64, (FirePhase, tokio::task::JoinHandle<()>)>,
+) -> usize {
+    fires
+        .values()
+        .filter(|(p, _)| !matches!(p, FirePhase::Pointer(_)))
+        .count()
+}
+
+/// Walker event.
 enum HedgeEv {
-    Headers(usize, HeadersOutcome),
-    Hang(u64, FirstByteOutcome),
+    /// A fire's response headers resolved. Fast (pointer window) 429/transport
+    /// → grade and the pointer jumps on; fast 2xx → spawn the first-byte
+    /// racer. A late resolution (after promotion) is dispatched on the fire's
+    /// recorded phase instead.
+    Headers { fire: u64, shard: usize, outcome: HeadersOutcome },
+    /// A pointer-window fire's header deadline expired: promote it into the
+    /// racing pool (it keeps racing in its own task) and free the pointer.
+    Deadline { fire: u64, shard: usize },
+    /// A first-byte racer resolved: `Won` takes the whole request; `Broke`
+    /// frees its pool slot and is graded.
+    Raced { fire: u64, outcome: FirstByteOutcome },
 }
 
 /// Fire one request and resolve it at response-header time.
@@ -924,25 +953,22 @@ async fn hedge_race_first_byte(
     }
 }
 
-/// Cancel every pending hang — the winner takes the request.
-fn cancel_hanging(hanging: &mut Vec<(u64, tokio::task::JoinHandle<()>)>) {
-    for (_, h) in hanging.drain(..) {
+/// Cancel every live hedge fire/racer — the winner (or a terminal) takes the
+/// request. This map is the single cancellation registry: every spawned
+/// request-producing task is tracked here, so aborting closes the actual
+/// upstream connection. (The deadline timers are detached sleepers whose
+/// stale sends land on a closed channel and are ignored.)
+fn hedge_abort_all(
+    fires: &mut std::collections::HashMap<u64, (FirePhase, tokio::task::JoinHandle<()>)>,
+) {
+    for (_, (_, h)) in fires.drain() {
         h.abort();
     }
 }
 
-/// Remove a resolved hang and grade a Broke outcome: a key failure — record
-/// it and bench the key briefly so the next round sorts it down.
-fn hang_broke(
-    app: &Arc<App>,
-    hanging: &mut Vec<(u64, tokio::task::JoinHandle<()>)>,
-    id: u64,
-    ctx: HedgeCtx,
-    err: Option<reqwest::Error>,
-) {
-    if let Some(pos) = hanging.iter().position(|(h, _)| *h == id) {
-        let _ = hanging.remove(pos);
-    }
+/// Grade a Broke racer (a pool entry): a key failure — record it and bench
+/// the key briefly so the next round's snapshot sorts it down.
+fn hedge_racer_broke(app: &Arc<App>, ctx: HedgeCtx, err: Option<reqwest::Error>) {
     app.record_key_stat(false, &ctx.key_id);
     app.record_stat(false, Some(&ctx.key_id), &ctx.provider_id, &ctx.upstream_model);
     let reason = match err {
@@ -1011,15 +1037,162 @@ fn hedge_grade_status(
     ))
 }
 
-/// TTFT hedge walker. Per round: K-sorted snapshot → dealt into 2–3 shards,
-/// one pointer each walking its shard (at most one headers-pending request
-/// per shard); a 429/error fires the next row at once; an accepted request
-/// hangs (≤ `HEDGE_MAX_HANGING`) and the pointers keep firing; the first
-/// body byte anywhere wins and cancels everything else. When every pointer
-/// walks out its shard the round re-sorts and deals again — hanging requests
-/// survive across rounds, and a previous round's hang winning mid-round is
-/// taken at once. All-cooling keeps the classic zero-failure hold; a
-/// request-scoped 4xx or the transport budget fails the whole request.
+/// What the walker should do after dispatching one event.
+enum Walk {
+    Continue,
+    Winner {
+        ctx: HedgeCtx,
+        headers: HeaderMap,
+        first: axum::body::Bytes,
+        rest: futures_util::stream::BoxStream<'static, Result<axum::body::Bytes, reqwest::Error>>,
+        ttfb_ms: u64,
+    },
+    Terminal(Response),
+}
+
+/// Grade a transport-level failure (shared by the pointer and pool paths):
+/// refund, bench briefly, count the transport budget; returns the 502 when
+/// the budget is spent.
+fn hedge_transport_fail(
+    app: &Arc<App>,
+    transport_failures: &mut u32,
+    ctx: &HedgeCtx,
+    err: &reqwest::Error,
+    inbound: Protocol,
+) -> Option<Response> {
+    *transport_failures += 1;
+    app.record_key_stat(false, &ctx.key_id);
+    app.record_rotation(&ctx.provider_id);
+    app.refund_attempt(&ctx.key_id);
+    let secs = app.read_config().transport_error_cooldown_secs.max(1);
+    app.mark_cooldown(
+        &ctx.provider_id,
+        &ctx.key_id,
+        Some(secs),
+        &format!("network error: {err}"),
+    );
+    if *transport_failures >= app.read_config().max_transport_retries {
+        app.record_stat(false, Some(&ctx.key_id), &ctx.provider_id, &ctx.upstream_model);
+        return Some(error_response_for(
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "upstream transport failed {} times in one request: {err}",
+                *transport_failures
+            ),
+            inbound,
+        ));
+    }
+    None
+}
+
+/// Dispatch one walker event against the fire registry. `cur_fire` is the
+/// current round's per-shard pointer-window fire (guarded indexing: pool
+/// events from earlier rounds can arrive while it is empty).
+async fn hedge_dispatch(
+    app: &Arc<App>,
+    tx: &tokio::sync::mpsc::UnboundedSender<HedgeEv>,
+    ev: HedgeEv,
+    fires: &mut std::collections::HashMap<u64, (FirePhase, tokio::task::JoinHandle<()>)>,
+    cur_fire: &mut [Option<u64>],
+    transport_failures: &mut u32,
+    inbound: Protocol,
+) -> Walk {
+    match ev {
+        HedgeEv::Deadline { fire, shard } => {
+            if let Some((FirePhase::Pointer(s), _)) = fires.get(&fire) {
+                if *s == shard {
+                    // Promote: the fire keeps racing in its own task; the
+                    // pointer is freed to walk on and the fire now occupies a
+                    // racing-pool slot.
+                    if let Some(slot) = cur_fire.get_mut(shard) {
+                        *slot = None;
+                    }
+                    if let Some((p, _)) = fires.get_mut(&fire) {
+                        *p = FirePhase::PoolHeaders;
+                    }
+                }
+            }
+        }
+        HedgeEv::Headers { fire, shard, outcome } => {
+            let pointer_owned = matches!(fires.get(&fire), Some((FirePhase::Pointer(_), _)));
+            match outcome {
+                HeadersOutcome::Accepted { ctx, headers, body, ttfb_ms } => {
+                    // Fast 2xx (pointer window) or late 2xx (already
+                    // promoted): either way it becomes a first-byte racer.
+                    if pointer_owned {
+                        if let Some(slot) = cur_fire.get_mut(shard) {
+                            *slot = None;
+                        }
+                    }
+                    let tx2 = tx.clone();
+                    let handle = tokio::spawn(async move {
+                        let outcome = hedge_race_first_byte(ctx, headers, ttfb_ms, body).await;
+                        let _ = tx2.send(HedgeEv::Raced { fire, outcome });
+                    });
+                    fires.insert(fire, (FirePhase::PoolRacing, handle));
+                }
+                HeadersOutcome::Status { ctx, code, retry_after, snippet } => {
+                    fires.remove(&fire);
+                    if pointer_owned {
+                        if let Some(slot) = cur_fire.get_mut(shard) {
+                            *slot = None;
+                        }
+                    }
+                    if let Some(resp) =
+                        hedge_grade_status(app, &ctx, code, retry_after, &snippet, inbound)
+                    {
+                        hedge_abort_all(fires);
+                        return Walk::Terminal(resp);
+                    }
+                }
+                HeadersOutcome::Transport { ctx, err } => {
+                    fires.remove(&fire);
+                    if pointer_owned {
+                        if let Some(slot) = cur_fire.get_mut(shard) {
+                            *slot = None;
+                        }
+                    }
+                    if let Some(resp) =
+                        hedge_transport_fail(app, transport_failures, &ctx, &err, inbound)
+                    {
+                        hedge_abort_all(fires);
+                        return Walk::Terminal(resp);
+                    }
+                }
+            }
+        }
+        HedgeEv::Raced { fire, outcome } => match outcome {
+            FirstByteOutcome::Won { ctx, headers, first, rest, ttfb_ms } => {
+                // Winner: cancel every other request and pointer fire.
+                hedge_abort_all(fires);
+                return Walk::Winner { ctx, headers, first, rest, ttfb_ms };
+            }
+            FirstByteOutcome::Broke { ctx, err } => {
+                fires.remove(&fire);
+                hedge_racer_broke(app, ctx, err);
+            }
+        },
+    }
+    Walk::Continue
+}
+
+/// TTFT hedge walker (`strategy.mode = "ttft"`). Per round: K-sorted snapshot
+/// → dealt into 2–3 shards, one pointer each; a pointer fires one row at a
+/// time and waits at most `hedge_header_deadline_secs` (default 2s) for that
+/// fire's response headers — a fast 429 grades (existing chain, no politeness
+/// gap) and the pointer jumps to the next row at once; a fast 2xx becomes a
+/// first-byte racer in the racing pool; a fire still unresolved at the
+/// deadline is PROMOTED into the pool (it keeps racing headers→first byte in
+/// its own task) and the pointer walks on immediately — slow headers and
+/// slow 429s never pin a pointer again. Pool slots (promoted fires + racers,
+/// ≤ `hedge_pool_cap`, default 10): the first response body byte anywhere
+/// wins and everything else is cancelled; a pool entry resolving with an
+/// error is kicked out and graded (K sees it next round — the snapshot is
+/// per-round by design). When every pointer walks out its shard the round
+/// re-sorts and deals again; pool entries survive across rounds, and a
+/// previous round's racer winning mid-round is taken at once. All-cooling
+/// keeps the classic zero-failure hold; a request-scoped 4xx or the
+/// transport budget fails the whole request.
 #[allow(clippy::too_many_arguments)]
 async fn forward_hedge<F, Fut>(
     app: Arc<App>,
@@ -1037,10 +1210,11 @@ where
     Fut: std::future::Future<Output = Response>,
 {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<HedgeEv>();
-    let mut next_hang_id: u64 = 0;
-    // Pending hangs: (id, task). Cancel on win = abort() → the dropped
-    // reqwest stream closes the upstream connection.
-    let mut hanging: Vec<(u64, tokio::task::JoinHandle<()>)> = Vec::new();
+    // Every live fire/racer: fire id → (phase, task). The single cancellation
+    // registry (abort-all on win/terminal) and the pool-occupancy source.
+    let mut fires: std::collections::HashMap<u64, (FirePhase, tokio::task::JoinHandle<()>)> =
+        std::collections::HashMap::new();
+    let mut next_fire: u64 = 0;
     let mut held_ms = 0u64;
     let mut transport_failures = 0u32;
 
@@ -1048,40 +1222,42 @@ where
         let rows = app.ttft_snapshot(set);
         let fireable: Vec<crate::strategy::Row> =
             rows.iter().filter(|r| r.valid && r.non_cooled).cloned().collect();
+        // Round-local snapshot of the hedge settings (mid-request edits are
+        // an edge case, same policy as the sort stack).
+        let (pool_cap, deadline_secs) = {
+            let c = app.read_config();
+            (c.hedge_pool_cap.max(1) as usize, c.hedge_header_deadline_secs.max(1))
+        };
 
         if fireable.is_empty() {
-            // Nothing new to fire. Pending hangs can still win — wait for one
-            // event, then re-snapshot (a broke hang frees nothing to fire, but
-            // cooldowns may have expired meanwhile).
-            if !hanging.is_empty() {
-                match rx.recv().await {
-                    Some(HedgeEv::Hang(
-                        _,
-                        FirstByteOutcome::Won { ctx, headers, first, rest, ttfb_ms },
-                    )) => {
-                        cancel_hanging(&mut hanging);
-                        app.clear_error(&ctx.key_id);
-                        return finish(
-                            app,
-                            headers,
-                            UpstreamBody::Chained { first, rest },
-                            ctx.provider_id,
-                            ctx.key_id,
-                            ctx.upstream_model,
-                            is_stream,
-                            est_in_tokens,
-                            ttfb_ms,
-                        )
-                        .await;
+            // Nothing new to fire. Pool entries can still win — wait for one
+            // event, then re-snapshot (an entry resolving frees nothing to
+            // fire, but cooldowns may have expired meanwhile).
+            if hedge_pool_count(&fires) > 0 {
+                if let Some(ev) = rx.recv().await {
+                    match hedge_dispatch(&app, &tx, ev, &mut fires, &mut [], &mut transport_failures, inbound).await {
+                        Walk::Winner { ctx, headers, first, rest, ttfb_ms } => {
+                            app.clear_error(&ctx.key_id);
+                            return finish(
+                                app,
+                                headers,
+                                UpstreamBody::Chained { first, rest },
+                                ctx.provider_id,
+                                ctx.key_id,
+                                ctx.upstream_model,
+                                is_stream,
+                                est_in_tokens,
+                                ttfb_ms,
+                            )
+                            .await;
+                        }
+                        Walk::Terminal(resp) => return resp,
+                        Walk::Continue => {}
                     }
-                    Some(HedgeEv::Hang(id, FirstByteOutcome::Broke { ctx, err })) => {
-                        hang_broke(&app, &mut hanging, id, ctx, err);
-                    }
-                    _ => { /* defensive: no headers are pending in this state */ }
                 }
                 continue 'rounds;
             }
-            // No hangs and nothing fireable → the §6 terminals.
+            // No pool entries and nothing fireable → the §6 terminals.
             if rows.iter().any(|r| r.valid) {
                 // AllCooling: hold until the soonest valid key recovers.
                 let retry_after =
@@ -1121,15 +1297,16 @@ where
 
         let shards = crate::strategy::hedge_deal(fireable);
         let mut ptr: Vec<usize> = vec![0; shards.len()];
-        let mut inflight: Vec<Option<tokio::task::JoinHandle<()>>> =
-            (0..shards.len()).map(|_| None).collect();
+        // Per-shard pointer-window fire (round-local; freed on fast
+        // resolution or on the deadline promotion).
+        let mut cur_fire: Vec<Option<u64>> = vec![None; shards.len()];
 
         loop {
-            // Fire everything fireable: at most one headers-pending request
-            // per shard (the pointer walks sequentially — 429 jumps at once),
-            // paused entirely while the hang pool is at its cap.
+            // Fire everything fireable: at most one pointer-window fire per
+            // shard (the pointer walks sequentially — a fast 429 jumps at
+            // once), paused entirely while the racing pool is at its cap.
             for s in 0..shards.len() {
-                if inflight[s].is_some() || hanging.len() >= HEDGE_MAX_HANGING {
+                if cur_fire[s].is_some() || hedge_pool_count(&fires) >= pool_cap {
                     continue;
                 }
                 if ptr[s] < shards[s].len() {
@@ -1142,21 +1319,34 @@ where
                         key_secret: row.key_secret.clone(),
                         upstream_model: row.upstream_model.clone(),
                     };
+                    let fire = next_fire;
+                    next_fire += 1;
+                    cur_fire[s] = Some(fire);
+                    let shard = s;
                     let app2 = app.clone();
                     let body2 = inbound_body.clone();
                     let tx2 = tx.clone();
-                    let shard = s;
-                    inflight[shard] = Some(tokio::spawn(async move {
-                        let out = hedge_fire(app2, body2, inbound, ctx).await;
-                        let _ = tx2.send(HedgeEv::Headers(shard, out));
-                    }));
+                    let handle = tokio::spawn(async move {
+                        let outcome = hedge_fire(app2, body2, inbound, ctx).await;
+                        let _ = tx2.send(HedgeEv::Headers { fire, shard, outcome });
+                    });
+                    fires.insert(fire, (FirePhase::Pointer(shard), handle));
+                    // The pointer's header deadline: a detached timer. A
+                    // stale tick (the fire resolved fast) is ignored by the
+                    // phase check in dispatch.
+                    let tx3 = tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(deadline_secs)).await;
+                        let _ = tx3.send(HedgeEv::Deadline { fire, shard });
+                    });
                 }
             }
 
-            // Round exhausted: every pointer walked out its shard and nothing
-            // is headers-pending → re-snapshot (K data moved: 429s and failures
-            // landed) and deal a new round. Hangs persist across rounds.
-            if (0..shards.len()).all(|s| ptr[s] >= shards[s].len() && inflight[s].is_none()) {
+            // Round exhausted: every pointer walked out its shard and no
+            // pointer-window fire is left (each resolves or promotes within
+            // its deadline) → re-snapshot (K data moved: 429s and failures
+            // landed) and deal a new round. Pool entries persist across rounds.
+            if (0..shards.len()).all(|s| ptr[s] >= shards[s].len() && cur_fire[s].is_none()) {
                 continue 'rounds;
             }
 
@@ -1164,87 +1354,24 @@ where
                 Some(e) => e,
                 None => continue 'rounds, // all senders dropped: nothing racing
             };
-            match ev {
-                HedgeEv::Headers(s, out) => {
-                    inflight[s] = None;
-                    match out {
-                        HeadersOutcome::Accepted { ctx, headers, body, ttfb_ms } => {
-                            // Accepted: park it in the hang pool, racing first byte.
-                            let id = next_hang_id;
-                            next_hang_id += 1;
-                            let tx2 = tx.clone();
-                            let task = tokio::spawn(async move {
-                                let out = hedge_race_first_byte(ctx, headers, ttfb_ms, body).await;
-                                let _ = tx2.send(HedgeEv::Hang(id, out));
-                            });
-                            hanging.push((id, task));
-                        }
-                        HeadersOutcome::Status { ctx, code, retry_after, snippet } => {
-                            if let Some(resp) =
-                                hedge_grade_status(&app, &ctx, code, retry_after, &snippet, inbound)
-                            {
-                                cancel_hanging(&mut hanging);
-                                for h in inflight.iter_mut().flatten() {
-                                    h.abort();
-                                }
-                                return resp;
-                            }
-                        }
-                        HeadersOutcome::Transport { ctx, err } => {
-                            transport_failures += 1;
-                            app.record_key_stat(false, &ctx.key_id);
-                            app.record_rotation(&ctx.provider_id);
-                            app.refund_attempt(&ctx.key_id);
-                            let reason = format!("network error: {err}");
-                            let secs = app.read_config().transport_error_cooldown_secs.max(1);
-                            app.mark_cooldown(&ctx.provider_id, &ctx.key_id, Some(secs), &reason);
-                            if transport_failures >= app.read_config().max_transport_retries {
-                                app.record_stat(
-                                    false,
-                                    Some(&ctx.key_id),
-                                    &ctx.provider_id,
-                                    &ctx.upstream_model,
-                                );
-                                cancel_hanging(&mut hanging);
-                                for h in inflight.iter_mut().flatten() {
-                                    h.abort();
-                                }
-                                return error_response_for(
-                                    StatusCode::BAD_GATEWAY,
-                                    format!(
-                                        "upstream transport failed {transport_failures} times in one request: {err}"
-                                    ),
-                                    inbound,
-                                );
-                            }
-                        }
-                    }
+            match hedge_dispatch(&app, &tx, ev, &mut fires, &mut cur_fire, &mut transport_failures, inbound).await {
+                Walk::Winner { ctx, headers, first, rest, ttfb_ms } => {
+                    app.clear_error(&ctx.key_id);
+                    return finish(
+                        app,
+                        headers,
+                        UpstreamBody::Chained { first, rest },
+                        ctx.provider_id,
+                        ctx.key_id,
+                        ctx.upstream_model,
+                        is_stream,
+                        est_in_tokens,
+                        ttfb_ms,
+                    )
+                    .await;
                 }
-                HedgeEv::Hang(id, out) => match out {
-                    FirstByteOutcome::Won { ctx, headers, first, rest, ttfb_ms } => {
-                        // Winner: cancel every other request and pointer.
-                        cancel_hanging(&mut hanging);
-                        for h in inflight.iter_mut().flatten() {
-                            h.abort();
-                        }
-                        app.clear_error(&ctx.key_id);
-                        return finish(
-                            app,
-                            headers,
-                            UpstreamBody::Chained { first, rest },
-                            ctx.provider_id,
-                            ctx.key_id,
-                            ctx.upstream_model,
-                            is_stream,
-                            est_in_tokens,
-                            ttfb_ms,
-                        )
-                        .await;
-                    }
-                    FirstByteOutcome::Broke { ctx, err } => {
-                        hang_broke(&app, &mut hanging, id, ctx, err);
-                    }
-                },
+                Walk::Terminal(resp) => return resp,
+                Walk::Continue => {}
             }
         }
     }

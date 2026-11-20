@@ -64,6 +64,8 @@ export interface Status {
   rate_limit_assume_free?: boolean;
   transport_error_cooldown_secs?: number;
   max_transport_retries?: number;
+  hedge_pool_cap?: number;
+  hedge_header_deadline_secs?: number;
   upstream_read_timeout_secs?: number;
   upstream_total_timeout_secs?: number;
   api_port: number;

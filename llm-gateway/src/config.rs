@@ -131,6 +131,20 @@ fn default_max_transport_retries() -> u32 {
     24
 }
 
+/// Default hedge racing-pool cap (strategy.mode = "ttft"): how many promoted
+/// fires (headers past the pointer deadline) + first-byte racers may be in
+/// flight at once before the pointers pause.
+fn default_hedge_pool_cap() -> u32 {
+    10
+}
+
+/// Default hedge pointer header deadline in seconds (strategy.mode = "ttft"):
+/// how long a pointer waits for a fire's response headers before the fire is
+/// promoted into the racing pool and the pointer walks on.
+fn default_hedge_header_deadline_secs() -> u64 {
+    2
+}
+
 /// Inactivity timeout that still allows a long-context prefill to complete.
 fn default_upstream_read_timeout_secs() -> u64 {
     300
@@ -379,6 +393,19 @@ pub struct Config {
     /// Default 24 — enough to walk a 17-key pool twice.
     #[serde(default = "default_max_transport_retries")]
     pub max_transport_retries: u32,
+    /// Hedge racing-pool cap (strategy.mode = "ttft"): how many promoted
+    /// fires (headers past the pointer deadline) + first-byte racers may be
+    /// in flight at once. Pointers pause while the pool is full; a pool entry
+    /// resolving with an error frees its slot.
+    #[serde(default = "default_hedge_pool_cap")]
+    pub hedge_pool_cap: u32,
+    /// Hedge pointer header deadline, in seconds (strategy.mode = "ttft"):
+    /// a pointer waits at most this long for a fire's response headers; past
+    /// the deadline the fire is promoted into the racing pool (it keeps
+    /// racing headers→first byte there) and the pointer walks on to the next
+    /// row — slow headers / slow 429s never pin a pointer again.
+    #[serde(default = "default_hedge_header_deadline_secs")]
+    pub hedge_header_deadline_secs: u64,
     /// Upstream inactivity timeout, in seconds — the longest the gateway waits
     /// for the next byte before treating the connection as stalled.
     ///
@@ -435,6 +462,8 @@ impl Default for Config {
             rate_limit_assume_free: false,
             transport_error_cooldown_secs: default_transport_error_cooldown_secs(),
             max_transport_retries: default_max_transport_retries(),
+            hedge_pool_cap: default_hedge_pool_cap(),
+            hedge_header_deadline_secs: default_hedge_header_deadline_secs(),
             upstream_read_timeout_secs: default_upstream_read_timeout_secs(),
             upstream_total_timeout_secs: default_upstream_total_timeout_secs(),
             auth: AuthSettings::default(),
@@ -698,5 +727,14 @@ mod tests {
         assert_eq!(cfg.strategy.mode, StrategyMode::Classic);
         let round = serde_json::to_string(&cfg).unwrap();
         assert!(round.contains("\"mode\":\"classic\""), "{round}");
+    }
+
+    /// The hedge settings default to cap 10 / deadline 2s for configs written
+    /// before the fields existed.
+    #[test]
+    fn hedge_settings_default_for_legacy_configs() {
+        let cfg: Config = serde_json::from_str(r#"{"strategy": {"sort": ["K"]}}"#).unwrap();
+        assert_eq!(cfg.hedge_pool_cap, 10);
+        assert_eq!(cfg.hedge_header_deadline_secs, 2);
     }
 }

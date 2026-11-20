@@ -30,6 +30,8 @@ export function SettingsView() {
   const rlFreeRef = useRef<HTMLInputElement>(null);
   const transportRef = useRef<HTMLInputElement>(null);
   const readTimeoutRef = useRef<HTMLInputElement>(null);
+  const hedgeCapRef = useRef<HTMLInputElement>(null);
+  const hedgeDlRef = useRef<HTMLInputElement>(null);
   const apiPortRef = useRef<HTMLInputElement>(null);
   const uiPortRef = useRef<HTMLInputElement>(null);
   const authRef = useRef<HTMLInputElement>(null);
@@ -55,6 +57,8 @@ export function SettingsView() {
         rate_limit_assume_free: !!(rlFreeRef.current && rlFreeRef.current.checked),
         transport_error_cooldown_secs: +(transportRef.current ? transportRef.current.value : 0) || 1,
         upstream_read_timeout_secs: +(readTimeoutRef.current ? readTimeoutRef.current.value : 0) || 300,
+        hedge_pool_cap: +(hedgeCapRef.current ? hedgeCapRef.current.value : 0) || 10,
+        hedge_header_deadline_secs: +(hedgeDlRef.current ? hedgeDlRef.current.value : 0) || 2,
       });
       await refresh();
       toast(t('已保存'));
@@ -108,6 +112,8 @@ export function SettingsView() {
             <label className="field"><span>{t('限流冷却上限（秒，0=不限）')}</span><input ref={rlCapRef} type="number" defaultValue={s.rate_limit_cooldown_secs != null ? s.rate_limit_cooldown_secs : 0} /></label>
             <label className="field"><span>{t('传输失败冷却（秒）')}</span><input ref={transportRef} type="number" defaultValue={s.transport_error_cooldown_secs != null ? s.transport_error_cooldown_secs : 1} /></label>
             <label className="field"><span>{t('上游读取超时（秒）')}</span><input ref={readTimeoutRef} type="number" defaultValue={s.upstream_read_timeout_secs != null ? s.upstream_read_timeout_secs : 300} /></label>
+            <label className="field"><span>{t('竞速池容量')}</span><input ref={hedgeCapRef} type="number" defaultValue={s.hedge_pool_cap != null ? s.hedge_pool_cap : 10} /></label>
+            <label className="field"><span>{t('指针响应头等待（秒，超时入池）')}</span><input ref={hedgeDlRef} type="number" defaultValue={s.hedge_header_deadline_secs != null ? s.hedge_header_deadline_secs : 2} /></label>
             <label className="field"><span>{t('429 视为不消耗配额')}</span><input ref={rlFreeRef} type="checkbox" defaultChecked={!!s.rate_limit_assume_free} /></label>
             <label className="field"><span>{t('API 端口')}</span><input ref={apiPortRef} type="number" defaultValue={s.api_port || 8000} /></label>
             <label className="field"><span>{t('UI 端口')}</span><input ref={uiPortRef} type="number" defaultValue={s.ui_port || 8001} /></label>

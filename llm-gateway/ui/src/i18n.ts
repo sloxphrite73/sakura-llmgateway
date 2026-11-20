@@ -69,6 +69,7 @@ const EN: Record<string, string> = {
   '默认冷却时间（秒）':'Default cooldown (s)', 'API 端口':'API port', 'UI 端口':'UI port',
   '启用本地 API 鉴权':'Enable local API auth', '鉴权 Key，逗号分隔':'Auth keys, comma-separated', '保存设置':'Save settings',
   '全冷却最长等待（秒）':'Max hold when all cooling (s)',
+  '竞速池容量':'Racing pool cap', '指针响应头等待（秒，超时入池）':'Pointer header wait (s, then pool)',
   '401/403 异常时长（秒）':'401/403 bench time (s)', '配额耗尽冷却（秒）':'Quota-exhausted cooldown (s)',
   '配置文件':'Config file', '导出配置':'Export config', '导入配置':'Import config', '导入旧版配置':'Import legacy config', 'gateway.json · 导入即时热生效':'gateway.json · import hot-reloads', '旧版导入：仅采纳提供商/Key/模型/智能冷却，保留当前全局设置':'Legacy import: adopts only providers/keys/models/learned-cooldown; keeps current global settings', '导入旧版配置 {n}？仅采纳提供商/Key/模型/智能冷却，保留当前全局设置。':'Import legacy config {n}? Adopts only providers/keys/models/learned-cooldown; keeps current global settings.',
   '添加提供商':'Add provider', '从免费目录选一家，或自定义填入':'Pick from the free catalog, or fill in custom',

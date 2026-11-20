@@ -601,6 +601,12 @@ pub struct SettingsInput {
     /// Per-request budget for transport failures.
     #[serde(default)]
     pub max_transport_retries: Option<u32>,
+    /// Hedge racing-pool cap (strategy.mode = "ttft"). None = keep current.
+    #[serde(default)]
+    pub hedge_pool_cap: Option<u32>,
+    /// Hedge pointer header deadline (seconds). None = keep current.
+    #[serde(default)]
+    pub hedge_header_deadline_secs: Option<u64>,
     /// Upstream inactivity timeout — must cover a long-context prefill.
     #[serde(default)]
     pub upstream_read_timeout_secs: Option<u64>,
@@ -642,6 +648,12 @@ pub async fn update_settings(
         }
         if let Some(v) = input.max_transport_retries {
             c.max_transport_retries = v.max(1);
+        }
+        if let Some(v) = input.hedge_pool_cap {
+            c.hedge_pool_cap = v.max(1);
+        }
+        if let Some(v) = input.hedge_header_deadline_secs {
+            c.hedge_header_deadline_secs = v.max(1);
         }
         if let Some(v) = input.upstream_read_timeout_secs {
             c.upstream_read_timeout_secs = v.max(1);
@@ -1020,6 +1032,8 @@ pub async fn status(State(app): State<std::sync::Arc<App>>) -> Response {
         "rate_limit_assume_free": cfg.rate_limit_assume_free,
         "transport_error_cooldown_secs": cfg.transport_error_cooldown_secs,
         "max_transport_retries": cfg.max_transport_retries,
+        "hedge_pool_cap": cfg.hedge_pool_cap,
+        "hedge_header_deadline_secs": cfg.hedge_header_deadline_secs,
         "upstream_read_timeout_secs": cfg.upstream_read_timeout_secs,
         "upstream_total_timeout_secs": cfg.upstream_total_timeout_secs,
         "auth": cfg.auth,
