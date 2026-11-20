@@ -28,6 +28,12 @@ pub(crate) const AVAILABILITY_PRIOR_BETA: f64 = 2.0;
 /// estimate may be wrong, and true rate-limiting is the cooldown layer's job
 /// (orthogonality, spec §7).
 pub(crate) const AVAILABILITY_HEADROOM_FLOOR: f64 = 0.05;
+/// Observed-TPM ceiling samples (K's soft TPM factor): a rate-limit 429's
+/// token-window snapshot stops binding after this TTL, so a stale-low
+/// estimate can't pin a key at the bottom of K forever.
+pub(crate) const TPM_OBS_TTL_SECS: u64 = 300;
+/// Per-key ring cap for observed-TPM samples.
+pub(crate) const TPM_OBS_CAP: usize = 8;
 
 /// Per-key rolling metrics consumed by the strategy layer (spec §2.2 attributes).
 #[derive(Clone, Debug, Default)]
@@ -39,8 +45,8 @@ pub struct KeyMetricsSnapshot {
     pub tps: f32,                     // 0.0 until token counting
     pub token_balance: Option<u64>,  // None = +∞ (OptInf, spec §2.2)
     pub bill_balance: Option<f64>,    // None = +∞
-    /// Measured capacity from 429 samples (None = unknown) + current
-    /// utilization (0..1+, max of rpm/tpm utilization; None = no capacity data).
+    /// Configured capacity (seed / provider-limit split; None = unknown) +
+    /// current utilization (0..1+, max of rpm/tpm utilization; None = no data).
     pub capacity_rpm: Option<u32>,
     pub capacity_tpm: Option<u32>,
     pub utilization: Option<f64>,
@@ -58,6 +64,12 @@ struct KeyMetrics {
     tftt_samples: VecDeque<u32>,
     /// tokens/sec samples, last `METRIC_SAMPLE_CAP`; mean = tps.
     tps_samples: VecDeque<f32>,
+    /// (time, window-tpm-at-429) — soft per-key TPM ceiling samples learned
+    /// from rate-limit 429s when the provider carries no tpm_limit. K-ONLY
+    /// signal: never feeds cooldowns or configured capacity (PASS §38's harm
+    /// was benching on samples; this only reorders). Zero-token 429s (RPM
+    /// flavored) are not recorded; a success above the ceiling disproves it.
+    tpm_obs: VecDeque<(Instant, u64)>,
     /// USD-normalized bill balance (set by the balance fetcher; None = +∞).
     bill_balance: Option<f64>,
 }
@@ -157,11 +169,14 @@ fn fill_rows(
             r.non_cooled = true;
             r.remaining_secs = 0;
         }
-        // Capacity for K's headroom comes ONLY from config (the skeleton set by
-        // build_candidates: seed_rpm > provider limit split). 429-at-load
-        // sampling was removed entirely (PASS §38: a 429 says rpm≥limit OR
-        // tpm≥limit — a disjunction that can't assign either, and samples
-        // pinned utilization at 100% in practice).
+        // Capacity for K's headroom comes from config (the skeleton set by
+        // build_candidates: seed_rpm > provider limit split) — the capacity
+        // *truth* stays config-only (PASS §38: a 429 says rpm≥limit OR tpm≥limit,
+        // and sample-driven capacity/cooldowns collapsed the pool three times).
+        // The soft exception, sorting-only: when tpm_limit is unconfigured, a
+        // rate-limit 429's token-window snapshot feeds K an observed TPM
+        // ceiling (success-invalidated + TTL-aged, never a cooldown source) so
+        // K doesn't degenerate to the bare success rate on unconfigured pools.
         // Metrics snapshot (spec §2.2): success_rate/rpm/tpm/avg_tftt/tps are
         // live; token_balance is always None (no catalog provider exposes a
         // clean remaining-token-quota field); bill_balance is set by the balance
@@ -228,7 +243,15 @@ fn fill_rows(
                     }
                 };
                 acc(m.req_times.len() as f64, r.capacity_rpm);
-                acc(r.tpm as f64, r.capacity_tpm);
+                // TPM dimension: configured capacity is the truth (PASS §38).
+                // When the provider carries no tpm_limit, fall back to the
+                // observed-TPM soft ceiling learned from rate-limit 429s —
+                // without it K degenerates to the bare success rate on
+                // unconfigured pools.
+                m.tpm_obs.retain(|(t, _)| now.duration_since(*t) <= Duration::from_secs(TPM_OBS_TTL_SECS));
+                let obs_tpm_cap = m.tpm_obs.iter().map(|(_, v)| *v).min();
+                let cap_tpm = r.capacity_tpm.or(obs_tpm_cap.map(|v| v as u32));
+                acc(r.tpm as f64, cap_tpm);
                 let headroom = match util {
                     Some(u) => (1.0 - u).clamp(AVAILABILITY_HEADROOM_FLOOR, 1.0),
                     None => 1.0,
@@ -329,6 +352,97 @@ mod tests {
             capacity_tpm: None,
             availability: 1.0,
         }
+    }
+
+    #[test]
+    fn observed_tpm_ceiling_sinks_just_burned_keys_in_k() {
+        // Provider without tpm_limit: a rate-limit 429 with a loaded token
+        // window feeds K's TPM headroom — without the observed factor K is
+        // the bare success rate and a key that just burned its window keeps
+        // winning until it 429s (and at 355K the 429 itself costs 10-26s).
+        let mut pool = PoolRuntime::default();
+        {
+            let m = pool.metrics.entry("burned".into()).or_default();
+            m.success.push_back((Instant::now(), true));
+            m.token_events.push_back((Instant::now(), 400_000));
+            m.tpm_obs.push_back((Instant::now(), 400_000));
+        }
+        let mut rows = vec![k_row("burned", 1.0, None), k_row("fresh", 1.0, None)];
+        fill_rows(&mut pool, &mut rows, Instant::now());
+        // burned: sr=1.0, util = 400K/400K = 1.0 → headroom floors at 0.05.
+        assert!((rows[0].availability - 0.05).abs() < 1e-9, "got {}", rows[0].availability);
+        // fresh: no live history → availability = the seed success rate.
+        assert!((rows[1].availability - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rate_limit_429_records_observed_tpm_ceiling() {
+        let (app, dir) = app_with_provider(None);
+        {
+            let mut pool = app.pool.lock().unwrap();
+            let m = pool.metrics.entry("k".into()).or_default();
+            m.token_events.push_back((Instant::now(), 90_000));
+        }
+        app.mark_rate_limited("p", "k", None, "429");
+        {
+            let pool = app.pool.lock().unwrap();
+            let m = pool.metrics.get("k").unwrap();
+            assert_eq!(m.tpm_obs.len(), 1);
+            assert_eq!(m.tpm_obs[0].1, 90_000, "the window sum at the 429 is the ceiling sample");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rpm_flavored_429_records_no_tpm_observation() {
+        // A 429 with an empty token window is RPM-flavored: it carries no TPM
+        // information and must not fabricate a zero ceiling (which would read
+        // as "zero capacity" and sink the key below the floor forever).
+        let (app, dir) = app_with_provider(None);
+        app.mark_rate_limited("p", "k", None, "429");
+        {
+            let pool = app.pool.lock().unwrap();
+            let m = pool.metrics.get("k").unwrap();
+            assert!(m.tpm_obs.is_empty());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn success_above_observed_ceiling_clears_it() {
+        let (app, dir) = app_with_provider(None);
+        {
+            let mut pool = app.pool.lock().unwrap();
+            let m = pool.metrics.entry("k".into()).or_default();
+            m.tpm_obs.push_back((Instant::now(), 100_000));
+        }
+        app.record_token_count("k", 150_000);
+        {
+            let pool = app.pool.lock().unwrap();
+            assert!(
+                pool.metrics.get("k").unwrap().tpm_obs.is_empty(),
+                "a bigger success disproves the ceiling"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stale_tpm_observations_expire_to_neutral() {
+        let mut pool = PoolRuntime::default();
+        {
+            let m = pool.metrics.entry("k".into()).or_default();
+            m.success.push_back((Instant::now(), true));
+            m.token_events.push_back((Instant::now(), 100));
+            m.tpm_obs.push_back((Instant::now() - Duration::from_secs(TPM_OBS_TTL_SECS + 10), 100));
+        }
+        let mut rows = vec![k_row("k", 1.0, None)];
+        fill_rows(&mut pool, &mut rows, Instant::now());
+        assert!(
+            (rows[0].availability - 1.0).abs() < 1e-9,
+            "stale ceiling → neutral headroom, got {}",
+            rows[0].availability
+        );
     }
 
     #[test]
@@ -1060,6 +1174,20 @@ impl App {
             m.req_times.retain(|t| now.duration_since(*t) <= Duration::from_secs(METRIC_RPM_WINDOW_SECS));
             m.token_events
                 .retain(|(t, _)| now.duration_since(*t) <= Duration::from_secs(METRIC_TPM_WINDOW_SECS));
+            // K's observed-TPM factor: a rate-limit 429 with a non-empty token
+            // window bounds the key's per-minute TPM from above — recorded as
+            // a SOFT sorting signal only (never a capacity/cooldown source,
+            // PASS §38; a success above the ceiling disproves it, entries age
+            // out by TTL). Zero-token 429s are RPM-flavored and carry no TPM
+            // information, so they must not fabricate a zero ceiling.
+            let tpm_at_429 = m.token_events.iter().map(|(_, n)| *n).sum::<u64>();
+            if tpm_at_429 > 0 {
+                m.tpm_obs.push_back((now, tpm_at_429));
+                m.tpm_obs.retain(|(t, _)| now.duration_since(*t) <= Duration::from_secs(TPM_OBS_TTL_SECS));
+                while m.tpm_obs.len() > TPM_OBS_CAP {
+                    m.tpm_obs.pop_front();
+                }
+            }
             let est = window_recovery_secs(m, now, cap_rpm, cap_tpm, assume_free);
             match retry_after_secs {
                 Some(ra) => ra.max(1),
@@ -1114,6 +1242,15 @@ impl App {
         m.token_events.push_back((now, tokens));
         let win = Duration::from_secs(METRIC_TPM_WINDOW_SECS);
         m.token_events.retain(|(t, _)| now.duration_since(*t) <= win);
+        // A served request bigger than the observed-TPM ceiling disproves it:
+        // the key demonstrably has at least this much room per window, so the
+        // soft estimate is cleared and re-learned on the next 429. Without this
+        // a stale-low sample would pin the key at the bottom of K.
+        if let Some(ceil) = m.tpm_obs.iter().map(|(_, v)| *v).min() {
+            if tokens > ceil {
+                m.tpm_obs.clear();
+            }
+        }
     }
 
     /// Record a time-to-first-token sample (ms) — streaming only (decision ②A).
