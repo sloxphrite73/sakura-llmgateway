@@ -1731,6 +1731,22 @@ fn lines_have_content(text: &str, proto: Protocol) -> bool {
     false
 }
 
+/// Trim the forward-tail buffer to roughly `keep` bytes, cutting only at a
+/// character boundary — a raw byte-offset cut lands inside a multi-byte
+/// UTF-8 character with CJK content and `String::drain` panics, which killed
+/// whole Chinese streams mid-flight in the field (the client saw
+/// `terminated`). Backing off to the boundary may keep a few bytes over
+/// `keep`; the buffer is diagnostic, not a hard budget.
+fn trim_tail(tail: &mut String, keep: usize) {
+    if tail.len() > keep {
+        let mut cut = tail.len() - keep;
+        while cut > 0 && !tail.is_char_boundary(cut) {
+            cut -= 1; // back off to the nearest character boundary
+        }
+        tail.drain(..cut);
+    }
+}
+
 /// Transparent wrapper over an upstream `bytes_stream()`: yields each item
 /// unchanged while recording tftt (first chunk), scanning for usage, and on
 /// stream end recording token count + tps. The downstream `.map()` (translation
@@ -1827,10 +1843,7 @@ where
                 // Bounded tail of what we forwarded — the disconnect diagnosis
                 // needs the last bytes the client actually received.
                 this.tail.push_str(&String::from_utf8_lossy(&chunk));
-                if this.tail.len() > 600 {
-                    let cut = this.tail.len() - 600;
-                    this.tail.drain(..cut);
-                }
+                trim_tail(&mut this.tail, 600);
                 if this.carry.len() > LINE_CARRY_CAP {
                     // No newline in 64KB: broken stream. Keep the tail only.
                     let cut = this.carry.len() - LINE_CARRY_CAP / 2;
@@ -2132,7 +2145,7 @@ pub async fn list_models(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_quota_exhausted, lines_have_content, scan_usage_lines, take_complete_lines};
+    use super::{is_quota_exhausted, lines_have_content, scan_usage_lines, take_complete_lines, trim_tail};
     use crate::protocol::Protocol;
 
     // --- a client closing the stream right after [DONE] must still be counted ---
@@ -2242,6 +2255,30 @@ mod tests {
     }
 
     // --- bench policy: only 401/403 are 异常; quota is a 5h cooldown ---
+
+    #[test]
+    fn tail_trim_never_splits_a_multibyte_char() {
+        // Regression for the production panic: `String::drain` with a raw byte
+        // offset lands inside a multi-byte CJK character and panics, killing
+        // the whole streaming task mid-flight (client sees `terminated`).
+        let mut tail = String::new();
+        tail.push_str(&"中".repeat(233)); // 699 bytes of 3-byte chars
+        tail.push_str("ab");
+        assert_eq!(tail.len(), 701); // len - 600 = 101 lands mid-character
+        trim_tail(&mut tail, 600);
+        // Backing off to the boundary keeps at most (char_len - 1) extra
+        // bytes over the cap — 602 here, well within diagnostic tolerance.
+        assert!(tail.len() >= 598 && tail.len() <= 603, "len={}", tail.len());
+        assert!(tail.is_char_boundary(0) && tail.is_char_boundary(tail.len()));
+        // Pure ASCII trims at the exact offset.
+        let mut ascii = "x".repeat(700);
+        trim_tail(&mut ascii, 600);
+        assert_eq!(ascii.len(), 600);
+        // Below the cap: untouched.
+        let mut tiny = "短".to_string();
+        trim_tail(&mut tiny, 600);
+        assert_eq!(tiny, "短");
+    }
 
     #[test]
     fn quota_marker_matches_plan_exhaustion() {
