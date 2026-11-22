@@ -53,7 +53,7 @@
 
 - **症状**：单次瞬时 auth 波把所有 key 隔离，网关整体瘫痪。（state.rs `PoolRuntime::invalid`）
 - **注释自述**：设计为「连续**三次** 401/403 strike、中间无成功才隔离」。
-- **⚠ 漂移**：代码实现是**单次** 401/403 即 `mark_invalid`；全仓搜索 `strike` 只命中该注释。三振机制只存在于注释（见第九节）。
+- **⚠ 漂移**：代码实现是**单次** 401/403 即 `mark_invalid`；全仓搜索 `strike` 只命中该注释。三振机制只存在于注释（见第九节）。 **漂移注释已于 6d25045 修正。**
 
 ### BUG-08 · Anthropic 流式 usage 全部丢失
 
@@ -221,15 +221,15 @@
 
 ---
 
-## 九、本次审计中新识别 · 未修（非注释记载，来自代码审阅）
+## 九、本次审计中新识别（非注释记载，来自代码审阅）
 
-> 以下为整理本文档时的代码审阅发现，**未经作者确认**，列出供排期参考。
+> 以下为整理本文档时的代码审阅发现。除标注外**未经作者确认**，列出供排期参考。
 
-1. **`theme_asset` Windows 反斜杠路径穿越**（ui.rs）：防护只按 `/` 切段，Windows 上 `\` 也是 `Path::join` 分隔符 → `%5C` 编码可穿越读任意文件。缓解：仅绑 127.0.0.1。一行修复：拒绝含 `\` 的 path。
-2. **`translate_openai_chunk` 缺跨 chunk carry**（proxy.rs）：BUG-03 的翻译管道版——行尾部分 JSON `from_str` 失败被静默丢弃、按 chunk `from_utf8_lossy` 可产生替换符。计量管道（MetricsStream）已修，翻译管道（OpenAI→Anthropic 方向）没有；Anthropic→OpenAI 方向有 event-block buffer，无此问题。
-3. **admin 控制面零鉴权**：UI 端口（8001）所有 `/api/*` 无 check_auth、无 Origin 校验；`/api/config/export` 吐全部 key 明文。信任模型 = 仅本地 + CORS；恶意网页 CSRF 可静默改配置/删 key。
-4. **三振机制文档漂移**（见 BUG-07）：`PoolRuntime::invalid` 注释描述的「三次连续 401/403」与实现（单次即隔离）不符——在一个注释即事故档案的代码库里，这种漂移本身有害。
+1. **`theme_asset` Windows 反斜杠路径穿越 —— 已修（6d25045）**：防护只按 `/` 切段，Windows 上 `\` 也是 `Path::join` 分隔符 → `%5C` 编码可穿越读任意文件。修复：提取 `valid_theme_path` 拒绝反斜杠，单测 `theme_path_rejects_backslash_traversal`；缓解面：仅绑 127.0.0.1。
+2. **`translate_openai_chunk` 缺跨 chunk carry —— 已修（6d25045）**：BUG-03 的翻译管道版——行尾部分 JSON `from_str` 失败被静默丢弃、按 chunk `from_utf8_lossy` 可产生替换符。修复：与 MetricsStream 同款完整行组装（carry + 64KB 上限），回归测试 `openai_chunk_split_mid_line_is_not_dropped` / `openai_chunk_split_inside_multibyte_char_is_reassembled`。
+3. **admin 控制面零鉴权（未修，待定夺信任模型）**：UI 端口（8001）所有 `/api/*` 无 check_auth、无 Origin 校验；`/api/config/export` 吐全部 key 明文。信任模型 = 仅本地 + CORS；恶意网页 CSRF 可静默改配置/删 key。
+4. **三振机制文档漂移 —— 注释已修正（6d25045，见 BUG-07）**：`PoolRuntime::invalid` 注释已改为如实描述「单次 401/403 即隔离、无 strike 计数」；是否引入真正的三振机制属行为变更，留待作者决策。
 
 ---
 
-*本档案按整理时的代码现状（commit d6553d9）固定；后续新事故应追加至对应分级小节，并保持「症状 / 根因 / 修复 / 证据」四件套格式。*
+*本档案正文按整理时的代码现状（commit d6553d9）固定；第九节随修复推进更新（最近：6d25045）。后续新事故应追加至对应分级小节，并保持「症状 / 根因 / 修复 / 证据」四件套格式。*
