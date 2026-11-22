@@ -1587,11 +1587,13 @@ fn finish_generic(
                 .map(|_| "gateway".to_string())
                 .unwrap_or_else(|| "gateway".to_string());
             let mut state = OpenAiToAnthropicStream::new(model);
+            // Cross-chunk line carry for the translator (see translate_openai_chunk).
+            let mut buffer: Vec<u8> = Vec::new();
             let upstream = MetricsStream::new(body.into_stream(), app.clone(), key_id.clone(), provider_id.clone(), client_model.clone(), up_proto, est_in, ttfb_ms);
             let stream = upstream
                 .map(move |r| -> Result<axum::body::Bytes, std::io::Error> {
                     match r {
-                        Ok(chunk) => Ok(translate_openai_chunk(&mut state, &chunk).into_bytes().into()),
+                        Ok(chunk) => Ok(translate_openai_chunk(&mut state, &mut buffer, &chunk).into_bytes().into()),
                         Err(e) => Ok(openai_stream_error_chunk(&e).into_bytes().into()),
                     }
                 });
@@ -2023,28 +2025,46 @@ fn openai_stream_error_chunk(e: &reqwest::Error) -> String {
 }
 
 /// Feed one raw OpenAI SSE byte chunk through the translator, returning the
-/// Anthropic SSE bytes to forward. Buffers partially-received lines itself.
-fn translate_openai_chunk(state: &mut OpenAiToAnthropicStream, chunk: &[u8]) -> String {
+/// Anthropic SSE bytes to forward. A `data:` line split across two TCP reads
+/// (or a multi-byte UTF-8 character split at the same boundary) is assembled
+/// in `buffer` before parsing — the per-chunk lossy parse that used to be
+/// here silently dropped every partial trailing line (losing generated text
+/// mid-stream with no error) and mangled split characters into U+FFFD. This
+/// is BUG-03's translation-path twin (bug-ledger 九-2), fixed with the same
+/// complete-line assembly MetricsStream uses.
+fn translate_openai_chunk(
+    state: &mut OpenAiToAnthropicStream,
+    buffer: &mut Vec<u8>,
+    chunk: &[u8],
+) -> String {
+    buffer.extend_from_slice(chunk);
     let mut out = String::new();
-    let text = String::from_utf8_lossy(chunk);
-    for line in text.split_inclusive('\n') {
-        let line = line.trim();
-        let payload = match line.strip_prefix("data:") {
-            Some(p) => p.trim(),
-            None => continue,
-        };
-        if payload == "[DONE]" {
-            for e in state.feed(None) {
-                out.push_str(&e);
+    if buffer.len() > LINE_CARRY_CAP {
+        // No newline in 64KB: broken stream. Keep the tail only (the same cap
+        // MetricsStream applies to its carry).
+        let cut = buffer.len() - LINE_CARRY_CAP / 2;
+        buffer.drain(..cut);
+    }
+    if let Some(lines) = take_complete_lines(buffer) {
+        for line in lines.split_inclusive('\n') {
+            let line = line.trim();
+            let payload = match line.strip_prefix("data:") {
+                Some(p) => p.trim(),
+                None => continue,
+            };
+            if payload == "[DONE]" {
+                for e in state.feed(None) {
+                    out.push_str(&e);
+                }
+                continue;
             }
-            continue;
-        }
-        if payload.is_empty() {
-            continue;
-        }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
-            for e in state.feed(Some(&v)) {
-                out.push_str(&e);
+            if payload.is_empty() {
+                continue;
+            }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
+                for e in state.feed(Some(&v)) {
+                    out.push_str(&e);
+                }
             }
         }
     }
@@ -2336,5 +2356,45 @@ mod tests {
         assert_eq!(cfg.auth_invalid_secs, 3600);
         assert_eq!(cfg.quota_cooldown_secs, 18_000);
     }
-}
 
+    // --- translation carry: the OpenAI→Anthropic path must assemble SSE
+    // lines across chunk boundaries exactly like MetricsStream (bug-ledger
+    // 九-2; BUG-03's translation-path twin) ---
+
+    #[test]
+    fn openai_chunk_split_mid_line_is_not_dropped() {
+        use crate::protocol::OpenAiToAnthropicStream;
+        let mut st = OpenAiToAnthropicStream::new("m".into());
+        let mut buf = Vec::new();
+        // First TCP read ends inside the data line's JSON, mid-line.
+        let a = super::translate_openai_chunk(
+            &mut st,
+            &mut buf,
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"Hel",
+        );
+        assert!(a.is_empty(), "partial line must not emit yet: {a}");
+        // Second read completes the line and appends [DONE]. The per-chunk
+        // parser that used to be here dropped the fragment outright — the
+        // forwarded stream lost the text "Hello" without any error.
+        let b = super::translate_openai_chunk(&mut st, &mut buf, b"lo\"}}]}\n\ndata: [DONE]\n\n");
+        assert!(b.contains("Hello"), "completed line's text must survive: {b}");
+        assert!(b.contains("message_stop"), "[DONE] must close the message: {b}");
+    }
+
+    #[test]
+    fn openai_chunk_split_inside_multibyte_char_is_reassembled() {
+        use crate::protocol::OpenAiToAnthropicStream;
+        let mut st = OpenAiToAnthropicStream::new("m".into());
+        let mut buf = Vec::new();
+        // 你 is 3 UTF-8 bytes; cut after 2 — the per-chunk lossy conversion
+        // used to emit U+FFFD here, corrupting the forwarded text.
+        let mut first = b"data: {\"choices\":[{\"delta\":{\"content\":\"".to_vec();
+        first.extend_from_slice(&"你".as_bytes()[..2]);
+        let a = super::translate_openai_chunk(&mut st, &mut buf, &first);
+        assert!(a.is_empty(), "partial line must not emit yet: {a}");
+        let mut second = "你".as_bytes()[2..].to_vec();
+        second.extend_from_slice(b"\"}}]}\n\n");
+        let b = super::translate_openai_chunk(&mut st, &mut buf, &second);
+        assert!(b.contains("你"), "split multi-byte char must be reassembled: {b}");
+    }
+}

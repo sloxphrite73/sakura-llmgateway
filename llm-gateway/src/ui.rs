@@ -68,6 +68,17 @@ fn valid_theme_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// Theme asset path: non-empty, no empty/`.`/`..` segments, and no
+/// backslash — on Windows `\` is also a `Path::join` separator, so a
+/// `%5C`-encoded `..` would sail past the `/`-only segment check and read
+/// outside the theme directory (bug-ledger 九-1). Loopback-only binding keeps
+/// the severity low; this closes it outright.
+fn valid_theme_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains('\\')
+        && !path.split('/').any(|seg| seg.is_empty() || seg == "." || seg == "..")
+}
+
 /// The external themes directory: `themes/` next to the active config file.
 fn external_themes_dir(app: &crate::state::App) -> std::path::PathBuf {
     app.config_path
@@ -161,10 +172,7 @@ pub async fn theme_asset(
     State(app): State<std::sync::Arc<crate::state::App>>,
     axum::extract::Path((id, path)): axum::extract::Path<(String, String)>,
 ) -> Response {
-    if !valid_theme_id(&id)
-        || path.is_empty()
-        || path.split('/').any(|seg| seg.is_empty() || seg == "." || seg == "..")
-    {
+    if !valid_theme_id(&id) || !valid_theme_path(&path) {
         return (StatusCode::BAD_REQUEST, "bad theme path").into_response();
     }
     let ext = external_themes_dir(&app).join(&id).join(&path);
@@ -174,4 +182,39 @@ pub async fn theme_asset(
         }
     }
     serve_file(&format!("themes/{id}/{path}")).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{valid_theme_id, valid_theme_path};
+
+    #[test]
+    fn theme_id_allows_only_url_and_fs_safe_names() {
+        assert!(valid_theme_id("sakura-dark"));
+        assert!(valid_theme_id("A_1"));
+        assert!(!valid_theme_id(""));
+        assert!(!valid_theme_id("a/b"));
+        assert!(!valid_theme_id(".."));
+        assert!(!valid_theme_id("a b"));
+        assert!(!valid_theme_id(&"x".repeat(65)));
+    }
+
+    #[test]
+    fn theme_path_rejects_backslash_traversal() {
+        // The exact production-relevant shape (bug-ledger 九-1): `%5C` decodes
+        // to `\` before the handler sees it, and on Windows `Path::join`
+        // treats it as a separator — the `/`-only segment check passes it.
+        assert!(!valid_theme_path("css\\..\\..\\gateway.json"));
+        assert!(!valid_theme_path("a\\b"));
+        // The classic traversal shapes stay rejected.
+        assert!(!valid_theme_path(""));
+        assert!(!valid_theme_path("../x"));
+        assert!(!valid_theme_path("a/../b"));
+        assert!(!valid_theme_path("a//b"));
+        assert!(!valid_theme_path("a/./b"));
+        // Ordinary asset paths pass.
+        assert!(valid_theme_path("theme.css"));
+        assert!(valid_theme_path("css/theme.css"));
+        assert!(valid_theme_path("img/icons/x.png"));
+    }
 }

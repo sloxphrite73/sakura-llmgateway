@@ -78,10 +78,12 @@ struct KeyMetrics {
 pub(crate) struct PoolRuntime {
     /// key id -> cooldown expiry
     cooling: HashMap<String, Instant>,
-    /// key id -> "invalid" (auth-failed) cooldown expiry. Reached only after
-    /// THREE consecutive 401/403 strikes with no success between (proxy.rs) —
-    /// a single transient auth wave no longer quarantines a healthy key (that
-    /// used to cascade into a pool-wide "all keys invalid").
+    /// key id -> "invalid" (auth-failed) cooldown expiry. A single 401/403
+    /// strike quarantines the key for `auth_invalid_secs` (default 1h; there
+    /// is no strike counter). A transient provider-wide auth wave can
+    /// therefore bench the whole pool until the timers lapse or the UI
+    /// clears them — the "three consecutive strikes" scheme once described
+    /// here was never implemented (bug-ledger BUG-07).
     invalid: HashMap<String, Instant>,
     /// key id -> last error string (for the UI)
     last_error: HashMap<String, String>,
