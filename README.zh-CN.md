@@ -61,7 +61,7 @@
 [PolyForm Noncommercial 1.0.0](LICENSE) 
 
 
-**署名要求：** 直接/间接使用本项目源代码的开源项目，必须在其文档中显式标出作者（**sloxphrite73**）和本项目名称（**sakura-llmgateway**）。本项目不接受商用和非开源使用。
+本项目不接受商用和非开源使用。
 
 注：v0.8.5-stable 及更早版本以 GPL-3.0 发布，已发布的副本仍按 GPL-3.0 授权；之后的版本适用 PolyForm Noncommercial 1.0.0。
 
