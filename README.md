@@ -56,3 +56,4 @@ For further development on or based on this project, see the [development guide]
 This project does not permit commercial use or closed-source use.
 
 Note: releases up to and including v0.8.5-stable were published under GPL-3.0; those copies remain available under GPL-3.0. Later versions are under PolyForm Noncommercial 1.0.0.
+Note: the additional attribution condition that shipped with v0.8.6-beta and v0.8.6-beta2 remains in effect for those released copies; it has since been removed.
