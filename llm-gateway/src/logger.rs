@@ -27,6 +27,13 @@ use std::sync::OnceLock;
 /// traffic produces, small enough that a stalled disk never grows the heap.
 const QUEUE_CAP: usize = 1024;
 
+/// Rotate at 16 MB, keep 3 rotated copies (`<log>.1/.2/.3`): the long-running
+/// Android service writes one [req] line per streamed request, so an
+/// append-only file grows without bound (bug-ledger 九-7) — 4 files × 16 MB
+/// caps the footprint at 64 MB, no knob to babysit.
+const LOG_ROTATE_BYTES: u64 = 16 * 1024 * 1024;
+const LOG_ROTATE_KEEP: usize = 3;
+
 static LOG: OnceLock<SyncSender<Line>> = OnceLock::new();
 
 /// Lines dropped because the writer queue was full, reported on the next
@@ -59,16 +66,7 @@ pub fn init(path: std::path::PathBuf) {
         .append(true)
         .open(&path)
         .ok();
-    let opened = file.is_some();
-    let (tx, rx) = mpsc::sync_channel::<Line>(QUEUE_CAP);
-    let spawned = std::thread::Builder::new()
-        .name("sakura-log".to_string())
-        .spawn(move || run_writer(rx, file))
-        .is_ok();
-    if spawned {
-        let _ = LOG.set(tx);
-    }
-    if opened {
+    if file.is_some() {
         eprintln!("[gateway] log file:   {}", path.display());
     } else {
         eprintln!(
@@ -76,16 +74,39 @@ pub fn init(path: std::path::PathBuf) {
             path.display()
         );
     }
+    let (tx, rx) = mpsc::sync_channel::<Line>(QUEUE_CAP);
+    let spawned = std::thread::Builder::new()
+        .name("sakura-log".to_string())
+        .spawn(move || run_writer(rx, path, file))
+        .is_ok();
+    if spawned {
+        let _ = LOG.set(tx);
+    }
 }
 
 /// The one thread that touches the terminal and the log file. Single FIFO
 /// consumer → line order is preserved. Every line is flushed before the next
 /// is taken (the durability that motivated the file mirror is unchanged —
 /// only the payer moved). A full queue's drop count leads the next written
-/// line, so disk stalls are visible in the record itself.
-fn run_writer(rx: Receiver<Line>, mut file: Option<std::fs::File>) {
+/// line, so disk stalls are visible in the record itself. At LOG_ROTATE_BYTES
+/// the file rotates (bug-ledger 九-7): append-only otherwise grows without
+/// bound under the one-[req]-line-per-request volume.
+fn run_writer(
+    rx: Receiver<Line>,
+    path: std::path::PathBuf,
+    mut file: Option<std::fs::File>,
+) {
+    // Bytes in the current file so far (approximate: the stamp/separators add
+    // a fixed slack per line — rotation tolerances are MBs, not bytes). A
+    // restart into an already-oversized file rotates on the first line.
+    let mut written = file
+        .as_ref()
+        .and_then(|f| f.metadata().ok())
+        .map(|m| m.len())
+        .unwrap_or(0);
     for line in rx {
         eprintln!("{}", line.msg);
+        let mut wrote = false;
         if let Some(f) = file.as_mut() {
             let dropped = DROPPED.swap(0, Ordering::Relaxed);
             if dropped > 0 {
@@ -96,10 +117,36 @@ fn run_writer(rx: Receiver<Line>, mut file: Option<std::fs::File>) {
                     dropped
                 );
             }
-            let _ = writeln!(f, "{} {}", line.ms, line.msg);
+            if writeln!(f, "{} {}", line.ms, line.msg).is_ok() {
+                wrote = true;
+            }
             let _ = f.flush();
         }
+        written += line.msg.len() as u64 + 32;
+        if wrote && written >= LOG_ROTATE_BYTES {
+            file = rotate(&path);
+            written = 0;
+        }
     }
+}
+
+/// Shift the rotated copies down (`.2` → `.3`, `.1` → `.2`, current → `.1`,
+/// the oldest falls off) and reopen a fresh file at `path`. Best-effort: a
+/// rename that fails leaves the older layout; a reopen failure degrades the
+/// writer to terminal-only (the queue keeps draining, lines still mirror).
+fn rotate(path: &std::path::Path) -> Option<std::fs::File> {
+    for i in (1..LOG_ROTATE_KEEP).rev() {
+        let _ = std::fs::rename(
+            path.with_extension(format!("log.{i}")),
+            path.with_extension(format!("log.{}", i + 1)),
+        );
+    }
+    let _ = std::fs::rename(path, path.with_extension("log.1"));
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .ok()
 }
 
 /// Print to the terminal and append the same line to the log file — without
@@ -157,7 +204,7 @@ mod tests {
         tx.send(Line { ms: 111, msg: "first".into() }).unwrap();
         tx.send(Line { ms: 222, msg: "second".into() }).unwrap();
         drop(tx); // all senders gone → the writer drains and returns
-        run_writer(rx, std::fs::OpenOptions::new().create(true).append(true).open(&path).ok());
+        run_writer(rx, path.clone(), std::fs::OpenOptions::new().create(true).append(true).open(&path).ok());
         let text = std::fs::read_to_string(&path).unwrap();
         let a = text.find("111 first\n").expect("stamped first line missing");
         let b = text.find("222 second\n").expect("stamped second line missing");
@@ -176,7 +223,7 @@ mod tests {
         DROPPED.store(3, Ordering::Relaxed);
         tx.send(Line { ms: 9, msg: "through".into() }).unwrap();
         drop(tx);
-        run_writer(rx, file);
+        run_writer(rx, path.clone(), file);
         let text = std::fs::read_to_string(&path).unwrap();
         let r = text.find("3 log lines dropped").expect("drop report missing");
         let l = text.find("9 through\n").expect("through line missing");
@@ -206,5 +253,25 @@ mod tests {
         // mechanism (non-blocking, recoverable), not the global state.
         assert_eq!(DROPPED.load(Ordering::Relaxed), before);
         drop(rx);
+    }
+
+    /// Rotation shifts every copy one slot down and reopens a fresh file;
+    /// the oldest copy falls off (LOG_ROTATE_KEEP total).
+    #[test]
+    fn rotation_shifts_copies_and_reopens() {
+        let dir = std::env::temp_dir().join(format!("logger-test-{}-rotate", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("sakura-test.log");
+        std::fs::write(&path, "current").unwrap();
+        std::fs::write(dir.join("sakura-test.log.1"), "one").unwrap();
+        std::fs::write(dir.join("sakura-test.log.2"), "two").unwrap();
+        let file = rotate(&path);
+        assert!(file.is_some(), "rotate must reopen a fresh file");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+        assert_eq!(std::fs::read_to_string(dir.join("sakura-test.log.1")).unwrap(), "current");
+        assert_eq!(std::fs::read_to_string(dir.join("sakura-test.log.2")).unwrap(), "one");
+        assert_eq!(std::fs::read_to_string(dir.join("sakura-test.log.3")).unwrap(), "two");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
