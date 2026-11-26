@@ -1324,6 +1324,17 @@ where
                     match hedge_dispatch(&app, &tx, ev, &mut fires, &mut [], &mut transport_failures, inbound).await {
                         Walk::Winner { ctx, headers, first, rest, ttfb_ms } => {
                             app.clear_error(&ctx.key_id);
+                            // Hedge mode's outcome line (bug-ledger 九-8): fires themselves stay
+                            // unlogged (the pool is bounded and every loser is already graded with
+                            // its own [key] line), but the winner — and the fact that it WAS a
+                            // hedge win — must be visible in the record.
+                            crate::rlog!(
+                                "[hedge] winner: provider={} key={} model={} ttfb={}ms",
+                                ctx.provider_id,
+                                mask_key(&ctx.key_id),
+                                ctx.upstream_model,
+                                ttfb_ms
+                            );
                             return finish(
                                 app,
                                 headers,
@@ -1443,6 +1454,17 @@ where
             match hedge_dispatch(&app, &tx, ev, &mut fires, &mut cur_fire, &mut transport_failures, inbound).await {
                 Walk::Winner { ctx, headers, first, rest, ttfb_ms } => {
                     app.clear_error(&ctx.key_id);
+                    // Hedge mode's outcome line (bug-ledger 九-8): fires themselves stay
+                    // unlogged (the pool is bounded and every loser is already graded with
+                    // its own [key] line), but the winner — and the fact that it WAS a
+                    // hedge win — must be visible in the record.
+                    crate::rlog!(
+                        "[hedge] winner: provider={} key={} model={} ttfb={}ms",
+                        ctx.provider_id,
+                        mask_key(&ctx.key_id),
+                        ctx.upstream_model,
+                        ttfb_ms
+                    );
                     return finish(
                         app,
                         headers,
@@ -1541,6 +1563,9 @@ fn finish_generic(
         // captured at accept time) — the client must receive them regardless of
         // how the body ends.
         let mut headers = headers;
+        // Body-clock for the buffered path's [req] summary (bug-ledger 九-8):
+        // total = ttfb + time spent buffering the body.
+        let t_body = std::time::Instant::now();
 
         // --- non-streaming: buffer fully so upstream deaths before completion count as
         // a fail (and never deliver a truncated body as a success).
@@ -1587,25 +1612,35 @@ fn finish_generic(
                     // reported `usage` (actual), falling back to a rough body estimate
                     // when absent (decision 鈶燗). Non-stream contributes to tpm only;
                     // tftt/tps are streaming-only (0 here, wired next chunk).
-                    {
+                    let (total, how) = {
                         let up = upstream_proto_of(&app, &provider_id);
-                        let total = match protocol::extract_usage_tokens(&body, up) {
-                            Some((i, o)) => i + o,
+                        let (total, how) = match protocol::extract_usage_tokens(&body, up) {
+                            Some((i, o)) => (i + o, "upstream usage".to_string()),
                             // No usage body: count both sides with the real BPE
                             // tokenizer (never record 0 for a served request).
                             None => {
                                 let out = crate::tokenizer::count(&crate::tokenizer::response_text(&body));
-                                let total = est_in + out;
-                                crate::rlog!(
-                                    "[stats] no upstream usage - counted locally: in~{} + out~{} = {} (model {})",
-                                    est_in, out, total, client_model
-                                );
-                                total
+                                (est_in + out, format!("counted locally: in~{} out~{}", est_in, out))
                             }
                         };
                         app.record_token_count(&key_id, total);
                         app.record_tokens(total, Some(&key_id), &provider_id, &client_model);
-                    }
+                        (total, how)
+                    };
+                    // Buffered requests never pass through MetricsStream, so the
+                    // per-request summary used to be streaming-only — buffered
+                    // successes were invisible in the log (bug-ledger 九-8). Same
+                    // summary shape as the streaming path.
+                    crate::rlog!(
+                        "[req] model={} key={} ttfb={}ms total={}ms bytes={} tokens={} ({})",
+                        client_model,
+                        mask_key(&key_id),
+                        ttfb_ms,
+                        ttfb_ms + t_body.elapsed().as_millis() as u64,
+                        bytes.len(),
+                        total,
+                        how
+                    );
                     // Translate only when the upstream protocol differs from the client's.
                     // The upstream response is in the *upstream's* format; the client
                     // needs it in *its* format.
