@@ -14,9 +14,13 @@
 
 - hedge 竞速机改造：竞速池扩为可配置的 `hedge_pool_cap`（默认 10）；指针对每次开火最多等可配置的 `hedge_header_deadline_secs`（默认 2 秒）的响应头——快 429 立即跳下一行，快 2xx 转入竞速池，超时未回的请求整体转入竞速池继续竞速、指针立即走下一行（慢 429 / 慢响应头不再堵住指针）；池内条目出错即踢出并按既有分级记账（K 下轮生效）；池满指针暂停等空位。两项均为设置页可改的 gateway.json 设置（旧配置缺省按默认值生效）。
 
+- hedge 竞速胜负判定从「首个响应体字节」改为「首个生成 token」（reasoning_content / content / 工具调用增量，跨 chunk 行组装）：实测上游人人 2 秒回响应头、首内容 token 却被 prefill 队列扣住 60–180 秒——首字节竞速选中的是「最先回头」而非「最先吐字」的 Key，深队列 Key 会锁死整轮；首 token 竞速让缓存热/队列浅的 Key 自然胜出，赢家缓冲已读字节并接回剩余流（DSH 长程基准实测：82 步 avg 32.76s / max 185.80s，尖刺全部为赢家 ttfb ~2s + tftt 54–181s）。
+
 ### 测试
 
 - 新增正式测试规范「长程开发 TTFT 基准」（doc/长程开发TTFT基准.md）：接入 DeepSeek Harness headless 的 18 条长程开发会话（sensenova/glm-5.3 经待测网关、一次性仓库克隆、上下文 ~300K、含工具调用与提交），标准 avg TTFT ≤ 5s / max ≤ 10s；「跑自测」自此指该基准。
+
+- 长程开发 TTFT 基准覆盖层：DSH headless 接入待测网关 + 会话串联 + 按步 TTFT 采集（与 dsh-session-stats 同口径：step start → 首输出片段）+ DSH 自动压缩显式关闭。
 
 ### 新增
 

@@ -45,7 +45,7 @@ const EN: Record<string, string> = {
   '暂无可用模型':'No models available', '选择模型':'Select model', '已编组':'Grouped',
   '策略预设':'Strategy presets', '路由模式 · 经 gateway.json 的 strategy.mode 切换':'Routing mode · switch via strategy.mode in gateway.json',
   'TTFT 优先':'TTFT first', '经典顺序':'Classic sequential', '当前':'current',
-  'K 键排表 · 多路对冲竞速 · 首字节先返回者胜':'K-sorted table · hedged racing · first body byte wins',
+  'K 键排表 · 多路对冲竞速 · 首 token 先返回者胜':'K-sorted table · hedged racing · first token wins',
   '排序栈 · 游标轮转 · 逐把尝试':'Sort stack · cursor rotation · one key at a time',
   '演示':'Demo', 'dry-run 实时':'dry-run live', '模拟请求':'Simulate request',
   '路由命中':'Routed', '429 全冷却':'429 all cooling', '429 无可用':'429 no valid', '429 候选为空':'429 empty',

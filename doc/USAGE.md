@@ -170,7 +170,10 @@ import one):
   pool, and a fire still unresolved at the deadline is promoted into the pool
   with the pointer walking on immediately (slow headers and slow 429s never
   pin a pointer). In the pool (≤ `hedge_pool_cap`, default 10) the first
-  response body byte wins and everything else is cancelled; an entry
+  *generated token* wins (reasoning, content, or tool-call deltas — headers
+  arrive fast on every key while the provider's prefill queue decides who
+  actually talks first, so the race must run to what the model says) and
+  everything else is cancelled; an entry
   resolving with an error is kicked out and graded (K sees it next round). A
   fully-walked table re-sorts and starts a new round; pool entries survive
   across rounds; all-cooling keeps the max-hold budget. Note: hedging sends

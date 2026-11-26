@@ -807,12 +807,15 @@ struct HedgeCtx {
 /// Result of one fired request at response-header time.
 enum HeadersOutcome {
     /// Non-429-class success: the response is parked as "hanging" and keeps
-    /// racing for its first body byte (that byte is the TTFT winner trigger).
+    /// racing for its first generated token (that token is the TTFT winner
+    /// trigger — headers arrive fast on every key; the prefill queue decides
+    /// who actually talks first).
     Accepted {
         ctx: HedgeCtx,
         headers: HeaderMap,
         body: reqwest::Response,
         ttfb_ms: u64,
+        proto: Protocol,
     },
     /// An HTTP error status: graded exactly like the classic walk (429
     /// quota/rate split, 401/403 invalid, 408/5xx short cooldown; a
@@ -830,9 +833,9 @@ enum HeadersOutcome {
     Transport { ctx: HedgeCtx, err: reqwest::Error },
 }
 
-/// Result of a hanging request's first-byte race.
-enum FirstByteOutcome {
-    /// First body byte arrived — this candidate wins the TTFT race.
+/// Result of a racing pool entry's first-token race.
+enum FirstTokenOutcome {
+    /// First generated token arrived — this candidate wins the TTFT race.
     Won {
         ctx: HedgeCtx,
         headers: HeaderMap,
@@ -840,7 +843,7 @@ enum FirstByteOutcome {
         rest: futures_util::stream::BoxStream<'static, Result<axum::body::Bytes, reqwest::Error>>,
         ttfb_ms: u64,
     },
-    /// The body broke before any byte arrived (or the 200 was empty).
+    /// The body broke before any token arrived (or the 200 was empty).
     Broke { ctx: HedgeCtx, err: Option<reqwest::Error> },
 }
 
@@ -852,7 +855,7 @@ enum FirePhase {
     /// Promoted past the pointer deadline: still awaiting headers, occupying
     /// a racing-pool slot.
     PoolHeaders,
-    /// A 2xx response racing for its first body byte (a pool entry).
+    /// A 2xx response racing for its first generated token (a pool entry).
     PoolRacing,
 }
 
@@ -879,7 +882,7 @@ enum HedgeEv {
     Deadline { fire: u64, shard: usize },
     /// A first-byte racer resolved: `Won` takes the whole request; `Broke`
     /// frees its pool slot and is graded.
-    Raced { fire: u64, outcome: FirstByteOutcome },
+    Raced { fire: u64, outcome: FirstTokenOutcome },
 }
 
 /// Fire one request and resolve it at response-header time.
@@ -914,7 +917,7 @@ async fn hedge_fire(
             let status = resp.status();
             if status.is_success() {
                 let headers = upstream_headers(&resp);
-                HeadersOutcome::Accepted { ctx, headers, body: resp, ttfb_ms }
+                HeadersOutcome::Accepted { ctx, headers, body: resp, ttfb_ms, proto: provider.protocol() }
             } else {
                 let code = status.as_u16();
                 let retry_after = resp
@@ -930,24 +933,105 @@ async fn hedge_fire(
     }
 }
 
-/// Race a hanging response for its first body byte. The first non-empty chunk
-/// wins the hedge; the already-read chunk is chained back in front of the
-/// rest so the success pipeline sees an unbroken body.
-async fn hedge_race_first_byte(
+/// True when a complete SSE line carries the first *generated token* of the
+/// response — OpenAI `delta.reasoning_content` / `delta.content` non-empty or
+/// a non-empty `delta.tool_calls`, Anthropic `delta.text` /
+/// `delta.input_json_delta.partial_json` non-empty. Role/usage/stop events
+/// don't count: providers return headers and queue events eagerly while the
+/// prefill queue still holds the actual generation — the first *token* is
+/// what tells a shallow-queue key from a deep one.
+fn lines_have_token(lines: &str, proto: Protocol) -> bool {
+    if !lines.contains("\"delta\"") {
+        return false;
+    }
+    for line in lines.split_inclusive('\n') {
+        let payload = match line.trim().strip_prefix("data:") {
+            Some(p) => p.trim(),
+            None => continue,
+        };
+        if payload == "[DONE]" || payload.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
+            // OpenAI nests the delta under choices[0]; Anthropic keeps it top-level.
+            let delta = match proto {
+                Protocol::OpenAi => v.pointer("/choices/0/delta"),
+                Protocol::Anthropic => v.get("delta"),
+            };
+            if let Some(delta) = delta {
+                let has_token = match proto {
+                    Protocol::OpenAi => {
+                        ["reasoning_content", "content"]
+                            .iter()
+                            .any(|f| delta.get(*f).and_then(|c| c.as_str()).map_or(false, |s| !s.is_empty()))
+                            || delta
+                                .get("tool_calls")
+                                .and_then(|c| c.as_array())
+                                .map_or(false, |a| !a.is_empty())
+                    }
+                    Protocol::Anthropic => {
+                        delta.get("text").and_then(|c| c.as_str()).map_or(false, |s| !s.is_empty())
+                            || delta
+                                .get("partial_json")
+                                .and_then(|c| c.as_str())
+                                .map_or(false, |s| !s.is_empty())
+                    }
+                };
+                if has_token {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Race a hanging response for its first *generated token*. Headers come
+/// back fast on every key while the provider's prefill queue decides who
+/// actually talks first — first-byte racing cannot tell a shallow-queue key
+/// from a deep one (observed in the field: 2s headers, then 180s to the first
+/// content token), so the race runs until the first token-bearing SSE line
+/// (reasoning, content, or tool-call deltas). Everything read before the win
+/// is buffered and chained back in front of the rest so the success pipeline
+/// sees an unbroken body.
+async fn hedge_race_first_token(
     ctx: HedgeCtx,
     headers: HeaderMap,
     ttfb_ms: u64,
+    proto: Protocol,
     resp: reqwest::Response,
-) -> FirstByteOutcome {
+) -> FirstTokenOutcome {
     let mut stream = resp.bytes_stream();
+    let mut seen: Vec<u8> = Vec::new();
+    let mut carry: Vec<u8> = Vec::new();
     loop {
         match stream.next().await {
-            None => return FirstByteOutcome::Broke { ctx, err: None },
-            Some(Err(err)) => return FirstByteOutcome::Broke { ctx, err: Some(err) },
-            // Zero-length chunks are not a body byte.
-            Some(Ok(b)) if b.is_empty() => continue,
-            Some(Ok(b)) => {
-                return FirstByteOutcome::Won { ctx, headers, first: b, rest: stream.boxed(), ttfb_ms }
+            None => return FirstTokenOutcome::Broke { ctx, err: None },
+            Some(Err(err)) => return FirstTokenOutcome::Broke { ctx, err: Some(err) },
+            Some(Ok(chunk)) => {
+                if chunk.is_empty() {
+                    continue;
+                }
+                seen.extend_from_slice(&chunk);
+                // Cross-chunk line assembly: a token event split across TCP
+                // reads must still be recognized (the same lesson as usage
+                // capture). The carry is bounded like MetricsStream's.
+                carry.extend_from_slice(&chunk);
+                if carry.len() > LINE_CARRY_CAP {
+                    let cut = carry.len() - LINE_CARRY_CAP / 2;
+                    carry.drain(..cut);
+                }
+                if let Some(lines) = take_complete_lines(&mut carry) {
+                    if lines_have_token(&lines, proto) {
+                        return FirstTokenOutcome::Won {
+                            ctx,
+                            headers,
+                            first: axum::body::Bytes::from(seen),
+                            rest: stream.boxed(),
+                            ttfb_ms,
+                        };
+                    }
+                }
             }
         }
     }
@@ -1116,9 +1200,9 @@ async fn hedge_dispatch(
         HedgeEv::Headers { fire, shard, outcome } => {
             let pointer_owned = matches!(fires.get(&fire), Some((FirePhase::Pointer(_), _)));
             match outcome {
-                HeadersOutcome::Accepted { ctx, headers, body, ttfb_ms } => {
+                HeadersOutcome::Accepted { ctx, headers, body, ttfb_ms, proto } => {
                     // Fast 2xx (pointer window) or late 2xx (already
-                    // promoted): either way it becomes a first-byte racer.
+                    // promoted): either way it becomes a first-token racer.
                     if pointer_owned {
                         if let Some(slot) = cur_fire.get_mut(shard) {
                             *slot = None;
@@ -1126,7 +1210,7 @@ async fn hedge_dispatch(
                     }
                     let tx2 = tx.clone();
                     let handle = tokio::spawn(async move {
-                        let outcome = hedge_race_first_byte(ctx, headers, ttfb_ms, body).await;
+                        let outcome = hedge_race_first_token(ctx, headers, ttfb_ms, proto, body).await;
                         let _ = tx2.send(HedgeEv::Raced { fire, outcome });
                     });
                     fires.insert(fire, (FirePhase::PoolRacing, handle));
@@ -1162,12 +1246,12 @@ async fn hedge_dispatch(
             }
         }
         HedgeEv::Raced { fire, outcome } => match outcome {
-            FirstByteOutcome::Won { ctx, headers, first, rest, ttfb_ms } => {
+            FirstTokenOutcome::Won { ctx, headers, first, rest, ttfb_ms } => {
                 // Winner: cancel every other request and pointer fire.
                 hedge_abort_all(fires);
                 return Walk::Winner { ctx, headers, first, rest, ttfb_ms };
             }
-            FirstByteOutcome::Broke { ctx, err } => {
+            FirstTokenOutcome::Broke { ctx, err } => {
                 fires.remove(&fire);
                 hedge_racer_broke(app, ctx, err);
             }
@@ -1181,12 +1265,14 @@ async fn hedge_dispatch(
 /// time and waits at most `hedge_header_deadline_secs` (default 2s) for that
 /// fire's response headers — a fast 429 grades (existing chain, no politeness
 /// gap) and the pointer jumps to the next row at once; a fast 2xx becomes a
-/// first-byte racer in the racing pool; a fire still unresolved at the
-/// deadline is PROMOTED into the pool (it keeps racing headers→first byte in
+/// first-token racer in the racing pool; a fire still unresolved at the
+/// deadline is PROMOTED into the pool (it keeps racing headers→first token in
 /// its own task) and the pointer walks on immediately — slow headers and
 /// slow 429s never pin a pointer again. Pool slots (promoted fires + racers,
-/// ≤ `hedge_pool_cap`, default 10): the first response body byte anywhere
-/// wins and everything else is cancelled; a pool entry resolving with an
+/// ≤ `hedge_pool_cap`, default 10): the first *generated token* anywhere
+/// (reasoning, content, or tool-call deltas — headers arrive fast on every
+/// key, so the race must run to what the model actually says) wins and
+/// everything else is cancelled; a pool entry resolving with an
 /// error is kicked out and graded (K sees it next round — the snapshot is
 /// per-round by design). When every pointer walks out its shard the round
 /// re-sorts and deals again; pool entries survive across rounds, and a
@@ -2165,7 +2251,7 @@ pub async fn list_models(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_quota_exhausted, lines_have_content, scan_usage_lines, take_complete_lines, trim_tail};
+    use super::{is_quota_exhausted, lines_have_content, lines_have_token, scan_usage_lines, take_complete_lines, trim_tail};
     use crate::protocol::Protocol;
 
     // --- a client closing the stream right after [DONE] must still be counted ---
@@ -2298,6 +2384,30 @@ mod tests {
         let mut tiny = "短".to_string();
         trim_tail(&mut tiny, 600);
         assert_eq!(tiny, "短");
+    }
+
+    #[test]
+    fn token_lines_detect_reasoning_content_text_and_tool_deltas() {
+        // The first-token race must count reasoning, content, and tool-call
+        // deltas — and must NOT count role/usage events that arrive while the
+        // provider's prefill queue still holds the actual generation (the
+        // exact stall the criterion exists to skip).
+        let reasoning = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"想\"}}]}\n";
+        let content = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n";
+        let tool = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0}]}}]}\n";
+        let role_only = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n";
+        let done = "data: [DONE]\n\n";
+        assert!(lines_have_token(reasoning, Protocol::OpenAi));
+        assert!(lines_have_token(content, Protocol::OpenAi));
+        assert!(lines_have_token(tool, Protocol::OpenAi));
+        assert!(!lines_have_token(role_only, Protocol::OpenAi));
+        assert!(!lines_have_token(done, Protocol::OpenAi));
+        let anth_text = "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"h\"}}\n";
+        let anth_empty = "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"\"}}\n";
+        let anth_tool = "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\"}}\n";
+        assert!(lines_have_token(anth_text, Protocol::Anthropic));
+        assert!(!lines_have_token(anth_empty, Protocol::Anthropic));
+        assert!(lines_have_token(anth_tool, Protocol::Anthropic));
     }
 
     #[test]

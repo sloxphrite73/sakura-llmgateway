@@ -14,7 +14,7 @@ import type { RouteResult } from '../types';
    (`strategy.mode` in gateway.json); switching is a config edit by design
    (the UI no longer changes routing strategy). */
 const PRESETS: { id: 'ttft' | 'classic'; name: string; desc: string }[] = [
-  { id: 'ttft', name: 'TTFT 优先', desc: 'K 键排表 · 多路对冲竞速 · 首字节先返回者胜' },
+  { id: 'ttft', name: 'TTFT 优先', desc: 'K 键排表 · 多路对冲竞速 · 首 token 先返回者胜' },
   { id: 'classic', name: '经典顺序', desc: '排序栈 · 游标轮转 · 逐把尝试' },
 ];
 
