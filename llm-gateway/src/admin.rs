@@ -13,6 +13,54 @@ pub(crate) fn err(status: StatusCode, msg: &str) -> Response {
     (status, Json(serde_json::json!({ "error": msg }))).into_response()
 }
 
+// ---------- CSRF guard (bug-ledger 九-3) ----------
+
+/// True when an `Origin` header value names a loopback host (127.0.0.1, ::1,
+/// localhost — any port). The browser sets `Origin` itself and will not let a
+/// page forge a loopback one, so a loopback origin is the console (same
+/// origin), the vite dev proxy, or an Android WebView — all inside the
+/// documented local-only trust model (the gateway only ever binds 127.0.0.1).
+/// Anything else is a cross-site page trying to drive the local console:
+/// reading keys via /api/config/export, rewriting config, deleting keys.
+fn origin_is_loopback(origin: &str) -> bool {
+    let Some(rest) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    else {
+        return false; // "null" (sandboxed iframe) or malformed — reject
+    };
+    let host_port = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = if let Some(v6) = host_port.strip_prefix('[') {
+        v6.split(']').next().unwrap_or("") // "[::1]:5173" → "::1"
+    } else {
+        // "127.0.0.1:8001" / "localhost" — split off the port. An unbracketed
+        // origin host is never raw IPv6, so the last ':' is the port.
+        host_port.rsplit_once(':').map(|(h, _)| h).unwrap_or(host_port)
+    };
+    matches!(host, "127.0.0.1" | "::1" | "localhost")
+}
+
+/// Admin-surface middleware: a present `Origin` must be loopback. Absent
+/// `Origin` (curl, the gateway's own scripts, server-side proxies) keeps
+/// working — the trust model stays "local only"; this only closes the
+/// browser cross-site vector (bug-ledger 九-3), the key-auth half of that
+/// item stays a deliberate product decision.
+pub async fn origin_guard(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    if let Some(origin) = req
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+    {
+        if !origin_is_loopback(origin) {
+            return err(
+                StatusCode::FORBIDDEN,
+                "cross-origin requests are not allowed on the admin surface",
+            );
+        }
+    }
+    next.run(req).await
+}
+
 // ---------- providers ----------
 
 pub async fn list_providers(State(app): State<std::sync::Arc<App>>) -> Response {
@@ -1052,5 +1100,31 @@ fn mask(key: &str) -> String {
         let head: String = chars[..4].iter().collect();
         let tail: String = chars[chars.len() - 4..].iter().collect();
         format!("{head}••••{tail}")
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::origin_is_loopback;
+
+    #[test]
+    fn loopback_origins_pass() {
+        // The console itself, the vite dev proxy, an Android WebView — the
+        // documented local-only trust model.
+        assert!(origin_is_loopback("http://127.0.0.1:8001"));
+        assert!(origin_is_loopback("http://localhost:8001"));
+        assert!(origin_is_loopback("http://[::1]:5173"));
+        assert!(origin_is_loopback("https://127.0.0.1"));
+    }
+
+    #[test]
+    fn cross_site_origins_are_rejected() {
+        // A page on another site driving the local console (bug-ledger 九-3).
+        assert!(!origin_is_loopback("http://evil.com"));
+        assert!(!origin_is_loopback("https://evil.com:443/x"));
+        // The suffix trick: not the loopback host, just a name containing it.
+        assert!(!origin_is_loopback("http://127.0.0.1.evil.com"));
+        // Sandboxed-iframe opaque origin.
+        assert!(!origin_is_loopback("null"));
+        assert!(!origin_is_loopback(""));
     }
 }
