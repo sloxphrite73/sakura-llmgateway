@@ -227,13 +227,13 @@
 
 1. **`theme_asset` Windows 反斜杠路径穿越 —— 已修（6d25045）**：防护只按 `/` 切段，Windows 上 `\` 也是 `Path::join` 分隔符 → `%5C` 编码可穿越读任意文件。修复：提取 `valid_theme_path` 拒绝反斜杠，单测 `theme_path_rejects_backslash_traversal`；缓解面：仅绑 127.0.0.1。
 2. **`translate_openai_chunk` 缺跨 chunk carry —— 已修（6d25045）**：BUG-03 的翻译管道版——行尾部分 JSON `from_str` 失败被静默丢弃、按 chunk `from_utf8_lossy` 可产生替换符。修复：与 MetricsStream 同款完整行组装（carry + 64KB 上限），回归测试 `openai_chunk_split_mid_line_is_not_dropped` / `openai_chunk_split_inside_multibyte_char_is_reassembled`。
-3. **admin 控制面零鉴权（未修，待定夺信任模型）**：UI 端口（8001）所有 `/api/*` 无 check_auth、无 Origin 校验；`/api/config/export` 吐全部 key 明文。信任模型 = 仅本地 + CORS；恶意网页 CSRF 可静默改配置/删 key。
+3. **admin 控制面零鉴权（部分已修）**：CSRF 向量已关闭（a8cbea3）——admin 面全路由加 Origin 环回校验（127.0.0.1/::1/localhost 之外 403，`null`（沙箱 iframe）与 `127.0.0.1.evil.com` 后缀伪造拒绝，无 Origin 的 curl/脚本/服务端代理不受影响）；vite dev 代理与 Android WebView 均环回可用。剩余：凭据鉴权本身（admin 无 auth key、`/api/config/export` 吐全部 key 明文）仍待作者定夺信任模型（影响双端 UX）。
 4. **三振机制文档漂移 —— 注释已修正（6d25045，见 BUG-07）**：`PoolRuntime::invalid` 注释已改为如实描述「单次 401/403 即隔离、无 strike 计数」；是否引入真正的三振机制属行为变更，留待作者决策。
 5. **rlog! 持池锁同步 I/O —— 已修（e72e766）**：`mark_cooldown/mark_invalid/mark_rate_limited` 持池锁时调 rlog，终端写（conhost 可达毫秒级）+ 文件写 + 每行 flush 全在临界区内——池锁是所有请求 select_strategy 的必经锁，429 风暴时排队放大尾延迟（BUG-16 同类）。修复：logger 改有界 channel(1024) + 专职写线程，enqueue=try_send 亚微秒；满队列丢行+补报；时间戳改记入队时刻。附 3 个 writer 单测。
 6. **非流式缓冲路径无响应大小上限（未修）**：`DefaultBodyLimit` 已禁用 + 非流式整包缓冲 + 协议翻译再序列化（内存 2x），失控/恶意上游可打高网关内存。
-7. **日志无轮转无级别（未修）**：append-only 随流量线性增长（每条流式请求一行 [req]），长跑 Android 服务可至数百 MB；无级别/开关，无法关闭每请求摘要行。
-8. **观测覆盖缺口（未修）**：非流式成功请求零日志（[req] 摘要仅流式路径）、hedge 模式 fire/胜者/晋升不可见、admin 控制面操作无审计记录（即使第 3 项加鉴权后仍需独立记录）。
+7. **日志轮转 —— 已修（d7d9cb2）；级别/开关仍缺**：16MB × 3 份（`.log.1/.2/.3`，最旧淘汰）按大小轮转，磁盘上限 64MB，轮转在写线程内进行；无级别/开关、无法关闭每请求摘要行（未修）。
+8. **观测覆盖缺口（部分已修）**：非流式成功请求与 hedge 胜者已可见（0c401ce——非流式分支补 [req] 行、两处 Walk::Winner 补 [hedge] winner 行；fire 仍不记，池有界且败者各有 [key] 行）；admin 控制面操作审计记录仍缺（即使第 3 项加鉴权后仍需独立记录）。
 
 ---
 
-*本档案正文按整理时的代码现状（commit d6553d9）固定；第九节随修复推进更新（最近：6d25045）。后续新事故应追加至对应分级小节，并保持「症状 / 根因 / 修复 / 证据」四件套格式。*
+*本档案正文按整理时的代码现状（commit d6553d9）固定；第九节随修复推进更新（最近：0c401ce）。后续新事故应追加至对应分级小节，并保持「症状 / 根因 / 修复 / 证据」四件套格式。*
