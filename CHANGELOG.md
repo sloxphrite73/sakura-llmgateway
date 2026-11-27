@@ -1,30 +1,38 @@
 # 更新日志
 
-## [未发布]
-
-### 删除
-
-- 死代码清理：移除不再被读取的配置字段 `learned_cooldown`、`max_attempts`、`has_token_balance_api`（旧配置中的多余字段加载时被忽略，无损兼容），删除纯诊断的 429 采样 `capacity_samples`，以及八个零调用入口：`extend_cooldown_at_least`、`min_retry_after_candidates`、`SortKey::parse`、`mark_config_dirty`、`model_avg_tftt`、`model_avg_tps`、`price_of`、`Stats::save`。设置页移除自零失败 hold 上线后不再生效的「每请求最大尝试次数」输入框。清理五处活代码上过期的 `#[allow(dead_code)]`。
-
-### 变更
-
-- 策略页重设计：移除排序键手动选择与过滤器开关——路由策略（过滤器 + 排序栈）不再能从控制台更改，变更经 `gateway.json` 或整份配置导入进行；新增策略预设卡片区（本轮为占位实现：两张未配置占位卡，预设定义机制后续开放）；`PUT /api/strategy` 端点随调用方一并移除，`GET /api/strategy` 与 dry-run 保留。
-
-- K 排序键的实测 TPM 余量因子：`tpm_limit` 未配置时 K 不再退化为裸成功率——限流 429 现场的 token 窗口快照作为每 Key「实测 TPM 上限」软上限参与 headroom（只影响排序、永不进冷却；成功超额即证伪；5 分钟 TTL 老化；零 token 的 RPM 型 429 不计）。长上下文下刚烧完 TPM 的 Key 立刻沉底，而不是继续被派活到再吃一次慢 429 为止。
-
-- hedge 竞速机改造：竞速池扩为可配置的 `hedge_pool_cap`（默认 10）；指针对每次开火最多等可配置的 `hedge_header_deadline_secs`（默认 2 秒）的响应头——快 429 立即跳下一行，快 2xx 转入竞速池，超时未回的请求整体转入竞速池继续竞速、指针立即走下一行（慢 429 / 慢响应头不再堵住指针）；池内条目出错即踢出并按既有分级记账（K 下轮生效）；池满指针暂停等空位。两项均为设置页可改的 gateway.json 设置（旧配置缺省按默认值生效）。
-
-- hedge 竞速胜负判定从「首个响应体字节」改为「首个生成 token」（reasoning_content / content / 工具调用增量，跨 chunk 行组装）：实测上游人人 2 秒回响应头、首内容 token 却被 prefill 队列扣住 60–180 秒——首字节竞速选中的是「最先回头」而非「最先吐字」的 Key，深队列 Key 会锁死整轮；首 token 竞速让缓存热/队列浅的 Key 自然胜出，赢家缓冲已读字节并接回剩余流（DSH 长程基准实测：82 步 avg 32.76s / max 185.80s，尖刺全部为赢家 ttfb ~2s + tftt 54–181s）。
-
-### 测试
-
-- 新增正式测试规范「长程开发 TTFT 基准」（doc/长程开发TTFT基准.md）：接入 DeepSeek Harness headless 的 18 条长程开发会话（sensenova/glm-5.3 经待测网关、一次性仓库克隆、上下文 ~300K、含工具调用与提交），标准 avg TTFT ≤ 5s / max ≤ 10s；「跑自测」自此指该基准。
-
-- 长程开发 TTFT 基准覆盖层：DSH headless 接入待测网关 + 会话串联 + 按步 TTFT 采集（与 dsh-session-stats 同口径：step start → 首输出片段）+ DSH 自动压缩显式关闭。
+## [v0.8.6-stable] — 2026-11-27
 
 ### 新增
 
-- 路由模式 `strategy.mode`（默认 `ttft`，预设「TTFT 优先」）：K 键排表后发牌式拆成 2–3 份、每份一个指针并行走表；429 立即跳过（照常冷却记账），未 429 的请求挂起（至多 5 个）并继续打其他 Key；首个产出响应体字节的请求胜出、其余（挂起请求与指针）全部取消；每轮走空后按 K 数据重排新轮、挂起请求跨轮存活，全冷却沿用零失败 hold；`classic` 保留原顺序走表（旧配置无 `mode` 字段默认 `ttft`）。策略页两张预设卡显示当前模式。
+- `strategy.mode` 路由模式（默认 `ttft` 对冲竞速，`classic` 保留原行为）。
+- `hedge_pool_cap` / `hedge_header_deadline_secs` 竞速参数，设置页可改。
+- K 排序键实测 TPM 余量因子（无 `tpm_limit` 时自动学习）。
+- 内置主题 `github-dark` / `dracula` / `glass` / `anime`。
+- 日志按大小轮转（16MB × 3 份）。
+- 非流式请求与对冲胜者日志行。
+- `doc/bug-ledger.md` 事故档案、`doc/长程开发TTFT基准.md` 测试规范。
+
+### 修复
+
+- 中文流因 UTF-8 字符边界裁剪 panic 导致中途断连。
+- Windows 反斜杠可绕过主题路径守卫读取任意文件。
+- 翻译管道跨 chunk 解析丢弃部分 JSON 并损坏多字节字符。
+- admin 面加 Origin 环回校验，阻断跨站 CSRF。
+- 长上下文 prefill 被 120s 读超时误判为网络错误并换 Key 重发。
+- 日志终端写入阻塞请求线程，改为有界 channel + 专职写线程。
+
+### 变更
+
+- 策略页移除排序键手动选择与过滤器开关，路由策略变更改经 `gateway.json`。
+- 竞速胜负判定从「首字节」改为「首个生成 token」。
+- 许可证移除署名附加条款。
+- 移除不再使用的 `learned_cooldown` / `max_attempts` / `has_token_balance_api` 字段及八个零调用函数。
+
+### 升级说明
+
+- 配置向后兼容，旧 `gateway.json` 可直接使用。
+- 默认路由变为 `ttft`（对冲竞速并发发给多把 Key）——付费上游请设 `"strategy": {"mode": "classic"}`。
+- 单元测试 104 项通过。
 
 ## [v0.8.6-beta2] — 2026-11-11
 
@@ -42,7 +50,7 @@
 
 - **token 记账**：修复流式 usage 缺失的四个成因——OpenAI 未请求 usage、Anthropic 将 usage 拆分在 `message_start` 与 `message_delta`、usage 事件跨 TCP chunk 被切分、客户端收到 `[DONE]` 即断开后回落为本地估算。上游不报 usage 时改用 BPE 分词计数，不再按字符数估算。
 - **429/401 分级**：仅 401/403 判为异常（隔离 1h）；配额耗尽改按冷却 5h 处理，优先采用上游 `Retry-After`；限流信号优先于配额标记，避免正常限流被误判为配额耗尽而整池隔离。
-- **配置持久化**：写入改为 `写临时文件 → fsync → rename`，保留 `gateway.json.bak`；全零或损坏的配置自动从备份还原；加载失败时区分“读不出来”与“写不下去”。
+- **配置持久化**：写入改为 `写临时文件 → fsync → rename`，保留 `gateway.json.bak`；全零或损坏的配置自动从备份还原；加载失败时区分"读不出来"与"写不下去"。
 - **上游连接**：新增 120s 读超时（此前仅 600s 总超时，上游停顿时请求可能挂起十分钟以上）。
 - **控制台**：修复预览空白、模型列表左偏、首屏加载失败无重试、提供商探测值不随轮询刷新。
 - **启动**：配置不可写时不再静默退出（写 `startup-error.log` 并等待确认）；端口回退等待由约 17.5s 缩短至约 4s。
